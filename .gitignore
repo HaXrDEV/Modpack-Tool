@@ -2,6 +2,7 @@
 packwiz
 prev_release
 tempgit
+gh-token.txt
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

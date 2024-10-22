@@ -163,12 +163,18 @@ export_client = refresh_only = update_bcc_version = cleanup_temp = create_releas
 bh_banner = repo_owner = repo_name = repo_main_branch = str
 server_mods_remove_list = list
 
+breakneck_fixes = github_auth = False
+changelog_side_tag = True
+
 # Parse settings file and update variables.
 for key, value in settings_yml.items():
     globals()[key] = value
 
 export_server = determine_server_export()
 prev_release_version = get_latest_release_version(repo_owner, repo_name)
+
+if breakneck_fixes:
+    input("Using fixes for Breakneck. Press Enter to continue...")
 
 if print_path_debug:
     print("[DEBUG] " + git_path)
@@ -182,7 +188,7 @@ if print_path_debug:
 # Class Objects
 
 downloader = AsyncGitHubDownloader(repo_owner, repo_name, branch=prev_release_version)
-changelog_factory = ChangelogFactory(changelog_dir_path, modpack_name, pack_version)
+changelog_factory = ChangelogFactory(changelog_dir_path, modpack_name, pack_version, use_changelog_side=changelog_side_tag)
 
 ############################################################
 # Main Program
@@ -196,9 +202,21 @@ def main():
         #----------------------------------------
         if download_comparison_files:
             
+            if github_auth:
+                github_token = input("Your personal access token: ")
+            else:
+                github_token = None
+
             async def download_compare_files_async(input_version):
-                local_downloader = AsyncGitHubDownloader(repo_owner, repo_name, branch=input_version)
-                await local_downloader.download_folder('Packwiz/mods', tempgit_path + input_version)
+                global breakneck_fixes
+                if breakneck_fixes and input_version <= "4.1.3":
+                    tag_mc_ver = changelog_factory.get_changelog_value(changelog, "mc_version")
+                    packwiz_mods_folder = f'Packwiz/{tag_mc_ver}/mods'
+                else:
+                    packwiz_mods_folder = 'Packwiz/mods'
+
+                local_downloader = AsyncGitHubDownloader(repo_owner, repo_name, token=github_token, branch=input_version)
+                await local_downloader.download_folder(packwiz_mods_folder, tempgit_path + input_version)
                 return
 
             for changelog in reversed(os.listdir(changelog_dir_path)):
@@ -336,19 +354,21 @@ def main():
         #----------------------------------------
         
         if update_bcc_version:
-            os.chdir(packwiz_path)
-            # Client
-            with open(bcc_client_config_path, "r") as f:
-                bcc_json = json.load(f)
-            bcc_json["modpackVersion"] = pack_version
-            with open(bcc_client_config_path, "w") as f:
-                json.dump(bcc_json, f)
+            if export_client:
+                os.chdir(packwiz_path)
+                # Client
+                with open(bcc_client_config_path, "r") as f:
+                    bcc_json = json.load(f)
+                bcc_json["modpackVersion"] = pack_version
+                with open(bcc_client_config_path, "w") as f:
+                    json.dump(bcc_json, f)
             # Server
-            with open(bcc_server_config_path, "r") as f:
-                bcc_json = json.load(f)
-            bcc_json["modpackVersion"] = pack_version
-            with open(bcc_server_config_path, "w") as f:
-                json.dump(bcc_json, f)
+            if export_server:
+                with open(bcc_server_config_path, "r") as f:
+                    bcc_json = json.load(f)
+                bcc_json["modpackVersion"] = pack_version
+                with open(bcc_server_config_path, "w") as f:
+                    json.dump(bcc_json, f)
 
 
         #----------------------------------------

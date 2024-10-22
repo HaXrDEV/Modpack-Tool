@@ -1,24 +1,31 @@
 import os
 import aiohttp
 import asyncio
+from typing import Optional
 
 class AsyncGitHubDownloader:
     GITHUB_API_URL = "https://api.github.com/repos"
 
-    def __init__(self, repo_owner, repo_name, branch='main'):
+    def __init__(self, repo_owner: str, repo_name: str, token: Optional[str] = None, branch: str = 'main'):
         """
         Initialize the AsyncGitHubDownloader with repository information.
 
         Parameters:
         - repo_owner: str, the owner of the repository.
         - repo_name: str, the name of the repository.
+        - token: Optional[str], GitHub personal access token for authentication.
         - branch: str, the branch of the repository (default is 'main').
         """
         self.repo_owner = repo_owner
         self.repo_name = repo_name
         self.branch = branch
+        self.headers = {
+            'Accept': 'application/vnd.github.v3+json'
+        }
+        if token:
+            self.headers['Authorization'] = f'token {token}'
 
-    async def _fetch(self, session, url):
+    async def _fetch(self, session: aiohttp.ClientSession, url: str):
         """
         Asynchronously fetch data from the given URL.
         
@@ -29,13 +36,19 @@ class AsyncGitHubDownloader:
         Returns:
         - JSON response data.
         """
-        async with session.get(url) as response:
+        async with session.get(url, headers=self.headers) as response:
             if response.status == 200:
                 return await response.json()
+            elif response.status == 401:
+                raise Exception("Authentication failed. Please check your GitHub token.")
+            elif response.status == 403:
+                raise Exception("Rate limit exceeded or repository access denied.")
+            elif response.status == 404:
+                raise Exception("Repository or path not found.")
             else:
                 raise Exception(f"Failed to fetch data: {response.status}")
 
-    async def _download_file(self, session, url, dest_folder, filename):
+    async def _download_file(self, session: aiohttp.ClientSession, url: str, dest_folder: str, filename: str):
         """
         Asynchronously download a single file and save it to the destination folder.
         
@@ -46,7 +59,7 @@ class AsyncGitHubDownloader:
         - filename: str, the name of the file.
         """
         file_path = os.path.join(dest_folder, filename)
-        async with session.get(url) as response:
+        async with session.get(url, headers=self.headers) as response:
             if response.status == 200:
                 with open(file_path, 'wb') as f:
                     while True:
@@ -58,7 +71,7 @@ class AsyncGitHubDownloader:
             else:
                 print(f"Failed to download {filename}: {response.status}")
 
-    async def _get_folder_contents(self, session, folder_path):
+    async def _get_folder_contents(self, session: aiohttp.ClientSession, folder_path: str):
         """
         Asynchronously fetch the contents of a folder in the repository.
         
@@ -72,7 +85,7 @@ class AsyncGitHubDownloader:
         api_url = f"{self.GITHUB_API_URL}/{self.repo_owner}/{self.repo_name}/contents/{folder_path}?ref={self.branch}"
         return await self._fetch(session, api_url)
 
-    async def download_folder(self, folder_path, dest_folder):
+    async def download_folder(self, folder_path: str, dest_folder: str):
         """
         Asynchronously download all files from a specific folder in the repository.
         
@@ -80,19 +93,16 @@ class AsyncGitHubDownloader:
         - folder_path: str, the folder path inside the repository.
         - dest_folder: str, the local folder where files will be saved.
         """
-        # Ensure the destination folder exists
         if not os.path.exists(dest_folder):
             os.makedirs(dest_folder)
 
-        # Start an aiohttp session
         async with aiohttp.ClientSession() as session:
             try:
                 folder_contents = await self._get_folder_contents(session, folder_path)
             except Exception as e:
-                print(str(e))
+                print(f"Error: {str(e)}")
                 return
 
-            # Gather download tasks for all files in the folder
             tasks = []
             for item in folder_contents:
                 if item['type'] == 'file':
@@ -100,13 +110,18 @@ class AsyncGitHubDownloader:
                     filename = item['name']
                     tasks.append(self._download_file(session, download_url, dest_folder, filename))
 
-            # Run all download tasks concurrently
             await asyncio.gather(*tasks)
         print("All files downloaded successfully.")
 
 # Example usage:
 # async def main():
+#     # Without authentication (for public repositories)
 #     downloader = AsyncGitHubDownloader('octocat', 'Hello-World')
 #     await downloader.download_folder('path/to/folder', './local_folder')
-
+#
+#     # With authentication (for private repositories or to avoid rate limiting)
+#     token = "your_github_personal_access_token"
+#     authenticated_downloader = AsyncGitHubDownloader('octocat', 'Hello-World', token=token)
+#     await authenticated_downloader.download_folder('path/to/folder', './local_folder')
+#
 # asyncio.run(main())

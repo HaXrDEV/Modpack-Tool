@@ -11,6 +11,9 @@ update_publish_workflow: True
 download_compare_files: True
 generate_primary_changelog: True
 generate_mods_changelog: True
+breakneck_fixes: False
+github_auth: False
+changelog_side_tag: True
 
 bh_banner: ""
 

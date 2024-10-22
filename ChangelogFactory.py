@@ -8,10 +8,11 @@ import MarkdownHelper as markdown
 import GitHubHelper as github
 
 class ChangelogFactory:
-    def __init__(self, changelog_dir, modpack_name, modpack_version):
+    def __init__(self, changelog_dir, modpack_name, modpack_version, use_changelog_side = True):
         self.changelog_dir = changelog_dir
         self.modpack_name = modpack_name
         self.modpack_version = modpack_version
+        self.use_changelog_side = use_changelog_side
     
     def get_changelog_value(self, changelog_yml, key):
         if changelog_yml.endswith(('.yml', '.yaml')) and changelog_yml:  # Filter only YAML files
@@ -27,12 +28,13 @@ class ChangelogFactory:
             finally:
                 f.close()
 
+
+
     def compare_toml_files(self, dir1, dir2):
         # Initialize dictionaries to store TOML data
         toml_data_1 = {}
         toml_data_2 = {}
         
-
         def local_load_toml_files_from_dir(dir, dict):
             try:
                 for filename in os.listdir(dir):
@@ -49,40 +51,58 @@ class ChangelogFactory:
         local_load_toml_files_from_dir(dir1, toml_data_1)
         local_load_toml_files_from_dir(dir2, toml_data_2)
 
-
         # Prepare to store results
         results = {
             'added': [],
             'removed': [],
             'modified': []
         }
-
-
         def local_get_side_str(side):
-            if side != "both":
+            if side != "both" and self.use_changelog_side:
                 return f" `{str(side).capitalize()}`"
             else:
                 return ""
-        # Check for added and modified files
+
+        # Temporary lists to store names for comparison
+        added_names = []
+        removed_names = []
+        
+        # First pass: collect all names
         for filename, data in toml_data_2.items():
             if filename not in toml_data_1:
-                name_data_1 = data.get('name', filename)
-                side_data_1 = data.get('side', filename)
-                side_str_1 = local_get_side_str(side_data_1)
-                results['added'].append(markdown.remove_bracketed_text(name_data_1) + side_str_1) # + str(data.get('side', filename)).capitalize()
-            else:
-                # Compare "version" fields
+                name = markdown.remove_bracketed_text(data.get('name', filename))
+                side_data = data.get('side', filename)
+                side_str = local_get_side_str(side_data)
+                added_names.append((name, name + side_str))
+
+        for filename in toml_data_1.keys():
+            if filename not in toml_data_2:
+                name = markdown.remove_bracketed_text(toml_data_1[filename].get('name', filename))
+                side_data = toml_data_1[filename].get('side', filename)
+                side_str = local_get_side_str(side_data)
+                removed_names.append((name, name + side_str))
+
+        # Find names that appear in both lists
+        added_base_names = set(name[0] for name in added_names)
+        removed_base_names = set(name[0] for name in removed_names)
+        duplicates = added_base_names.intersection(removed_base_names)
+
+        # Second pass: add to results, excluding duplicates
+        for base_name, full_name in added_names:
+            if base_name not in duplicates:
+                results['added'].append(full_name)
+
+        for base_name, full_name in removed_names:
+            if base_name not in duplicates:
+                results['removed'].append(full_name)
+
+        # Handle modified files (unchanged from original)
+        for filename, data in toml_data_2.items():
+            if filename in toml_data_1:
                 version1 = toml_data_1[filename].get('filename', None)
                 version2 = data.get('filename', None)
                 if version1 != version2:
                     results['modified'].append((markdown.remove_bracketed_text(data.get('name', filename)), version1, version2))
-
-        # Check for removed files
-        for filename in toml_data_1.keys():
-            if filename not in toml_data_2:
-                side_data_2 = toml_data_1[filename].get('side', filename)
-                side_str_2 = local_get_side_str(side_data_2)
-                results['removed'].append(markdown.remove_bracketed_text(toml_data_1[filename].get('name', filename) + side_str_2))
 
         return results
 
@@ -163,7 +183,7 @@ class ChangelogFactory:
                     mdFile.new_paragraph("### Changes/Improvements ⭐")
                     mdFile.new_paragraph(markdown.markdown_list_maker(improvements))
                 if overview_legacy:
-                    mdFile.new_paragraph("### Update overview")
+                    mdFile.new_paragraph("### Update Overview ⭐")
                     mdFile.new_paragraph(markdown.markdown_list_maker(overview_legacy))
                 if bug_fixes:
                     mdFile.new_paragraph("### Bug Fixes 🪲")
