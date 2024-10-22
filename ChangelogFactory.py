@@ -6,6 +6,7 @@ import toml
 import itertools
 import MarkdownHelper as markdown
 import GitHubHelper as github
+from packaging import version as version_helper
 
 class ChangelogFactory:
     def __init__(self, changelog_dir, modpack_name, modpack_version, use_changelog_side = True):
@@ -106,6 +107,33 @@ class ChangelogFactory:
 
         return results
 
+    def sort_versions(self, version_list):
+        """
+        Sort versions according to semantic versioning rules, handling post-releases correctly.
+        Returns list in descending order (newest first).
+        """
+        return sorted(version_list, key=lambda x: version_helper.parse(self.normalize_version(str(x))), reverse=True)
+
+
+    def normalize_version(self, version_str):
+        """
+        Normalize version strings to handle letter suffixes as post-releases.
+        Examples:
+            4.1.1a -> 4.1.1.post1
+            4.1.1b -> 4.1.1.post2
+            etc.
+        """
+        # Regular expression to match version with optional letter suffix
+        match = re.match(r'^(\d+\.\d+\.\d+)([a-zA-Z])?$', str(version_str))
+        if match:
+            base_version, letter_suffix = match.groups()
+            if letter_suffix:
+                # Convert letter to number (a=1, b=2, etc.) and use as post-release number
+                post_number = ord(letter_suffix.lower()) - ord('a') + 1
+                return f"{base_version}.post{post_number}"
+        return str(version_str)
+
+
 
     def Reverse(self, lst):
         new_lst = lst[::-1]
@@ -115,9 +143,30 @@ class ChangelogFactory:
     def build_markdown_changelog(self, repo_owner, repo_name, tempgit_path, packwiz_mods_path, file_name="CHANGELOG", repo_branch = "main", mc_version=None):
         mdFile = MdUtils(file_name)
 
-        changelog_list = self.Reverse(os.listdir(self.changelog_dir))
-        #changelog_list_reversed = self.Reverse(changelog_list)
-        #changelog_iter1, changelog_iter2 = itertools.tee(changelog_list)
+        #changelog_list = self.Reverse(os.listdir(self.changelog_dir))
+
+
+        changelog_files = os.listdir(self.changelog_dir)
+        
+        # Create a list of (filename, version) tuples for sorting
+        version_file_pairs = []
+        for changelog in changelog_files:
+            if changelog.endswith(('.yml', '.yaml')):
+                ver = self.get_changelog_value(changelog, 'version')
+                version_file_pairs.append((changelog, str(ver)))
+        
+        # Sort based on version numbers, handling letter suffixes
+        sorted_pairs = sorted(
+            version_file_pairs,
+            key=lambda x: version_helper.parse(self.normalize_version(x[1])),
+            reverse=True
+        )
+        
+        # Convert back to just filenames, maintaining the correct order
+        changelog_list = [pair[0] for pair in sorted_pairs]
+
+
+
 
         # Iterate over the list with an index using enumerate
         mdFile.new_paragraph(f"##### {self.modpack_name}")
