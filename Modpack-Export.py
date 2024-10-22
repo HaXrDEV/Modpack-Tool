@@ -293,12 +293,17 @@ def main():
 
             if "beta" in pack_version:
                 pw_release_type = "beta"
+                pw_prerelease = True
+
             elif "alpha" in pack_version:
                 pw_release_type = "alpha"
+                pw_prerelease = True
             else:
                 pw_release_type = "release"
+                pw_prerelease = False
             
             publish_workflow_yml['env']['RELEASE_TYPE'] = pw_release_type
+            publish_workflow_yml['env']['PRE_RELEASE'] = pw_prerelease
 
             with open(publish_workflow_path, "w") as pw_file:
                 yaml2.dump(publish_workflow_yml, pw_file)
