@@ -220,7 +220,7 @@ class ChangelogFactory:
                 #     mdFile.new_paragraph(f"## {self.modpack_name} | {version}")
                 
                 if version == self.modpack_version: # and not github.check_tag_exists(repo_owner, repo_name, version)
-                        mdFile.new_paragraph(f"## v{version} `Work in progress`")
+                        mdFile.new_paragraph(f"## v{version} <Badge type='warning' text='Work in progress'/>")
                 else: 
                     if not "v" in version:
                         mdFile.new_paragraph(f"## v{version}")
