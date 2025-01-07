@@ -31,6 +31,9 @@ from ChangelogFactory import ChangelogFactory
 # Markdown Stuff
 import MarkdownHelper as markdown
 
+# Semver stuff
+from packaging.version import Version, InvalidVersion
+
 ############################################################
 # Variables
 
@@ -140,6 +143,33 @@ def download_versioning_helper(local_version = str):
         return local_version + "+"
     
 
+
+def is_version_in_range(input_version, min_version=None, max_version=None, include_min=True, include_max=True):
+    """
+    Compare semantic versions.
+
+    :param input_version: The input version as a string (e.g., "4.1.3").
+    :param min_version: The minimum version as a string (inclusive or exclusive based on include_min).
+    :param max_version: The maximum version as a string (inclusive or exclusive based on include_max).
+    :param include_min: Whether the minimum version is inclusive (default: True).
+    :param include_max: Whether the maximum version is inclusive (default: True).
+    :return: True if input_version is in range, False otherwise.
+    """
+    try:
+        input_ver = Version(input_version)
+        if min_version is not None:
+            min_ver = Version(min_version)
+            if (input_ver < min_ver) or (input_ver == min_ver and not include_min):
+                return False
+        if max_version is not None:
+            max_ver = Version(max_version)
+            if (input_ver > max_ver) or (input_ver == max_ver and not include_max):
+                return False
+        return True
+    except InvalidVersion as e:
+        raise ValueError(f"Invalid version provided: {e}")
+
+
 ############################################################
 # Start Message
 
@@ -196,7 +226,7 @@ if print_path_debug:
 # Class Objects
 
 downloader = AsyncGitHubDownloader(repo_owner, repo_name, branch=prev_release_version)
-changelog_factory = ChangelogFactory(changelog_dir_path, modpack_name, pack_version, use_changelog_side=changelog_side_tag)
+changelog_factory = ChangelogFactory(changelog_dir_path, modpack_name, pack_version, use_changelog_side=changelog_side_tag, breakneck_fixes=breakneck_fixes)
 
 ############################################################
 # Main Program
@@ -208,39 +238,48 @@ def main():
         #----------------------------------------
         # Download comparison files.
         #----------------------------------------
+
         if download_comparison_files:
             
+            # Handle GitHub authentication
             if github_auth:
                 github_token = input("Your personal access token: ")
             else:
                 github_token = None
 
+            # Function to download comparison files asynchronously
             async def download_compare_files_async(input_version, destination):
                 global breakneck_fixes
                 print(f"Downloading {input_version} comparison files.")
-                if breakneck_fixes and input_version <= "4.1.3" and input_version >= "4.0.0-beta.3" or breakneck_fixes and input_version == "4.0.0": # The latter part ensures that 4.0.0 actually gets downloaded, because the >= doesn't respect semantic versioning.
+
+                # A fix that ensures that the mods folder is correctly targeted in versions that use a monorepo in Breakneck.
+                if breakneck_fixes and (
+                    is_version_in_range(input_version, "4.0.0-beta.3", "4.4.0-beta.1")
+                ):
                     tag_mc_ver = changelog_factory.get_changelog_value(changelog, "mc_version")
                     packwiz_mods_folder = f'Packwiz/{tag_mc_ver}/mods'
                 else:
                     packwiz_mods_folder = 'Packwiz/mods'
 
+                # Download the folder from GitHub
                 local_downloader = AsyncGitHubDownloader(repo_owner, repo_name, token=github_token, branch=input_version)
                 await local_downloader.download_folder(packwiz_mods_folder, destination)
                 return
 
+            # Loop through changelog files in reverse order
             for changelog in reversed(os.listdir(changelog_dir_path)):
-                if changelog.endswith(('.yml', '.yaml')):  # Filter only YAML files
+                if changelog.endswith(('.yml', '.yaml')):  # Process only YAML files
                     version = str(changelog_factory.get_changelog_value(changelog, "version"))
-                    
-                    version_path = tempgit_path + version # download_versioning_helper(version)
+                    version_path = tempgit_path + version  # Set the path for the version
 
+                    # Download files if version is not current and folder doesn't exist
                     if version != pack_version and not os.path.exists(version_path):
                         os.makedirs(version_path)
                         try:
-                            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-                            asyncio.run(download_compare_files_async(version, version_path))
+                            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())  # Ensure Windows compatibility
+                            asyncio.run(download_compare_files_async(version, version_path))  # Run the async download
                         except Exception as ex:
-                            print(ex)
+                            print(ex)  # Print errors if any occur
 
 
         #----------------------------------------

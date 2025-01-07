@@ -9,11 +9,12 @@ import GitHubHelper as github
 from packaging import version as version_helper
 
 class ChangelogFactory:
-    def __init__(self, changelog_dir, modpack_name, modpack_version, use_changelog_side = True):
+    def __init__(self, changelog_dir, modpack_name, modpack_version, use_changelog_side = True, breakneck_fixes=False):
         self.changelog_dir = changelog_dir
         self.modpack_name = modpack_name
         self.modpack_version = modpack_version
         self.use_changelog_side = use_changelog_side
+        self.breakneck_fixes = breakneck_fixes
     
     def get_changelog_value(self, changelog_yml, key):
         if changelog_yml.endswith(('.yml', '.yaml')) and changelog_yml:  # Filter only YAML files
@@ -140,6 +141,15 @@ class ChangelogFactory:
         return new_lst
 
 
+    def vitepress_container_maker(self, type: str, content: str):
+        """https://vitepress.dev/guide/markdown#custom-containers"""
+        return(
+            f"::: {type}\n"
+            f"{content}\n"
+            f":::"
+        )
+
+
     def build_markdown_changelog(self, repo_owner, repo_name, tempgit_path, packwiz_mods_path, file_name="CHANGELOG", repo_branch = "main", mc_version=None):
         mdFile = MdUtils(file_name)
 
@@ -187,10 +197,11 @@ class ChangelogFactory:
             added_mods = None
             removed_mods = None
 
-            if changelog.endswith(('.yml', '.yaml')):  # Filter only YAML files
+            if changelog.endswith(('.yml', '.yaml')) and mc_version == self.get_changelog_value(changelog, 'mc_version'): # Only takes yaml files and those with the correct mc version.
                 version = self.get_changelog_value(changelog, "version")
                 if next_changelog:
                     next_version = self.get_changelog_value(next_changelog , "version")
+                    next_mc_version = self.get_changelog_value(next_changelog, "mc_version")
 
                 fabric_loader = self.get_changelog_value(changelog, "Fabric version")
                 improvements = self.get_changelog_value(changelog, "Changes/Improvements")
@@ -214,10 +225,6 @@ class ChangelogFactory:
                     added_mods = differences['added']
                     removed_mods = differences['removed']
                 
-                # if not "v" in version:
-                #     mdFile.new_paragraph(f"## {self.modpack_name} | v{version}")
-                # else:
-                #     mdFile.new_paragraph(f"## {self.modpack_name} | {version}")
                 
                 if version == self.modpack_version: # and not github.check_tag_exists(repo_owner, repo_name, version)
                         mdFile.new_paragraph(f"## v{version} <Badge type='warning' text='Work in progress'/>")
@@ -228,6 +235,15 @@ class ChangelogFactory:
                         mdFile.new_paragraph(f"## {version}")
 
                 mdFile.new_paragraph(f"*Fabric Loader {fabric_loader}* | *[Mod Updates](https://github.com/{repo_owner}/{repo_name}/blob/{repo_branch}/Changelogs/changelog_mods_{version}.md)*")
+                    
+
+                # (Breakneck) Check if it's the second last iteration and prints info box for comparison point.
+                if i == len(changelog_list) - 2 and self.breakneck_fixes:
+                    mdFile.new_paragraph(self.vitepress_container_maker("info", f"Changes are in comparison to version [{next_version}]({next_mc_version}.md#v{next_version})."))
+                
+                if "beta" in version or "alpha" in version:
+                    mdFile.new_paragraph(self.vitepress_container_maker("warning", "This is a pre-release. Here be dragons!"))
+
                 if improvements:
                     mdFile.new_paragraph("### Changes/Improvements ⭐")
                     mdFile.new_paragraph(markdown.markdown_list_maker(improvements))
@@ -246,7 +262,6 @@ class ChangelogFactory:
                 if config_changes:
                     mdFile.new_paragraph("### Config Changes 📝")
                     mdFile.new_paragraph(markdown.codify_bracketed_text(config_changes))
-                #mdFile.new_paragraph("---")
         mdFile.create_md_file()
 
 
