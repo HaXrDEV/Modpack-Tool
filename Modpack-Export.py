@@ -170,6 +170,23 @@ def is_version_in_range(input_version, min_version=None, max_version=None, inclu
         raise ValueError(f"Invalid version provided: {e}")
 
 
+def clear_mmc_cache(path):
+    os.chdir(path)
+    retain = ["packwiz-installer.jar"] # Files that shouldn't be deleted
+    
+    # Loop through everything in folder in current working directory
+    for item in os.listdir(os.getcwd()):
+        if item not in retain:  # If it isn't in the list for retaining
+            try:
+                os.remove(item)  # Remove the item
+            except:
+                pass
+            try:
+                rmtree(item)
+            except:
+                pass
+
+
 ############################################################
 # Start Message
 
@@ -446,7 +463,7 @@ def main():
 
 
         #----------------------------------------
-        # Export client pack.
+        # Export client pack. (Normal)
         #----------------------------------------
         os.chdir(packwiz_path)
 
@@ -455,11 +472,150 @@ def main():
 
         # Packwiz exporting
         file = f'{modpack_name}-{pack_version}.zip'
-        if export_client:
+        if export_client and breakneck_fixes == False:
             # Export CF modpack using Packwiz.
             subprocess.call(f"{packwiz_exe_path} cf export", shell=True)
             move(file, f"{export_path}{file}")
             print("[PackWiz] Client exported.")
+
+
+
+        #----------------------------------------
+        # Export client pack. (Breakneck)
+        #----------------------------------------
+
+
+        if export_client and breakneck_fixes:
+
+            bootstrap_nogui = False
+
+            mmc_cache_path = packwiz_path + "mmc-cache\\"
+            mmc_dotminecraft_path = mmc_cache_path + ".minecraft\\"
+            mmc_input_path = packwiz_path + "mcc-cache.zip"
+            packwiz_installer_path = git_path + "\\Modpack-CLI-Tool\\packwiz-installer-bootstrap.jar"
+            mmc_config = packwiz_path + "mmc-export.toml"
+
+            packwiz_side = "client"
+
+            export_mmc_modrinth = True
+            export_mmc_curseforge = True
+            cleanup_cache = True
+            move_disabled_mods = True
+
+            os.chdir(packwiz_path)
+
+            if move_disabled_mods:
+                mods_path = packwiz_path + "mods\\"
+                disabled_mods_path = mods_path + "disabled\\"
+                os.chdir(mods_path)
+                
+                # Parse mod toml files for (disabled) marker.
+                for item in os.listdir():
+                    try:
+                        with open(item, "r") as f:
+                            mod_toml = toml.load(f)
+                            if "disabled" in mod_toml["side"]:
+                                f.close()
+                                move(item, disabled_mods_path)
+                    except OSError as e:
+                        print(e)
+
+
+            # Refresh the packwiz index
+            subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
+
+
+            # Creates mmc-cache folder if it doesn't already exist and ensure that it is empty.
+            try:
+                os.mkdir(mmc_cache_path)
+            except:
+                pass
+            clear_mmc_cache(mmc_cache_path)
+
+
+            file = Path(mmc_cache_path + "packwiz-installer.jar")
+            if bootstrap_nogui:
+                if file.is_file():
+                    # Export Packwiz modpack to MMC cache folder and zip it.
+                    subprocess.call(f"java -jar \"{packwiz_installer_path}\" -s {packwiz_side} \"{packwiz_path + packwiz_manifest}\" -g --bootstrap-no-update", shell=True)
+                else:
+                    # Export Packwiz modpack to MMC cache folder and zip it.
+                    subprocess.call(f"java -jar \"{packwiz_installer_path}\" -s {packwiz_side} \"{packwiz_path + packwiz_manifest}\" -g", shell=True)
+            else:
+                if file.is_file():
+                    # Export Packwiz modpack to MMC cache folder and zip it.
+                    subprocess.call(f"java -jar \"{packwiz_installer_path}\" -s {packwiz_side} \"{packwiz_path + packwiz_manifest}\" --bootstrap-no-update", shell=True)
+                else:
+                    # Export Packwiz modpack to MMC cache folder and zip it.
+                    subprocess.call(f"java -jar \"{packwiz_installer_path}\" -s {packwiz_side} \"{packwiz_path + packwiz_manifest}\"", shell=True)
+
+            # Creates mmc\.minecraft folder if it doesn't already exist.
+            try:
+                os.mkdir(mmc_dotminecraft_path)
+            except:
+                pass
+            
+            
+            # Moves override folders into .minecraft folder
+            move_list = ["shaderpacks", "resourcepacks", "mods", "config"]
+            for item in os.listdir(os.getcwd()):
+                if item in move_list:
+                    move(item, mmc_dotminecraft_path)
+
+            
+            if move_disabled_mods:
+                os.chdir(disabled_mods_path)
+                retain = [".gitkeep"] # Files that shouldn't be deleted
+                try:
+                    # Moves disabled mods back.
+                    for item in os.listdir():
+                        if item not in retain:
+                            move(item, mods_path)
+                except OSError as e:
+                    print(e)
+                os.chdir(packwiz_path)
+            
+            
+            make_archive("mcc-cache", 'zip', mmc_cache_path) # Creates mcc-cache.zip file based on mmc-cache folder.
+            
+            # Export Modrinth modpack using MMC method.
+            if export_mmc_modrinth:
+                print("[MMC] Exporting Modrinth...")
+                args = (
+                    "mmc-export",
+                    "--input", mmc_input_path,
+                    "--format", "Modrinth",
+                    "--modrinth-search", "loose",
+                    "-o", export_path,
+                    "-c", mmc_config,
+                    "-v", pack_version,
+                    "--scheme", modpack_name + "-" + minecraft_version + "-{version}",
+                ); subprocess.call(args, shell=True)
+                print("[MMC] Modrinth exported.")
+
+            # Export CurseForge modpack using MMC method.
+            if export_mmc_curseforge:
+                print("[MMC] Exporting CurseForge...")
+                args = (
+                    "mmc-export",
+                    "--input", mmc_input_path,
+                    "--format", "CurseForge",
+                    "-o", export_path,
+                    "-c", mmc_config,
+                    "-v", pack_version,
+                    "--scheme", modpack_name + "-" + minecraft_version + "-{version}",
+                ); subprocess.call(args, shell=True)
+                print("[MMC] CurseForge exported.")
+            
+            if cleanup_cache:
+                os.remove("mcc-cache.zip")
+                clear_mmc_cache(mmc_cache_path)
+                print("Cache cleanup finished.")
+            
+            os.chdir(packwiz_path)
+            subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
+
+
 
 
         #----------------------------------------
