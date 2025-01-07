@@ -39,9 +39,11 @@ from packaging.version import Version, InvalidVersion
 
 user_path = os.path.expanduser("~")
 
-# Get path of project dynamically.
-script_path = __file__
-git_path = str(os.path.dirname(os.path.dirname(script_path))).replace("/","\\") # .replace("/","\\") is to ensure that the path will be in the Windows format.
+# Get the directory containing the script
+script_path = os.path.abspath(__file__)  # Absolute path to the script
+git_path = str(os.path.dirname(os.path.dirname(script_path)))
+
+os.chdir(git_path)
 
 packwiz_path = git_path + "\\Packwiz\\"
 serverpack_path = git_path + "\\Server Pack\\"
@@ -412,12 +414,14 @@ def main():
             md_element_crism_spacer = "![CrismPack Spacer](https://github.com/CrismPack/CDN/blob/main/desc/breakneck/79ESzz1-tiny.png?raw=true)"
             # html_element_bh_banner = "<p><a href='https://bisecthosting.com/CRISM'><img src='https://github.com/CrismPack/CDN/blob/main/desc/insomnia/bhbanner.png?raw=true' width='800' /></a></p>"
 
-
+            
             mdFile_CF = MdUtils(file_name='CurseForge-Release')
+            mdFile_MR = MdUtils(file_name='Modrinth-Release')
             
             if "beta" in pack_version or "alpha" in pack_version:
                 print("pack_version = " + pack_version)
                 mdFile_CF.new_paragraph(md_element_pre_release)
+                mdFile_MR.new_paragraph(md_element_pre_release)
 
 
             with open(changelog_path, "r", encoding="utf8") as f:
@@ -440,6 +444,9 @@ def main():
             mdFile_CF.new_paragraph(md_element_bh_banner)
             mdFile_CF.create_md_file()
 
+            mdFile_MR.new_paragraph(markdown.markdown_list_maker(update_overview))
+            mdFile_MR.new_paragraph(md_element_full_changelog)
+            mdFile_MR.create_md_file()
 
         #----------------------------------------
         # Update BCC version number.
