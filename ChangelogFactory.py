@@ -266,22 +266,3 @@ class ChangelogFactory:
                     mdFile.new_paragraph("### Config Changes 📝")
                     mdFile.new_paragraph(markdown.codify_bracketed_text(config_changes))
         mdFile.create_md_file()
-
-
-# # Set the changelog directory
-# changelog_dir = r"D:\GitHub Projects\Insomnia-Hardcore\Changelogs"
-
-
-# repo_owner = "CrismPack"
-# repo_name = "Insomnia-Hardcore"
-# modpack_version_ = "2.2.0"
-
-# # Create an instance of ChangelogFactory and print the changelog names
-# changelogfactory = ChangelogFactory(changelog_dir, "Insomnia: Hardcore", modpack_version_)
-# #print(changelog.get_changelog_value("name"))
-
-# #print(changelog.markdown_list_maker(changelog.get_changelog_value()))
-
-# tempgit_path = r"D:\GitHub Projects\Insomnia-Hardcore\Modpack-CLI-Tool\tempgit"
-# packwiz_mods = r"D:\GitHub Projects\Insomnia-Hardcore\Packwiz\mods"
-# changelogfactory.build_markdown_changelog(repo_owner, repo_name, tempgit_path, packwiz_mods)

@@ -404,8 +404,6 @@ def main():
             os.chdir(git_path)
             changelog_path = git_path + f"\\Changelogs\\{pack_version}+{minecraft_version}.yml"
             
-
-            "https://crismpack.net/breakneck/changelogs/1.21/1.21.4.html#v4.4.0"
             major_minecraft_version = '.'.join(minecraft_version.split('.', 2)[:2])
 
             md_element_full_changelog = f"#### **[[Full Changelog]](https://crismpack.net/{modpack_name.lower().split(' ', 1)[0]}/changelogs/{major_minecraft_version}/{minecraft_version}#v{pack_version})**"
@@ -466,7 +464,7 @@ def main():
 
 
         #----------------------------------------
-        # Export client pack. (Normal)
+        # Export client pack. (CurseForge with Packwiz)
         #----------------------------------------
         os.chdir(packwiz_path)
 
@@ -484,7 +482,8 @@ def main():
 
 
         #----------------------------------------
-        # Export client pack. (Breakneck)
+        # Export client pack. (CurseForge & Modrinth with MMC)
+        # Breakneck only.
         #----------------------------------------
 
 
