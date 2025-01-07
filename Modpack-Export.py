@@ -511,6 +511,8 @@ def main():
                 
                 # Parse mod toml files for (disabled) marker.
                 for item in os.listdir():
+                    if os.path.isdir(item) and item == "disabled":
+                        continue  # Skip the 'disabled' directory itself
                     try:
                         with open(item, "r") as f:
                             mod_toml = toml.load(f)
@@ -518,7 +520,7 @@ def main():
                                 f.close()
                                 move(item, disabled_mods_path)
                     except OSError as e:
-                        print(e)
+                        print(f"move_disabled_mods: {e}")
 
 
             # Refresh the packwiz index
