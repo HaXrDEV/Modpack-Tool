@@ -227,12 +227,15 @@ class ChangelogFactory:
                 
                 
                 if version == self.modpack_version: # and not github.check_tag_exists(repo_owner, repo_name, version)
-                        mdFile.new_paragraph(f"## v{version} <Badge type='warning' text='Work in progress'/>")
+                        mdFile.new_paragraph(f"## v{version} <Badge type='warning' text='Work in progress'/> <a href='#v{version}' id='v{version}'></a>")
                 else: 
                     if not "v" in version:
-                        mdFile.new_paragraph(f"## v{version}")
+                        mdFile.new_paragraph(f"## v{version} <a href='#v{version}' id='v{version}'></a>")
                     else:
-                        mdFile.new_paragraph(f"## {version}")
+                        mdFile.new_paragraph(f"## {version} <a href='#{version}' id='{version}'></a>")
+
+
+
 
                 mdFile.new_paragraph(f"*Fabric Loader {fabric_loader}* | *[Mod Updates](https://github.com/{repo_owner}/{repo_name}/blob/{repo_branch}/Changelogs/changelog_mods_{version}.md)*")
                     
