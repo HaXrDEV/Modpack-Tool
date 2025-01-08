@@ -408,7 +408,7 @@ def main():
             
             major_minecraft_version = '.'.join(minecraft_version.split('.', 2)[:2])
 
-            md_element_full_changelog = f"#### **[[Full Changelog]](https://crismpack.net/{modpack_name.lower().split(' ', 1)[0]}/changelogs/{major_minecraft_version}/{minecraft_version}#v{pack_version})**"
+            md_element_full_changelog = f"**[[Full Changelog]](https://crismpack.net/{modpack_name.lower().split(' ', 1)[0]}/changelogs/{major_minecraft_version}/{minecraft_version}#v{pack_version})**"
             md_element_pre_release = '**This is a pre-release. Here be dragons!**'
             md_element_bh_banner = f"[![BisectHosting Banner]({bh_banner})](https://bisecthosting.com/CRISM)"
             md_element_crism_spacer = "![CrismPack Spacer](https://github.com/CrismPack/CDN/blob/main/desc/breakneck/79ESzz1-tiny.png?raw=true)"
@@ -439,7 +439,7 @@ def main():
                     mdFile_CF.new_paragraph("### Bug Fixes 🪲")
                     mdFile_CF.new_paragraph(markdown.markdown_list_maker(bug_fixes))
 
-            mdFile_CF.new_paragraph(md_element_full_changelog)
+            mdFile_CF.new_paragraph("#### " + md_element_full_changelog)
             mdFile_CF.new_paragraph("<br>")
             mdFile_CF.new_paragraph(md_element_bh_banner)
             mdFile_CF.create_md_file()
