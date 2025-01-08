@@ -429,22 +429,24 @@ def main():
             try:
                 update_overview = changelog_yml['Update overview']
                 mdFile_CF.new_paragraph(markdown.markdown_list_maker(update_overview))
+                mdFile_MR.new_paragraph(markdown.markdown_list_maker(update_overview))
             except:
                 improvements = changelog_yml['Changes/Improvements']
                 bug_fixes = changelog_yml['Bug Fixes']
                 if improvements:
                     mdFile_CF.new_paragraph("### Changes/Improvements ⭐")
                     mdFile_CF.new_paragraph(markdown.markdown_list_maker(improvements))
+                    mdFile_MR.new_paragraph(markdown.markdown_list_maker(improvements))
                 if bug_fixes:
                     mdFile_CF.new_paragraph("### Bug Fixes 🪲")
                     mdFile_CF.new_paragraph(markdown.markdown_list_maker(bug_fixes))
+                    mdFile_MR.new_paragraph(markdown.markdown_list_maker(bug_fixes))
 
             mdFile_CF.new_paragraph("#### " + md_element_full_changelog)
             mdFile_CF.new_paragraph("<br>")
             mdFile_CF.new_paragraph(md_element_bh_banner)
             mdFile_CF.create_md_file()
 
-            mdFile_MR.new_paragraph(markdown.markdown_list_maker(update_overview))
             mdFile_MR.new_paragraph(md_element_full_changelog)
             mdFile_MR.create_md_file()
 
