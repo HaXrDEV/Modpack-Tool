@@ -7,6 +7,7 @@ import itertools
 import MarkdownHelper as markdown
 import GitHubHelper as github
 from packaging import version as version_helper
+import requests
 
 class ChangelogFactory:
     def __init__(self, changelog_dir, modpack_name, modpack_version, use_changelog_side = True, breakneck_fixes=False):
@@ -149,6 +150,33 @@ class ChangelogFactory:
             f":::"
         )
 
+    def get_latest_modrinth_version(self, modpack_slug):
+        try:
+            api_url = f"https://api.modrinth.com/v2/project/{modpack_slug}/version"
+            # Send a GET request to the API
+            response = requests.get(api_url)
+            response.raise_for_status()  # Raise an error for bad status codes
+            
+            # Parse the JSON response
+            versions = response.json()
+            
+            # Find the latest version by date_published
+            latest_version = max(versions, key=lambda v: v["date_published"])
+            
+            # Return the latest version details
+            return {
+                "name": latest_version["name"],
+                "version_number": latest_version["version_number"],
+                "date_published": latest_version["date_published"],
+                "download_url": latest_version["files"][0]["url"] if latest_version["files"] else None,
+                "changelog": latest_version["changelog"]
+            }
+        
+        except requests.exceptions.RequestException as e:
+            print(f"Error fetching data from API: {e}")
+            return None
+
+
 
     def build_markdown_changelog(self, repo_owner, repo_name, tempgit_path, packwiz_path, file_name="CHANGELOG", repo_branch = "main", mc_version=None):
         mdFile = MdUtils(file_name)
@@ -242,8 +270,9 @@ class ChangelogFactory:
                     removed_resourcepacks = resourcepack_differences['removed']
                     modified_resourcepacks = resourcepack_differences['modified']
                 
+
                 
-                if version == self.modpack_version: # and not github.check_tag_exists(repo_owner, repo_name, version)
+                if version == self.modpack_version and not version == self.get_latest_modrinth_version(self.modpack_name):
                         mdFile.new_paragraph(f"## v{version} <Badge type='warning' text='Work in progress'/> <a href='#v{version}' id='v{version}'></a>")
                 else: 
                     if not "v" in version:
