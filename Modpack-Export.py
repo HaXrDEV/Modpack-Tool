@@ -277,12 +277,16 @@ def main():
                 ):
                     tag_mc_ver = changelog_factory.get_changelog_value(changelog, "mc_version")
                     packwiz_mods_folder = f'Packwiz/{tag_mc_ver}/mods'
+                    packwiz_resourcepacks_folder = f'Packwiz/{tag_mc_ver}/resourcepacks'
                 else:
                     packwiz_mods_folder = 'Packwiz/mods'
+                    packwiz_resourcepacks_folder = 'Packwiz/resourcepacks'
 
                 # Download the folder from GitHub
                 local_downloader = AsyncGitHubDownloader(repo_owner, repo_name, token=github_token, branch=input_version)
-                await local_downloader.download_folder(packwiz_mods_folder, destination)
+                await local_downloader.download_folder(packwiz_mods_folder, os.path.join(destination, "mods"))
+                await local_downloader.download_folder(packwiz_resourcepacks_folder, os.path.join(destination, "resourcepacks"))
+                await local_downloader.download_folder(packwiz_resourcepacks_folder, os.path.join(destination, "shaderpacks"))
                 return
 
             # Loop through changelog files in reverse order
@@ -307,64 +311,64 @@ def main():
 
         if generate_primary_changelog:
             os.chdir(git_path)
-            changelog_factory.build_markdown_changelog(repo_owner, repo_name, tempgit_path, packwiz_mods_path, repo_branch = repo_main_branch, mc_version=minecraft_version)
+            changelog_factory.build_markdown_changelog(repo_owner, repo_name, tempgit_path, packwiz_path, repo_branch = repo_main_branch, mc_version=minecraft_version)
 
 
         #----------------------------------------
         # Generate mod changes comparison files.
         #----------------------------------------
 
-        if generate_mods_changelog:
-            os.chdir(git_path)
-            changelog_files = os.listdir(changelog_dir_path)
+        # if generate_mods_changelog:
+        #     os.chdir(git_path)
+        #     changelog_files = os.listdir(changelog_dir_path)
             
-            # Create a list of (filename, version) tuples for sorting
-            version_file_pairs = []
-            for changelog in changelog_files:
-                if changelog.endswith(('.yml', '.yaml')):
-                    ver = changelog_factory.get_changelog_value(changelog, 'version')
-                    version_file_pairs.append((changelog, str(ver)))
+        #     # Create a list of (filename, version) tuples for sorting
+        #     version_file_pairs = []
+        #     for changelog in changelog_files:
+        #         if changelog.endswith(('.yml', '.yaml')):
+        #             ver = changelog_factory.get_changelog_value(changelog, 'version')
+        #             version_file_pairs.append((changelog, str(ver)))
             
-            # Sort based on version numbers, handling letter suffixes
-            sorted_pairs = sorted(
-                version_file_pairs,
-                key=lambda x: version_helper.parse(changelog_factory.normalize_version(x[1])),
-                reverse=True
-            )
+        #     # Sort based on version numbers, handling letter suffixes
+        #     sorted_pairs = sorted(
+        #         version_file_pairs,
+        #         key=lambda x: version_helper.parse(changelog_factory.normalize_version(x[1])),
+        #         reverse=True
+        #     )
             
-            # Convert back to just filenames, maintaining the correct order
-            changelog_list = [pair[0] for pair in sorted_pairs]
+        #     # Convert back to just filenames, maintaining the correct order
+        #     changelog_list = [pair[0] for pair in sorted_pairs]
 
-            # Iterate over the sorted list with an index using enumerate
-            for i, changelog in enumerate(changelog_list):
-                # Check if there's a "next" item
-                if i + 1 < len(changelog_list):
-                    next_changelog = changelog_list[i + 1]
-                else:
-                    next_changelog = None  # No next item if we're at the last one
+        #     # Iterate over the sorted list with an index using enumerate
+        #     for i, changelog in enumerate(changelog_list):
+        #         # Check if there's a "next" item
+        #         if i + 1 < len(changelog_list):
+        #             next_changelog = changelog_list[i + 1]
+        #         else:
+        #             next_changelog = None  # No next item if we're at the last one
                 
-                current_version = changelog_factory.get_changelog_value(changelog, 'version')
-                if next_changelog:
-                    next_version = changelog_factory.get_changelog_value(next_changelog, 'version')
+        #         current_version = changelog_factory.get_changelog_value(changelog, 'version')
+        #         if next_changelog:
+        #             next_version = changelog_factory.get_changelog_value(next_changelog, 'version')
 
-                next_version_path = os.path.join(tempgit_path, str(next_version))
-                current_version_path = os.path.join(tempgit_path, str(current_version))
+        #         next_version_path = os.path.join(tempgit_path, str(next_version))
+        #         current_version_path = os.path.join(tempgit_path, str(current_version))
 
-                if str(current_version) != str(pack_version) and next_version:
-                    differences = changelog_factory.compare_toml_files(next_version_path, current_version_path)
-                elif str(current_version) == str(pack_version) and next_version:
-                    differences = changelog_factory.compare_toml_files(next_version_path, packwiz_mods_path)
-                else:
-                    differences = None
+        #         if str(current_version) != str(pack_version) and next_version:
+        #             differences = changelog_factory.compare_toml_files(next_version_path, current_version_path)
+        #         elif str(current_version) == str(pack_version) and next_version:
+        #             differences = changelog_factory.compare_toml_files(next_version_path, packwiz_mods_path)
+        #         else:
+        #             differences = None
 
-                if next_version != current_version:
-                    markdown.write_differences_to_markdown(
-                        differences,
-                        modpack_name,
-                        next_version,
-                        current_version,
-                        os.path.join(git_path, 'Changelogs', f'changelog_mods_{current_version}.md')
-                    )
+        #         if next_version != current_version:
+        #             markdown.write_differences_to_markdown(
+        #                 differences,
+        #                 modpack_name,
+        #                 next_version,
+        #                 current_version,
+        #                 os.path.join(git_path, 'Changelogs', f'changelog_mods_{current_version}.md')
+        #             )
         #----------------------------------------
         # Update publish workflow values.
         #----------------------------------------

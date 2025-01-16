@@ -150,7 +150,7 @@ class ChangelogFactory:
         )
 
 
-    def build_markdown_changelog(self, repo_owner, repo_name, tempgit_path, packwiz_mods_path, file_name="CHANGELOG", repo_branch = "main", mc_version=None):
+    def build_markdown_changelog(self, repo_owner, repo_name, tempgit_path, packwiz_path, file_name="CHANGELOG", repo_branch = "main", mc_version=None):
         mdFile = MdUtils(file_name)
 
         #changelog_list = self.Reverse(os.listdir(self.changelog_dir))
@@ -210,20 +210,37 @@ class ChangelogFactory:
                 config_changes = self.get_changelog_value(changelog, "Config Changes")
 
                 next_version_path = os.path.join(tempgit_path, str(next_version))
+                next_version_mods_path = os.path.join(next_version_path, "mods")
+                next_version_resourcepacks_path = os.path.join(next_version_path, "resourcepacks")
+
                 version_path = os.path.join(tempgit_path, str(version))
+                version_mods_path = os.path.join(version_path, "mods")
+                version_resourcepacks_path = os.path.join(version_path, "resourcepacks")
+
+                packwiz_mods_path = os.path.join(packwiz_path, "mods")
+                packwiz_resourcepacks_path = os.path.join(packwiz_path, "resourcepacks")
 
                 print(f"[DEBUG] {next_version_path} + {version_path}")
 
                 if str(version) != str(self.modpack_version) and next_version:
-                    differences = self.compare_toml_files(next_version_path, version_path)
+                    mod_differences = self.compare_toml_files(next_version_mods_path, version_mods_path)
+                    resourcepack_differences = self.compare_toml_files(next_version_resourcepacks_path, version_resourcepacks_path)
                 elif str(version) == str(self.modpack_version) and next_version:
-                    differences = self.compare_toml_files(next_version_path, packwiz_mods_path)
+                    mod_differences = self.compare_toml_files(next_version_mods_path, packwiz_mods_path)
+                    resourcepack_differences = self.compare_toml_files(next_version_resourcepacks_path, packwiz_resourcepacks_path)
                 else:
-                    differences = None
+                    mod_differences = None
+                    resourcepack_differences = None
 
-                if differences:
-                    added_mods = differences['added']
-                    removed_mods = differences['removed']
+                if mod_differences:
+                    added_mods = mod_differences['added']
+                    removed_mods = mod_differences['removed']
+                    modified_mods = mod_differences['modified']
+
+                if resourcepack_differences:
+                    added_resourcepacks = resourcepack_differences['added']
+                    removed_resourcepacks = resourcepack_differences['removed']
+                    modified_resourcepacks = resourcepack_differences['modified']
                 
                 
                 if version == self.modpack_version: # and not github.check_tag_exists(repo_owner, repo_name, version)
@@ -259,10 +276,42 @@ class ChangelogFactory:
                 if added_mods:
                     mdFile.new_paragraph("### Added Mods ✅")
                     mdFile.new_paragraph(markdown.markdown_list_maker(added_mods))
+                if added_resourcepacks:
+                    mdFile.new_paragraph("### Added Resource Packs 📦")
+                    mdFile.new_paragraph(markdown.markdown_list_maker(added_mods))
                 if removed_mods:
                     mdFile.new_paragraph("### Removed Mods ❌")
                     mdFile.new_paragraph(markdown.markdown_list_maker(removed_mods))
+                if removed_resourcepacks:
+                    mdFile.new_paragraph("### Removed Resource Packs ❌")
+                    mdFile.new_paragraph(markdown.markdown_list_maker(removed_mods))
+
+                # Modified section
+                if mod_differences['modified']:
+                    mdFile.new_paragraph("### Updated Mods 🔄")
+                    print(modified_mods)
+                    mdFile.new_paragraph(markdown.markdown_list_maker([item[0] for item in modified_mods]))
+                    # for name, old_version, new_version in mod_differences['modified']:
+                    #     mdFile.new_paragraph(f"- **{(name)}**: Changed from `{old_version}` to `{new_version}`")
+                                # Modified section
+
+                if resourcepack_differences['modified']:
+                    mdFile.new_paragraph("### Updated Resource Packs 🔃")
+                    print(modified_mods)
+                    mdFile.new_paragraph(markdown.markdown_list_maker([item[0] for item in modified_resourcepacks]))
+
+
                 if config_changes:
                     mdFile.new_paragraph("### Config Changes 📝")
                     mdFile.new_paragraph(markdown.codify_bracketed_text(config_changes))
+
+
+                if next_version != version:
+                    markdown.write_differences_to_markdown(
+                        mod_differences,
+                        self.modpack_name,
+                        next_version,
+                        version,
+                        os.path.join('Changelogs', f'changelog_mods_{version}.md')
+                    )
         mdFile.create_md_file()
