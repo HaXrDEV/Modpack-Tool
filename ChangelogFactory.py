@@ -271,8 +271,9 @@ class ChangelogFactory:
                     modified_resourcepacks = resourcepack_differences['modified']
                 
 
-                
-                if version == self.modpack_version and not version == self.get_latest_modrinth_version(self.modpack_name):
+                latest_modrinth_version = self.get_latest_modrinth_version(self.modpack_name)
+
+                if version == self.modpack_version and not version == latest_modrinth_version['version_number']:
                         mdFile.new_paragraph(f"## v{version} <Badge type='warning' text='Work in progress'/> <a href='#v{version}' id='v{version}'></a>")
                 else: 
                     if not "v" in version:
