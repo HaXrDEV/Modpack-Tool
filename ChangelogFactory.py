@@ -300,11 +300,15 @@ class ChangelogFactory:
                     modified_resourcepacks = resourcepack_differences['modified']
                 
                 latest_modrinth_version_info = self.extract_modrinth_version_info(modrinth_versions)
-                current_modrinth_version_info = self.extract_modrinth_version_info(modrinth_versions, version)
+                
+                if version != self.modpack_version:
+                    current_modrinth_version_info = self.extract_modrinth_version_info(modrinth_versions, version)
+                    modrinth_publish_timestamp = current_modrinth_version_info["date_published"]
+                    dt_object = datetime.fromisoformat(modrinth_publish_timestamp.replace("Z", ""))
+                    date_only = dt_object.strftime("%Y-%m-%d")
+                else:
+                    date_only = None
 
-                modrinth_publish_timestamp = current_modrinth_version_info["date_published"]
-                dt_object = datetime.fromisoformat(modrinth_publish_timestamp.replace("Z", ""))
-                date_only = dt_object.strftime("%Y-%m-%d")
 
                 if version == self.modpack_version and not version == latest_modrinth_version_info['version_number']:
                         mdFile.new_paragraph(f"## v{version} <Badge type='warning' text='Work in progress'/> <a href='#v{version}' id='v{version}'></a>")
@@ -315,8 +319,10 @@ class ChangelogFactory:
                         mdFile.new_paragraph(f"## {version} <a href='#{version}' id='{version}'></a>")
 
                 
-                
-                mdFile.new_paragraph(f"<a href='https://github.com/{repo_owner}/{repo_name}/blob/{repo_branch}/Changelogs/changelog_mods_{version}.md'><Badge type='tip' text='Mod Updates'/></a><Badge type='info' text='Fabric Loader {fabric_loader}'/><Badge type='info' text='{date_only}'/>")
+                if date_only:
+                    mdFile.new_paragraph(f"<a href='https://github.com/{repo_owner}/{repo_name}/blob/{repo_branch}/Changelogs/changelog_mods_{version}.md'><Badge type='tip' text='Mod Updates'/></a><Badge type='info' text='Fabric Loader {fabric_loader}'/><Badge type='info' text='{date_only}'/>")
+                else:
+                    mdFile.new_paragraph(f"<a href='https://github.com/{repo_owner}/{repo_name}/blob/{repo_branch}/Changelogs/changelog_mods_{version}.md'><Badge type='tip' text='Mod Updates'/></a><Badge type='info' text='Fabric Loader {fabric_loader}'/>")
                 # mdFile.new_paragraph(f"*{date_only}* | *Fabric Loader {fabric_loader}* | *[Mod Updates](https://github.com/{repo_owner}/{repo_name}/blob/{repo_branch}/Changelogs/changelog_mods_{version}.md)*")
 
                 # (Breakneck) Check if it's the second last iteration and prints info box for comparison point.
