@@ -8,6 +8,7 @@ import MarkdownHelper as markdown
 import GitHubHelper as github
 from packaging import version as version_helper
 import requests
+from datetime import datetime
 
 class ChangelogFactory:
     def __init__(self, changelog_dir, modpack_name, modpack_version, use_changelog_side = True, breakneck_fixes=False):
@@ -150,16 +151,31 @@ class ChangelogFactory:
             f":::"
         )
 
-    def get_latest_modrinth_version(self, modpack_slug):
+    def get_modrinth_version(self, modpack_slug, version_number=None):
         try:
             api_url = f"https://api.modrinth.com/v2/project/{modpack_slug}/version"
+            
             # Send a GET request to the API
             response = requests.get(api_url)
             response.raise_for_status()  # Raise an error for bad status codes
             
             # Parse the JSON response
             versions = response.json()
-            
+
+            # If a specific version number is provided
+            if version_number:
+                for version in versions:
+                    if version["version_number"] == version_number:
+                        return {
+                            "name": version["name"],
+                            "version_number": version["version_number"],
+                            "date_published": version["date_published"],
+                            "download_url": version["files"][0]["url"] if version["files"] else None,
+                            "changelog": version["changelog"]
+                        }
+                print(f"Version {version_number} not found for modpack {modpack_slug}.")
+                return None
+
             # Find the latest version by date_published
             latest_version = max(versions, key=lambda v: v["date_published"])
             
@@ -171,11 +187,10 @@ class ChangelogFactory:
                 "download_url": latest_version["files"][0]["url"] if latest_version["files"] else None,
                 "changelog": latest_version["changelog"]
             }
-        
+
         except requests.exceptions.RequestException as e:
             print(f"Error fetching data from API: {e}")
             return None
-
 
 
     def build_markdown_changelog(self, repo_owner, repo_name, tempgit_path, packwiz_path, file_name="CHANGELOG", repo_branch = "main", mc_version=None):
@@ -271,7 +286,12 @@ class ChangelogFactory:
                     modified_resourcepacks = resourcepack_differences['modified']
                 
 
-                latest_modrinth_version = self.get_latest_modrinth_version(self.modpack_name)
+                latest_modrinth_version = self.get_modrinth_version(self.modpack_name)
+                current_modrinth_version = self.get_modrinth_version(self.modpack_name, version)
+                
+                # modrinth_publish_timestamp = current_modrinth_version["date_published"]
+                # dt_object = datetime.fromisoformat(modrinth_publish_timestamp.replace("Z", ""))
+                # date_only = dt_object.strftime("%Y-%m-%d")
 
                 if version == self.modpack_version and not version == latest_modrinth_version['version_number']:
                         mdFile.new_paragraph(f"## v{version} <Badge type='warning' text='Work in progress'/> <a href='#v{version}' id='v{version}'></a>")
@@ -285,7 +305,7 @@ class ChangelogFactory:
 
 
                 mdFile.new_paragraph(f"*Fabric Loader {fabric_loader}* | *[Mod Updates](https://github.com/{repo_owner}/{repo_name}/blob/{repo_branch}/Changelogs/changelog_mods_{version}.md)*")
-                    
+                mdFile.new_paragraph(current_modrinth_version["date_published"])
 
                 # (Breakneck) Check if it's the second last iteration and prints info box for comparison point.
                 if i == len(changelog_list) - 2 and self.breakneck_fixes:
