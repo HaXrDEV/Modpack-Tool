@@ -300,17 +300,21 @@ class ChangelogFactory:
                     modified_resourcepacks = resourcepack_differences['modified']
                 
                 latest_modrinth_version_info = self.extract_modrinth_version_info(modrinth_versions)
+                if latest_modrinth_version_info:
+                    latest_modrinth_version_number = latest_modrinth_version_info['version_number']
+                else:
+                    latest_modrinth_version_number = None
                 
+                date_only = None
                 if version != self.modpack_version:
                     current_modrinth_version_info = self.extract_modrinth_version_info(modrinth_versions, version)
-                    modrinth_publish_timestamp = current_modrinth_version_info["date_published"]
-                    dt_object = datetime.fromisoformat(modrinth_publish_timestamp.replace("Z", ""))
-                    date_only = dt_object.strftime("%Y-%m-%d")
-                else:
-                    date_only = None
+                    if current_modrinth_version_info:
+                        modrinth_publish_timestamp = current_modrinth_version_info["date_published"]
+                        dt_object = datetime.fromisoformat(modrinth_publish_timestamp.replace("Z", ""))
+                        date_only = dt_object.strftime("%Y-%m-%d")
 
 
-                if version == self.modpack_version and not version == latest_modrinth_version_info['version_number']:
+                if version == self.modpack_version and not version == latest_modrinth_version_number:
                         mdFile.new_paragraph(f"## v{version} <Badge type='warning' text='Work in progress'/> <a href='#v{version}' id='v{version}'></a>")
                 else: 
                     if not "v" in version:

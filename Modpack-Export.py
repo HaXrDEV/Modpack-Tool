@@ -286,7 +286,6 @@ def main():
                 local_downloader = AsyncGitHubDownloader(repo_owner, repo_name, token=github_token, branch=input_version)
                 await local_downloader.download_folder(packwiz_mods_folder, os.path.join(destination, "mods"))
                 await local_downloader.download_folder(packwiz_resourcepacks_folder, os.path.join(destination, "resourcepacks"))
-                await local_downloader.download_folder(packwiz_resourcepacks_folder, os.path.join(destination, "shaderpacks"))
                 return
 
             # Loop through changelog files in reverse order
