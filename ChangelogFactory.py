@@ -151,55 +151,69 @@ class ChangelogFactory:
             f":::"
         )
 
-    def get_modrinth_version(self, modpack_slug, version_number=None):
+    def fetch_modrinth_versions(self, modpack_slug):
+        """
+        Fetches all version data for a given modpack from the Modrinth API.
+
+        Args:
+            modpack_slug (str): The slug of the modpack.
+
+        Returns:
+            list: A list of version data in JSON format, or None if an error occurs.
+        """
         try:
             api_url = f"https://api.modrinth.com/v2/project/{modpack_slug}/version"
-            
-            # Send a GET request to the API
             response = requests.get(api_url)
-            response.raise_for_status()  # Raise an error for bad status codes
-            
-            # Parse the JSON response
-            versions = response.json()
-
-            # If a specific version number is provided
-            if version_number:
-                for version in versions:
-                    if version["version_number"] == version_number:
-                        return {
-                            "name": version["name"],
-                            "version_number": version["version_number"],
-                            "date_published": version["date_published"],
-                            "download_url": version["files"][0]["url"] if version["files"] else None,
-                            "changelog": version["changelog"]
-                        }
-                print(f"Version {version_number} not found for modpack {modpack_slug}.")
-                return None
-
-            # Find the latest version by date_published
-            latest_version = max(versions, key=lambda v: v["date_published"])
-            
-            # Return the latest version details
-            return {
-                "name": latest_version["name"],
-                "version_number": latest_version["version_number"],
-                "date_published": latest_version["date_published"],
-                "download_url": latest_version["files"][0]["url"] if latest_version["files"] else None,
-                "changelog": latest_version["changelog"]
-            }
-
+            response.raise_for_status()
+            return response.json()
         except requests.exceptions.RequestException as e:
             print(f"Error fetching data from API: {e}")
             return None
 
 
+    def extract_modrinth_version_info(self, versions, version_number=None):
+        """
+        Extracts version information from the fetched JSON data.
+
+        Args:
+            versions (list): The list of version data in JSON format.
+            version_number (str, optional): The specific version number to find. Defaults to None.
+
+        Returns:
+            dict: A dictionary containing version details, or None if not found.
+        """
+        if not versions:
+            print("No version data available.")
+            return None
+
+        if version_number:
+            for version in versions:
+                if version["version_number"] == version_number:
+                    return {
+                        "name": version["name"],
+                        "version_number": version["version_number"],
+                        "date_published": version["date_published"],
+                        "download_url": version["files"][0]["url"] if version["files"] else None,
+                        "changelog": version["changelog"]
+                    }
+            print(f"Version {version_number} not found.")
+            return None
+
+        # Find the latest version by date_published
+        latest_version = max(versions, key=lambda v: v["date_published"])
+        return {
+            "name": latest_version["name"],
+            "version_number": latest_version["version_number"],
+            "date_published": latest_version["date_published"],
+            "download_url": latest_version["files"][0]["url"] if latest_version["files"] else None,
+            "changelog": latest_version["changelog"]
+        }
+
     def build_markdown_changelog(self, repo_owner, repo_name, tempgit_path, packwiz_path, file_name="CHANGELOG", repo_branch = "main", mc_version=None):
         mdFile = MdUtils(file_name)
 
-        #changelog_list = self.Reverse(os.listdir(self.changelog_dir))
-
-
         changelog_files = os.listdir(self.changelog_dir)
+        modrinth_versions = self.fetch_modrinth_versions(self.modpack_name)
         
         # Create a list of (filename, version) tuples for sorting
         version_file_pairs = []
@@ -285,15 +299,14 @@ class ChangelogFactory:
                     removed_resourcepacks = resourcepack_differences['removed']
                     modified_resourcepacks = resourcepack_differences['modified']
                 
+                latest_modrinth_version_info = self.extract_modrinth_version_info(modrinth_versions)
+                current_modrinth_version_info = self.extract_modrinth_version_info(modrinth_versions, version)
 
-                latest_modrinth_version = self.get_modrinth_version(self.modpack_name)
-                current_modrinth_version = self.get_modrinth_version(self.modpack_name, version)
-                
-                # modrinth_publish_timestamp = current_modrinth_version["date_published"]
-                # dt_object = datetime.fromisoformat(modrinth_publish_timestamp.replace("Z", ""))
-                # date_only = dt_object.strftime("%Y-%m-%d")
+                modrinth_publish_timestamp = current_modrinth_version_info["date_published"]
+                dt_object = datetime.fromisoformat(modrinth_publish_timestamp.replace("Z", ""))
+                date_only = dt_object.strftime("%Y-%m-%d")
 
-                if version == self.modpack_version and not version == latest_modrinth_version['version_number']:
+                if version == self.modpack_version and not version == latest_modrinth_version_info['version_number']:
                         mdFile.new_paragraph(f"## v{version} <Badge type='warning' text='Work in progress'/> <a href='#v{version}' id='v{version}'></a>")
                 else: 
                     if not "v" in version:
@@ -301,11 +314,10 @@ class ChangelogFactory:
                     else:
                         mdFile.new_paragraph(f"## {version} <a href='#{version}' id='{version}'></a>")
 
-
-
-
-                mdFile.new_paragraph(f"*Fabric Loader {fabric_loader}* | *[Mod Updates](https://github.com/{repo_owner}/{repo_name}/blob/{repo_branch}/Changelogs/changelog_mods_{version}.md)*")
-                mdFile.new_paragraph(current_modrinth_version["date_published"])
+                
+                
+                mdFile.new_paragraph(f"<a href='https://github.com/{repo_owner}/{repo_name}/blob/{repo_branch}/Changelogs/changelog_mods_{version}.md'><Badge type='tip' text='Mod Updates'/></a><Badge type='info' text='Fabric Loader {fabric_loader}'/><Badge type='info' text='{date_only}'/>")
+                # mdFile.new_paragraph(f"*{date_only}* | *Fabric Loader {fabric_loader}* | *[Mod Updates](https://github.com/{repo_owner}/{repo_name}/blob/{repo_branch}/Changelogs/changelog_mods_{version}.md)*")
 
                 # (Breakneck) Check if it's the second last iteration and prints info box for comparison point.
                 if i == len(changelog_list) - 2 and self.breakneck_fixes:
