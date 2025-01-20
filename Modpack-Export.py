@@ -45,20 +45,21 @@ git_path = str(os.path.dirname(os.path.dirname(script_path)))
 
 os.chdir(git_path)
 
-packwiz_path = git_path + "\\Packwiz\\"
-serverpack_path = git_path + "\\Server Pack\\"
-packwiz_exe_path = os.path.expanduser("~") + "\\go\\bin\\packwiz.exe"
+packwiz_path = os.path.join(git_path, "Packwiz")
+serverpack_path = os.path.join(git_path, "Server Pack")
+packwiz_exe_path = os.path.join(os.path.expanduser("~"), "\\go\\bin\\packwiz.exe")
 packwiz_manifest = "pack.toml"
-bcc_client_config_path = packwiz_path + "config\\bcc.json"
-bcc_server_config_path = serverpack_path + "config\\bcc.json"
-export_path = git_path + "\\Export\\"
-tempfolder_path = export_path + "temp\\"
-temp_mods_path = tempfolder_path + "mods\\"
-settings_path = git_path + "\\settings.yml"
-packwiz_mods_path = packwiz_path + "mods\\"
-prev_release = git_path + "\\Modpack-CLI-Tool\\prev_release"
-changelog_dir_path = git_path + "\\Changelogs\\"
-tempgit_path = git_path + "\\Modpack-CLI-Tool\\tempgit\\"
+bcc_client_config_path = os.path.join(packwiz_path, "config\\bcc.json")
+bcc_server_config_path = os.path.join(serverpack_path, "config\\bcc.json")
+export_path = os.path.join(git_path, "Export")
+tempfolder_path = os.path.join(export_path, "temp")
+temp_mods_path = os.path.join(tempfolder_path, "mods")
+settings_path = os.path.join(git_path, "settings.yml")
+packwiz_mods_path = os.path.join(packwiz_path, "mods")
+prev_release = os.path.join(git_path, "Modpack-CLI-Tool\\prev_release")
+changelog_dir_path = os.path.join(git_path, "Changelogs")
+tempgit_path = os.path.join(git_path, "Modpack-CLI-Tool\\tempgit")
+
 
 
 ############################################################
@@ -80,7 +81,7 @@ def parse_active_projects(input_path, parse_object):
     """This method takes a path as input and parses the pw.toml files inside, returning the names of activate projects in a list."""
     active_project = []
     for mod_toml in os.listdir(input_path):
-        mod_toml_path = input_path + mod_toml
+        mod_toml_path = os.path.join(input_path, mod_toml)
         try:
             if os.path.isfile(mod_toml_path): # Checks if mod_toml_path is a file.
                 with open(mod_toml_path, "r", encoding="utf8") as f:
@@ -105,8 +106,6 @@ def make_and_delete_dir(dir):
     else:
         os.makedirs(dir)
 
-#print(markdown.markdown_list_maker(parse_active_projects(packwiz_mods_path, "name")))
-# print(markdown.markdown_list_maker(parse_active_projects(packwiz_mods_path, "filename")))
 
 def get_latest_release_version(owner, repo):
     """
@@ -292,8 +291,8 @@ def main():
             for changelog in reversed(os.listdir(changelog_dir_path)):
                 if changelog.endswith(('.yml', '.yaml')):  # Process only YAML files
                     version = str(changelog_factory.get_changelog_value(changelog, "version"))
-                    version_path = tempgit_path + version  # Set the path for the version
-
+                    version_path = os.path.join(tempgit_path, version) # Set the path for the version
+                    
                     # Download files if version is not current and folder doesn't exist
                     if version != pack_version and not os.path.exists(version_path):
                         os.makedirs(version_path)
@@ -375,7 +374,7 @@ def main():
             os.chdir(git_path)
             yaml2 = YAML()
 
-            publish_workflow_path = git_path + f"\\.github\\workflows\\publish.yml"
+            publish_workflow_path = os.path.join(git_path, f".github\\workflows\\publish.yml")
 
             with open(publish_workflow_path, "r") as pw_file:
                 publish_workflow_yml = yaml2.load(pw_file)
@@ -407,7 +406,7 @@ def main():
         # Parse the related changelog file for overview details and create release markdown files for CF and MR.
         if create_release_notes:
             os.chdir(git_path)
-            changelog_path = git_path + f"\\Changelogs\\{pack_version}+{minecraft_version}.yml"
+            changelog_path = os.path.join(git_path, f"Changelogs\\{pack_version}+{minecraft_version}.yml")
             
             major_minecraft_version = '.'.join(minecraft_version.split('.', 2)[:2])
 
@@ -505,12 +504,12 @@ def main():
         if export_client and breakneck_fixes:
 
             bootstrap_nogui = False
-
-            mmc_cache_path = packwiz_path + "mmc-cache\\"
-            mmc_dotminecraft_path = mmc_cache_path + ".minecraft\\"
-            mmc_input_path = packwiz_path + "mcc-cache.zip"
-            packwiz_installer_path = git_path + "\\Modpack-CLI-Tool\\packwiz-installer-bootstrap.jar"
-            mmc_config = packwiz_path + "mmc-export.toml"
+            
+            mmc_cache_path = os.path.join(packwiz_path, "mmc-cache")
+            mmc_dotminecraft_path = os.path.join(mmc_cache_path, ".minecraft")
+            mmc_input_path = os.path.join(packwiz_path, "mcc-cache.zip")
+            packwiz_installer_path = os.path.join(git_path, "Modpack-CLI-Tool\\packwiz-installer-bootstrap.jar")
+            mmc_config = os.path.join(packwiz_path, "mmc-export.toml")
 
             packwiz_side = "client"
 
@@ -522,8 +521,8 @@ def main():
             os.chdir(packwiz_path)
 
             if move_disabled_mods:
-                mods_path = packwiz_path + "mods\\"
-                disabled_mods_path = mods_path + "disabled\\"
+                mods_path = os.path.join(packwiz_path, "mods")
+                disabled_mods_path = os.path.join(mods_path, "disabled")
                 os.chdir(mods_path)
                 
                 # Parse mod toml files for (disabled) marker.
@@ -556,17 +555,17 @@ def main():
             if bootstrap_nogui:
                 if file.is_file():
                     # Export Packwiz modpack to MMC cache folder and zip it.
-                    subprocess.call(f"java -jar \"{packwiz_installer_path}\" -s {packwiz_side} \"{packwiz_path + packwiz_manifest}\" -g --bootstrap-no-update", shell=True)
+                    subprocess.call(f"java -jar \"{packwiz_installer_path}\" -s {packwiz_side} \"{os.path.join(packwiz_path, packwiz_manifest)}\" -g --bootstrap-no-update", shell=True)
                 else:
                     # Export Packwiz modpack to MMC cache folder and zip it.
-                    subprocess.call(f"java -jar \"{packwiz_installer_path}\" -s {packwiz_side} \"{packwiz_path + packwiz_manifest}\" -g", shell=True)
+                    subprocess.call(f"java -jar \"{packwiz_installer_path}\" -s {packwiz_side} \"{os.path.join(packwiz_path, packwiz_manifest)}\" -g", shell=True)
             else:
                 if file.is_file():
                     # Export Packwiz modpack to MMC cache folder and zip it.
-                    subprocess.call(f"java -jar \"{packwiz_installer_path}\" -s {packwiz_side} \"{packwiz_path + packwiz_manifest}\" --bootstrap-no-update", shell=True)
+                    subprocess.call(f"java -jar \"{packwiz_installer_path}\" -s {packwiz_side} \"{os.path.join(packwiz_path, packwiz_manifest)}\" --bootstrap-no-update", shell=True)
                 else:
                     # Export Packwiz modpack to MMC cache folder and zip it.
-                    subprocess.call(f"java -jar \"{packwiz_installer_path}\" -s {packwiz_side} \"{packwiz_path + packwiz_manifest}\"", shell=True)
+                    subprocess.call(f"java -jar \"{packwiz_installer_path}\" -s {packwiz_side} \"{os.path.join(packwiz_path, packwiz_manifest)}\"", shell=True)
 
             # Creates mmc\.minecraft folder if it doesn't already exist.
             try:
