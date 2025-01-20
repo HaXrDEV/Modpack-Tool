@@ -47,18 +47,18 @@ os.chdir(git_path)
 
 packwiz_path = os.path.join(git_path, "Packwiz")
 serverpack_path = os.path.join(git_path, "Server Pack")
-packwiz_exe_path = os.path.join(os.path.expanduser("~"), "\\go\\bin\\packwiz.exe")
+packwiz_exe_path = os.path.join(os.path.expanduser("~"), "go", "bin", "packwiz.exe")
 packwiz_manifest = "pack.toml"
-bcc_client_config_path = os.path.join(packwiz_path, "config\\bcc.json")
-bcc_server_config_path = os.path.join(serverpack_path, "config\\bcc.json")
+bcc_client_config_path = os.path.join(packwiz_path, "config", "bcc.json")
+bcc_server_config_path = os.path.join(serverpack_path, "config", "bcc.json")
 export_path = os.path.join(git_path, "Export")
 tempfolder_path = os.path.join(export_path, "temp")
 temp_mods_path = os.path.join(tempfolder_path, "mods")
 settings_path = os.path.join(git_path, "settings.yml")
 packwiz_mods_path = os.path.join(packwiz_path, "mods")
-prev_release = os.path.join(git_path, "Modpack-CLI-Tool\\prev_release")
+prev_release = os.path.join(git_path, "Modpack-CLI-Tool", "prev_release")
 changelog_dir_path = os.path.join(git_path, "Changelogs")
-tempgit_path = os.path.join(git_path, "Modpack-CLI-Tool\\tempgit")
+tempgit_path = os.path.join(git_path, "Modpack-CLI-Tool", "tempgit")
 
 
 
@@ -374,7 +374,7 @@ def main():
             os.chdir(git_path)
             yaml2 = YAML()
 
-            publish_workflow_path = os.path.join(git_path, f".github\\workflows\\publish.yml")
+            publish_workflow_path = os.path.join(git_path, ".github", "workflows", "publish.yml")
 
             with open(publish_workflow_path, "r") as pw_file:
                 publish_workflow_yml = yaml2.load(pw_file)
@@ -406,7 +406,7 @@ def main():
         # Parse the related changelog file for overview details and create release markdown files for CF and MR.
         if create_release_notes:
             os.chdir(git_path)
-            changelog_path = os.path.join(git_path, f"Changelogs\\{pack_version}+{minecraft_version}.yml")
+            changelog_path = os.path.join(git_path, "Changelogs", f"{pack_version}+{minecraft_version}.yml")
             
             major_minecraft_version = '.'.join(minecraft_version.split('.', 2)[:2])
 
@@ -508,7 +508,7 @@ def main():
             mmc_cache_path = os.path.join(packwiz_path, "mmc-cache")
             mmc_dotminecraft_path = os.path.join(mmc_cache_path, ".minecraft")
             mmc_input_path = os.path.join(packwiz_path, "mcc-cache.zip")
-            packwiz_installer_path = os.path.join(git_path, "Modpack-CLI-Tool\\packwiz-installer-bootstrap.jar")
+            packwiz_installer_path = os.path.join(git_path, "Modpack-CLI-Tool", "packwiz-installer-bootstrap.jar")
             mmc_config = os.path.join(packwiz_path, "mmc-export.toml")
 
             packwiz_side = "client"

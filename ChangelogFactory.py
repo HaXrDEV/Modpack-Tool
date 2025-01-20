@@ -361,7 +361,7 @@ class ChangelogFactory:
                 # Modified section
                 if mod_differences['modified']:
                     mdFile.new_paragraph("### Updated Mods 🔄")
-                    print(modified_mods)
+                    #print(modified_mods)
                     mdFile.new_paragraph(markdown.markdown_list_maker([item[0] for item in modified_mods]))
                     # for name, old_version, new_version in mod_differences['modified']:
                     #     mdFile.new_paragraph(f"- **{(name)}**: Changed from `{old_version}` to `{new_version}`")
@@ -369,7 +369,7 @@ class ChangelogFactory:
 
                 if resourcepack_differences['modified']:
                     mdFile.new_paragraph("### Updated Resource Packs 🔃")
-                    print(modified_mods)
+                    #print(modified_mods)
                     mdFile.new_paragraph(markdown.markdown_list_maker([item[0] for item in modified_resourcepacks]))
 
 
