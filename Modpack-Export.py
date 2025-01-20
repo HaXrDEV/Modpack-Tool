@@ -631,8 +631,7 @@ def main():
                 print("Cache cleanup finished.")
             
             os.chdir(packwiz_path)
-            subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
-
+            subprocess.call(f"{packwiz_exe_path} refresh", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 
@@ -676,7 +675,7 @@ def main():
             print("Temp folder cleanup finished.")
         
         os.chdir(packwiz_path)
-        subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
+        subprocess.call(f"{packwiz_exe_path} refresh", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
     elif refresh_only:
         subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
