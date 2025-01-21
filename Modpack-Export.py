@@ -47,7 +47,7 @@ os.chdir(git_path)
 
 packwiz_path = os.path.join(git_path, "Packwiz")
 serverpack_path = os.path.join(git_path, "Server Pack")
-packwiz_exe_path = os.path.join(os.path.expanduser("~"), "go", "bin", "packwiz.exe")
+packwiz_exe_path = os.path.join(user_path, "go", "bin", "packwiz.exe")
 packwiz_manifest = "pack.toml"
 bcc_client_config_path = os.path.join(packwiz_path, "config", "bcc.json")
 bcc_server_config_path = os.path.join(serverpack_path, "config", "bcc.json")
@@ -537,11 +537,9 @@ def main():
                                 move(item, disabled_mods_path)
                     except OSError as e:
                         print(f"move_disabled_mods: {e}")
-
-
-            # Refresh the packwiz index
-            subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
-
+                os.chdir(packwiz_path)
+                subprocess.call(f"{packwiz_exe_path} refresh", shell=True) # Refresh the packwiz index
+            
 
             # Creates mmc-cache folder if it doesn't already exist and ensure that it is empty.
             try:
