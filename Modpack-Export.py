@@ -59,7 +59,8 @@ packwiz_mods_path = os.path.join(packwiz_path, "mods")
 prev_release = os.path.join(git_path, "Modpack-CLI-Tool", "prev_release")
 changelog_dir_path = os.path.join(git_path, "Changelogs")
 tempgit_path = os.path.join(git_path, "Modpack-CLI-Tool", "tempgit")
-
+mods_path = os.path.join(packwiz_path, "mods")
+crash_assistant_config_path = os.path.join(packwiz_path, "config", "crash_assistant", "modlist.json")
 
 
 ############################################################
@@ -97,6 +98,33 @@ def parse_active_projects(input_path, parse_object):
         except Exception as ex:
             print(ex, mod_toml)
     return active_project
+
+
+def parse_filenames_as_json(input_path):
+    """This method takes a path as input, parses the pw.toml files inside, 
+    and returns the values of the 'filename' key as a JSON list."""
+    filenames = []
+    
+    for mod_toml in os.listdir(input_path):
+        mod_toml_path = os.path.join(input_path, mod_toml)
+        try:
+            if os.path.isfile(mod_toml_path):  # Checks if mod_toml_path is a file.
+                with open(mod_toml_path, "r", encoding="utf8") as f:
+                    mod_toml = toml.load(f)
+                    side = str(mod_toml['side'])
+                    
+                    # Extract the 'filename' key if it exists
+                    if 'filename' in mod_toml and side in ("both", "client", "server"):
+                        filenames.append(mod_toml['filename'])
+        except Exception as ex:
+            print(f"Error processing file {mod_toml}: {ex}")
+
+    # Sort the filenames alphabetically
+    filenames.sort(key=lambda x: x.lower())
+    
+    # Convert the list of filenames to JSON and return it
+    return json.dumps(filenames, indent=2)
+
 
 def make_and_delete_dir(dir):
     """This function takes a directory path as a string and either clears its content if it already exists, or creates it if it doesn't."""
@@ -215,7 +243,7 @@ with open(settings_path, "r") as s_file:
     settings_yml = yaml.safe_load(s_file)
 
 # These lines contains all global configuration variables.
-export_client = refresh_only = update_bcc_version = cleanup_temp = create_release_notes = print_path_debug = update_publish_workflow = download_comparison_files = generate_mods_changelog = generate_primary_changelog = bool
+update_crash_assistant_modlist = export_client = refresh_only = update_bcc_version = cleanup_temp = create_release_notes = print_path_debug = update_publish_workflow = download_comparison_files = generate_mods_changelog = generate_primary_changelog = bool
 bh_banner = repo_owner = repo_name = repo_main_branch = str
 server_mods_remove_list = list
 
@@ -478,6 +506,19 @@ def main():
 
 
         #----------------------------------------
+        # Update 'Crash Assistant' modlist.
+        #----------------------------------------
+        
+        if update_crash_assistant_modlist:
+            
+            mod_filenames_json = parse_filenames_as_json(mods_path)
+
+            # Write the JSON output to the file
+            with open(crash_assistant_config_path, "w", encoding="utf8") as output_file:
+                output_file.write(mod_filenames_json)
+        
+
+        #----------------------------------------
         # Export client pack. (CurseForge with Packwiz)
         #----------------------------------------
         os.chdir(packwiz_path)
@@ -521,7 +562,6 @@ def main():
             os.chdir(packwiz_path)
 
             if move_disabled_mods:
-                mods_path = os.path.join(packwiz_path, "mods")
                 disabled_mods_path = os.path.join(mods_path, "disabled")
                 os.chdir(mods_path)
                 
