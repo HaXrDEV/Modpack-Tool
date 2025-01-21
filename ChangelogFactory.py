@@ -306,13 +306,15 @@ class ChangelogFactory:
                     latest_modrinth_version_number = None
                 
                 date_only = None
-                if version != self.modpack_version:
+                try:
                     current_modrinth_version_info = self.extract_modrinth_version_info(modrinth_versions, version)
                     if current_modrinth_version_info:
                         modrinth_publish_timestamp = current_modrinth_version_info["date_published"]
                         dt_object = datetime.fromisoformat(modrinth_publish_timestamp.replace("Z", ""))
                         date_only = dt_object.strftime("%Y-%m-%d")
-
+                except Exception as e:
+                    print(e)
+                    continue
 
                 if version == self.modpack_version and not version == latest_modrinth_version_number:
                         mdFile.new_paragraph(f"## v{version} <Badge type='warning' text='Work in progress'/> <a href='#v{version}' id='v{version}'></a>")
