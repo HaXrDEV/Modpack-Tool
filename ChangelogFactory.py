@@ -265,6 +265,7 @@ class ChangelogFactory:
                 overview_legacy = self.get_changelog_value(changelog, "Update overview")
                 bug_fixes = self.get_changelog_value(changelog, "Bug Fixes")
                 config_changes = self.get_changelog_value(changelog, "Config Changes")
+                script_changes = self.get_changelog_value(changelog, "Script/Datapack changes")
 
                 next_version_path = os.path.join(tempgit_path, str(next_version))
                 next_version_mods_path = os.path.join(next_version_path, "mods")
@@ -374,7 +375,10 @@ class ChangelogFactory:
                     #print(modified_mods)
                     mdFile.new_paragraph(markdown.markdown_list_maker([item[0] for item in modified_resourcepacks]))
 
-
+                if script_changes:
+                    mdFile.new_paragraph("### Script/Datapack Changes 📝")
+                    mdFile.new_paragraph(markdown.markdown_list_maker(script_changes))
+                
                 if config_changes:
                     mdFile.new_paragraph("### Config Changes 📝")
                     mdFile.new_paragraph(markdown.codify_bracketed_text(config_changes))

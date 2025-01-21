@@ -531,7 +531,7 @@ def main():
         if export_client and breakneck_fixes == False:
             # Export CF modpack using Packwiz.
             subprocess.call(f"{packwiz_exe_path} cf export", shell=True)
-            move(file, f"{export_path}{file}")
+            move(file, os.path.join(export_path, file))
             print("[PackWiz] Client exported.")
 
 
