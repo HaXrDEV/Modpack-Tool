@@ -11,12 +11,11 @@ import requests
 from datetime import datetime
 
 class ChangelogFactory:
-    def __init__(self, changelog_dir, modpack_name, modpack_version, use_changelog_side = True, breakneck_fixes=False):
-        self.changelog_dir = changelog_dir
-        self.modpack_name = modpack_name
-        self.modpack_version = modpack_version
-        self.use_changelog_side = use_changelog_side
-        self.breakneck_fixes = breakneck_fixes
+    def __init__(self, changelog_dir, modpack_name, modpack_version, settings):
+        self.changelog_dir: bool = changelog_dir
+        self.modpack_name: bool = modpack_name
+        self.modpack_version: bool = modpack_version
+        self.settings = settings
     
     def get_changelog_value(self, changelog_yml, key):
         if changelog_yml.endswith(('.yml', '.yaml')) and changelog_yml:  # Filter only YAML files
@@ -62,7 +61,7 @@ class ChangelogFactory:
             'modified': []
         }
         def local_get_side_str(side):
-            if side != "both" and self.use_changelog_side:
+            if side != "both" and self.settings.changelog_side_tag:
                 return f" `{str(side).capitalize()}`"
             else:
                 return ""
@@ -333,7 +332,7 @@ class ChangelogFactory:
                 # mdFile.new_paragraph(f"*{date_only}* | *Fabric Loader {fabric_loader}* | *[Mod Updates](https://github.com/{repo_owner}/{repo_name}/blob/{repo_branch}/Changelogs/changelog_mods_{version}.md)*")
 
                 # (Breakneck) Check if it's the second last iteration and prints info box for comparison point.
-                if i == len(changelog_list) - 2 and self.breakneck_fixes:
+                if i == len(changelog_list) - 2 and self.settings.breakneck_fixes:
                     mdFile.new_paragraph(self.vitepress_container_maker("info", f"Changes are in comparison to version [{next_version}]({next_mc_version}.md#v{next_version})."))
                 
                 if "beta" in version or "alpha" in version:

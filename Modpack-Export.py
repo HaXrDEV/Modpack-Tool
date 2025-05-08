@@ -21,6 +21,10 @@ import re
 import requests
 from packaging import version as version_helper
 
+# Settings
+from dataclasses import dataclass
+from typing import List
+
 # GitHub Download
 from GitHubDownloader import AsyncGitHubDownloader
 import asyncio
@@ -68,8 +72,7 @@ crash_assistant_config_path = os.path.join(packwiz_path, "config", "crash_assist
 
 def determine_server_export():
     """This method determines whether whether the server pack should be exported or not and returns a boolean."""
-    export_server_val = settings_yml['export_server']
-    if export_server_val:
+    if settings.export_server:
         if input("Want to export server pack? [N]: ") in ("y", "Y", "yes", "Yes"):
             return True
         else:
@@ -239,28 +242,64 @@ Press Enter to continue...""")
 ############################################################
 # Configuration
 
+@dataclass
+class Settings:
+    # Boolean flags
+    update_crash_assistant_modlist: bool = False
+    export_client: bool = False
+    export_server: bool = False
+    refresh_only: bool = False
+    update_bcc_version: bool = False
+    cleanup_temp: bool = False
+    create_release_notes: bool = False
+    print_path_debug: bool = False
+    update_publish_workflow: bool = False
+    download_comparison_files: bool = False
+    generate_mods_changelog: bool = False
+    generate_primary_changelog: bool = False
+    breakneck_fixes: bool = False
+    github_auth: bool = False
+    changelog_side_tag: bool = True
+
+    # String settings
+    bh_banner: str = ""
+    repo_owner: str = ""
+    repo_name: str = ""
+    repo_main_branch: str = ""
+
+    # List settings
+    server_mods_remove_list: List[str] = None
+
+
+def update_settings_from_dict(settings: Settings, settings_dict: dict):
+    for key, value in settings_dict.items():
+        if hasattr(settings, key):
+            setattr(settings, key, value)
+        else:
+            print(f"Warning: '{key}' is not a valid setting attribute.")
+
+
 with open(settings_path, "r") as s_file:
     settings_yml = yaml.safe_load(s_file)
 
-# These lines contains all global configuration variables.
-update_crash_assistant_modlist = export_client = refresh_only = update_bcc_version = cleanup_temp = create_release_notes = print_path_debug = update_publish_workflow = download_comparison_files = generate_mods_changelog = generate_primary_changelog = bool
-bh_banner = repo_owner = repo_name = repo_main_branch = str
-server_mods_remove_list = list
+settings = Settings()
+update_settings_from_dict(settings, settings_yml)
 
-breakneck_fixes = github_auth = False
-changelog_side_tag = True
 
-# Parse settings file and update variables.
-for key, value in settings_yml.items():
-    globals()[key] = value
 
-export_server = determine_server_export()
-prev_release_version = get_latest_release_version(repo_owner, repo_name)
 
-if breakneck_fixes:
+settings.export_server = determine_server_export()
+prev_release_version = get_latest_release_version(settings.repo_owner, settings.repo_name)
+
+
+
+############################################################
+# Print Stuff
+
+if settings.breakneck_fixes:
     input("Using fixes for Breakneck. Press Enter to continue...")
 
-if print_path_debug:
+if settings.print_path_debug:
     print("[DEBUG] " + git_path)
     print("[DEBUG] " + packwiz_path)
     print("[DEBUG] " + packwiz_exe_path)
@@ -271,35 +310,36 @@ if print_path_debug:
 ############################################################
 # Class Objects
 
-downloader = AsyncGitHubDownloader(repo_owner, repo_name, branch=prev_release_version)
-changelog_factory = ChangelogFactory(changelog_dir_path, modpack_name, pack_version, use_changelog_side=changelog_side_tag, breakneck_fixes=breakneck_fixes)
+prev_release_version = get_latest_release_version(settings.repo_owner, settings.repo_name)
+downloader = AsyncGitHubDownloader(settings.repo_owner, settings.repo_name, branch=prev_release_version)
+
+changelog_factory = ChangelogFactory(changelog_dir_path, modpack_name, pack_version, settings)
 
 ############################################################
 # Main Program
 
 def main():
 
-    if not refresh_only:
+    if not settings.refresh_only:
 
         #----------------------------------------
         # Download comparison files.
         #----------------------------------------
 
-        if download_comparison_files:
+        if settings.download_comparison_files:
             
             # Handle GitHub authentication
-            if github_auth:
+            if settings.github_auth:
                 github_token = input("Your personal access token: ")
             else:
                 github_token = None
 
             # Function to download comparison files asynchronously
             async def download_compare_files_async(input_version, destination):
-                global breakneck_fixes
                 print(f"Downloading {input_version} comparison files.")
 
                 # A fix that ensures that the mods folder is correctly targeted in versions that use a monorepo in Breakneck.
-                if breakneck_fixes and (
+                if settings.breakneck_fixes and (
                     is_version_in_range(input_version, "4.0.0-beta.3", "4.4.0-beta.1")
                 ):
                     tag_mc_ver = changelog_factory.get_changelog_value(changelog, "mc_version")
@@ -310,7 +350,7 @@ def main():
                     packwiz_resourcepacks_folder = 'Packwiz/resourcepacks'
 
                 # Download the folder from GitHub
-                local_downloader = AsyncGitHubDownloader(repo_owner, repo_name, token=github_token, branch=input_version)
+                local_downloader = AsyncGitHubDownloader(settings.repo_owner, settings.repo_name, token=github_token, branch=input_version)
                 await local_downloader.download_folder(packwiz_mods_folder, os.path.join(destination, "mods"))
                 await local_downloader.download_folder(packwiz_resourcepacks_folder, os.path.join(destination, "resourcepacks"))
                 return
@@ -335,16 +375,16 @@ def main():
         # Generate CHANGELOG.md file.
         #----------------------------------------
 
-        if generate_primary_changelog:
+        if settings.generate_primary_changelog:
             os.chdir(git_path)
-            changelog_factory.build_markdown_changelog(repo_owner, repo_name, tempgit_path, packwiz_path, repo_branch = repo_main_branch, mc_version=minecraft_version)
+            changelog_factory.build_markdown_changelog(settings.repo_owner, settings.repo_name, tempgit_path, packwiz_path, repo_branch = settings.repo_main_branch, mc_version=minecraft_version)
 
 
         #----------------------------------------
         # Generate mod changes comparison files.
         #----------------------------------------
 
-        # if generate_mods_changelog:
+        # if settings.generate_mods_changelog:
         #     os.chdir(git_path)
         #     changelog_files = os.listdir(changelog_dir_path)
             
@@ -398,7 +438,7 @@ def main():
         #----------------------------------------
         # Update publish workflow values.
         #----------------------------------------
-        if update_publish_workflow:
+        if settings.update_publish_workflow:
             os.chdir(git_path)
             yaml2 = YAML()
 
@@ -432,7 +472,7 @@ def main():
         #----------------------------------------
 
         # Parse the related changelog file for overview details and create release markdown files for CF and MR.
-        if create_release_notes:
+        if settings.create_release_notes:
             os.chdir(git_path)
             changelog_path = os.path.join(git_path, "Changelogs", f"{pack_version}+{minecraft_version}.yml")
             
@@ -440,9 +480,9 @@ def main():
 
             md_element_full_changelog = f"**[[Full Changelog]](https://crismpack.net/{modpack_name.lower().split(' ', 1)[0]}/changelogs/{major_minecraft_version}/{minecraft_version}#v{pack_version})**"
             md_element_pre_release = '**This is a pre-release. Here be dragons!**'
-            md_element_bh_banner = f"[![BisectHosting Banner]({bh_banner})](https://bisecthosting.com/CRISM)"
+            md_element_bh_banner = f"[![BisectHosting Banner]({settings.bh_banner})](https://bisecthosting.com/CRISM)"
             md_element_crism_spacer = "![CrismPack Spacer](https://github.com/CrismPack/CDN/blob/main/desc/breakneck/79ESzz1-tiny.png?raw=true)"
-            # html_element_bh_banner = "<p><a href='https://bisecthosting.com/CRISM'><img src='https://github.com/CrismPack/CDN/blob/main/desc/insomnia/bhbanner.png?raw=true' width='800' /></a></p>"
+            # html_element_settings.bh_banner = "<p><a href='https://bisecthosting.com/CRISM'><img src='https://github.com/CrismPack/CDN/blob/main/desc/insomnia/bhbanner.png?raw=true' width='800' /></a></p>"
 
             
             mdFile_CF = MdUtils(file_name='CurseForge-Release')
@@ -487,8 +527,8 @@ def main():
         # Update BCC version number.
         #----------------------------------------
         
-        if update_bcc_version:
-            if export_client:
+        if settings.update_bcc_version:
+            if settings.export_client:
                 os.chdir(packwiz_path)
                 # Client
                 with open(bcc_client_config_path, "r") as f:
@@ -497,7 +537,7 @@ def main():
                 with open(bcc_client_config_path, "w") as f:
                     json.dump(bcc_json, f)
             # Server
-            if export_server:
+            if settings.export_server:
                 with open(bcc_server_config_path, "r") as f:
                     bcc_json = json.load(f)
                 bcc_json["modpackVersion"] = pack_version
@@ -509,7 +549,7 @@ def main():
         # Update 'Crash Assistant' modlist.
         #----------------------------------------
         
-        if update_crash_assistant_modlist:
+        if settings.update_crash_assistant_modlist:
             
             mod_filenames_json = parse_filenames_as_json(mods_path)
 
@@ -528,7 +568,7 @@ def main():
 
         # Packwiz exporting
         file = f'{modpack_name}-{pack_version}.zip'
-        if export_client and breakneck_fixes == False:
+        if settings.export_client and settings.breakneck_fixes == False:
             # Export CF modpack using Packwiz.
             subprocess.call(f"{packwiz_exe_path} cf export", shell=True)
             move(file, os.path.join(export_path, file))
@@ -542,7 +582,7 @@ def main():
         #----------------------------------------
 
 
-        if export_client and breakneck_fixes:
+        if settings.export_client and settings.breakneck_fixes:
 
             bootstrap_nogui = False
             
@@ -676,7 +716,7 @@ def main():
         #----------------------------------------
         # Export server pack
         # ----------------------------------------
-        if export_server:
+        if settings.export_server:
             # Export CF modpack using Packwiz.
             subprocess.call(f"{packwiz_exe_path} cf export -s server", shell=True)
             file_server_name = f'{modpack_name}-Server-{pack_version}.zip'
@@ -698,7 +738,7 @@ def main():
             # Removes specified files from mods folder
             os.chdir(temp_mods_path)
             for file in os.listdir():
-                if file in server_mods_remove_list:
+                if file in settings.server_mods_remove_list:
                     os.remove(file)
 
             os.chdir(export_path)
@@ -708,14 +748,14 @@ def main():
         #----------------------------------------
         # Temp cleanup
         #----------------------------------------
-        if cleanup_temp and os.path.isdir(tempfolder_path):
+        if settings.cleanup_temp and os.path.isdir(tempfolder_path):
             rmtree(tempfolder_path)
             print("Temp folder cleanup finished.")
         
         os.chdir(packwiz_path)
         subprocess.call(f"{packwiz_exe_path} refresh", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
-    elif refresh_only:
+    elif settings.refresh_only:
         subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
 
 
