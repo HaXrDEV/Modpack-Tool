@@ -353,13 +353,13 @@ class ChangelogFactory:
                     mdFile.new_paragraph(markdown.markdown_list_maker(added_mods))
                 if added_resourcepacks:
                     mdFile.new_paragraph("### Added Resource Packs 📦")
-                    mdFile.new_paragraph(markdown.markdown_list_maker(added_mods))
+                    mdFile.new_paragraph(markdown.markdown_list_maker(added_resourcepacks))
                 if removed_mods:
                     mdFile.new_paragraph("### Removed Mods ❌")
                     mdFile.new_paragraph(markdown.markdown_list_maker(removed_mods))
                 if removed_resourcepacks:
                     mdFile.new_paragraph("### Removed Resource Packs ❌")
-                    mdFile.new_paragraph(markdown.markdown_list_maker(removed_mods))
+                    mdFile.new_paragraph(markdown.markdown_list_maker(removed_resourcepacks))
 
                 # Modified section
                 if mod_differences['modified']:
