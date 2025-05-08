@@ -286,11 +286,7 @@ settings = Settings()
 update_settings_from_dict(settings, settings_yml)
 
 
-
-
 settings.export_server = determine_server_export()
-prev_release_version = get_latest_release_version(settings.repo_owner, settings.repo_name)
-
 
 
 ############################################################
@@ -310,10 +306,8 @@ if settings.print_path_debug:
 ############################################################
 # Class Objects
 
-prev_release_version = get_latest_release_version(settings.repo_owner, settings.repo_name)
-downloader = AsyncGitHubDownloader(settings.repo_owner, settings.repo_name, branch=prev_release_version)
-
 changelog_factory = ChangelogFactory(changelog_dir_path, modpack_name, pack_version, settings)
+
 
 ############################################################
 # Main Program
