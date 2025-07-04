@@ -19,7 +19,7 @@ from mdutils.mdutils import MdUtils
 from mdutils import Html
 import re
 import requests
-from packaging import version as version_helper
+# from packaging import version as version_helper
 
 # Settings
 from dataclasses import dataclass

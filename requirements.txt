@@ -5,3 +5,5 @@ mdutils
 MdUtils
 PyYAML
 requests-oauthlib
+ruamel.yaml
+packaging
