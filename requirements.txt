@@ -1,9 +1,11 @@
 wheel
 toml
-mmc-export
+mmc-export==2.8.7
 mdutils
 MdUtils
 PyYAML
 requests-oauthlib
 ruamel.yaml
 packaging
+aiohttp==3.8.3
+aiohttp-client-cache[filesystem]==0.10.0
