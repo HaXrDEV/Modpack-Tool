@@ -5,13 +5,14 @@ setlocal enabledelayedexpansion
 set VENV_DIR=venv
 set UPDATE_DEPS=0
 
-:: Check if Git is installed
+:: -------------------------------
+:: Check for Git
+:: -------------------------------
 echo Checking for Git...
 git --version >nul 2>&1
 if %errorlevel% neq 0 (
     echo Git is not installed. Installing Git...
 
-    :: Check if winget is available
     if exist "%LOCALAPPDATA%\Microsoft\WindowsApps\winget.exe" (
         echo Installing Git using winget...
         "%LOCALAPPDATA%\Microsoft\WindowsApps\winget.exe" install --id Git.Git -e --source winget
@@ -19,14 +20,6 @@ if %errorlevel% neq 0 (
         echo winget is not available. Please install Git manually...
         pause
         exit /b 1
-    )
-    if %errorlevel% neq 0 (
-        echo winget is not available. Please install Git manually from https://git-scm.com/download/win
-        pause
-        exit /b 1
-    ) else (
-        echo Installing Git using winget...
-        winget install --id Git.Git -e --source winget
     )
 
     git --version >nul 2>&1
@@ -37,28 +30,73 @@ if %errorlevel% neq 0 (
     )
 )
 
+:: -------------------------------
+:: Detect Python 3.11 (even if MS Store)
+:: -------------------------------
+echo Searching for Python 3.11...
 
-:: Check if Python is installed
-echo Checking for Python...
-python --version >nul 2>&1
-if %errorlevel% neq 0 (
-    echo Python is not installed. Please install it from https://www.python.org/downloads/
+set "PYTHON_CMD="
+set "PREFERRED_VERS=3.11"
+
+:: 1. Use py launcher if available
+where py >nul 2>&1
+if %errorlevel%==0 (
+    for /f "delims=" %%v in ('py -3.11 -c "import sys; print(sys.executable)" 2^>nul') do set "PYTHON_CMD=%%v"
+)
+
+:: 2. Try known install locations (MS Store, user, system)
+if not defined PYTHON_CMD (
+    for %%P in (
+        "%LocalAppData%\Microsoft\WindowsApps\python3.11.exe"
+        "%ProgramFiles%\Python311\python.exe"
+        "%ProgramFiles(x86)%\Python311\python.exe"
+        "%UserProfile%\AppData\Local\Programs\Python\Python311\python.exe"
+    ) do (
+        if exist %%P (
+            set "PYTHON_CMD=%%P"
+            goto :FOUND_PYTHON
+        )
+    )
+)
+
+:: 3. Fallback: search PATH for any python.exe and check version
+if not defined PYTHON_CMD (
+    for /f "delims=" %%F in ('where python 2^>nul') do (
+        for /f "delims=" %%V in ('"%%F" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2^>nul') do (
+            if "%%V"=="%PREFERRED_VERS%" (
+                set "PYTHON_CMD=%%F"
+                goto :FOUND_PYTHON
+            )
+        )
+    )
+)
+
+:FOUND_PYTHON
+
+:: If still not found, fail
+if not defined PYTHON_CMD (
+    echo Python %PREFERRED_VERS% not found.
+    echo Please install Python 3.11 from: https://www.python.org/downloads/release/python-3110/
     pause
     exit /b 1
 )
 
-:: Define repository variables
+:: Show which Python will be used
+"%PYTHON_CMD%" -c "import sys; print(f'Using Python {sys.version_info.major}.{sys.version_info.minor} at {sys.executable}')"
+
+:: -------------------------------
+:: Repository Setup
+:: -------------------------------
 set REPO_URL=https://github.com/HaXrDEV/Modpack-CLI-Tool
 set REPO_DIR=Modpack-CLI-Tool
 
-:: Get remote HEAD commit hash (only the hash)
+:: Get remote HEAD commit hash
 for /f "tokens=1" %%i in ('git ls-remote %REPO_URL% HEAD') do set "REMOTE_HASH=%%i"
 
-:: Check if the repository directory exists
+:: Check if local repo exists
 if exist %REPO_DIR% (
     pushd %REPO_DIR% >nul
 
-    :: Check if it's a git repo
     if exist .git (
         for /f "delims=" %%j in ('git rev-parse HEAD') do set "LOCAL_HASH=%%j"
 
@@ -85,7 +123,7 @@ if exist %REPO_DIR% (
     set UPDATE_DEPS=1
 )
 
-:: Clone the repository if needed
+:: Clone the repo if needed
 if %UPDATE_DEPS%==1 (
     echo Cloning repository...
     git clone %REPO_URL%
@@ -97,11 +135,13 @@ if %UPDATE_DEPS%==1 (
     )
 )
 
+:: -------------------------------
+:: Set up virtual environment
+:: -------------------------------
 :SETUP_ENV
-:: Create virtual environment in the main directory if not exist
 if not exist %VENV_DIR% (
     echo Creating Python virtual environment in "%cd%\%VENV_DIR%"...
-    python -m venv %VENV_DIR%
+    "%PYTHON_CMD%" -m venv %VENV_DIR%
     if %errorlevel% neq 0 (
         echo Failed to create virtual environment. Exiting...
         pause
@@ -114,15 +154,15 @@ if not exist %VENV_DIR% (
 :: Activate the virtual environment
 call %VENV_DIR%\Scripts\activate.bat
 
-:: Navigate into the cloned repo
+:: Move into the repo
 cd %REPO_DIR%
 
-:: Install dependencies only if we just cloned (UPDATE_DEPS=1)
+:: Install dependencies if repo was updated
 if %UPDATE_DEPS%==1 (
     if exist requirements.txt (
         echo Installing dependencies from requirements.txt...
-        python -m pip install --upgrade pip --quiet >nul 2>&1
-        pip install -r requirements.txt
+        "%PYTHON_CMD%" -m pip install --upgrade pip --quiet >nul 2>&1
+        "%PYTHON_CMD%" -m pip install -r requirements.txt
         if %errorlevel% neq 0 (
             echo Failed to install dependencies. Exiting...
             pause
@@ -135,9 +175,11 @@ if %UPDATE_DEPS%==1 (
     echo Dependencies update not needed; skipping installation.
 )
 
-:: Run the Python script using the virtual environment
+:: -------------------------------
+:: Run the main script
+:: -------------------------------
 echo Running Modpack-Export.py...
-python Modpack-Export.py
+"%PYTHON_CMD%" Modpack-Export.py
 if %errorlevel% neq 0 (
     echo Python script failed. Exiting...
     pause
