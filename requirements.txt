@@ -9,4 +9,3 @@ ruamel.yaml
 packaging
 aiohttp==3.8.3
 aiohttp-client-cache[filesystem]==0.10.0
-tomllib
