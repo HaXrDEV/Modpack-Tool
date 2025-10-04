@@ -10,7 +10,16 @@ echo Checking for Git...
 git --version >nul 2>&1
 if %errorlevel% neq 0 (
     echo Git is not installed. Installing Git...
-    winget --version >nul 2>&1
+
+    :: Check if winget is available
+    if exist "%LOCALAPPDATA%\Microsoft\WindowsApps\winget.exe" (
+        echo Installing Git using winget...
+        "%LOCALAPPDATA%\Microsoft\WindowsApps\winget.exe" install --id Git.Git -e --source winget
+    ) else (
+        echo winget is not available. Please install Git manually...
+        pause
+        exit /b 1
+    )
     if %errorlevel% neq 0 (
         echo winget is not available. Please install Git manually from https://git-scm.com/download/win
         pause
@@ -27,6 +36,7 @@ if %errorlevel% neq 0 (
         exit /b 1
     )
 )
+
 
 :: Check if Python is installed
 echo Checking for Python...
