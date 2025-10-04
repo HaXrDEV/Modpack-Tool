@@ -1,6 +1,6 @@
 wheel
 toml
-mmc-export==2.8.7
+mmc-export==2.8.10
 mdutils
 MdUtils
 PyYAML
