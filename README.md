@@ -1,5 +1,7 @@
 ![header](https://capsule-render.vercel.app/api?type=waving&height=250&color=timeGradient&text=Modpack%20CLI%20Tool&fontAlignY=46&animation=fadeIn)
 
+Requires Python 3.11
+
 > [!WARNING]  
 > This tool is made for the sole purpose of automating stuff when i develop my modpacks. It is therefore not made to be user friendly or flexible in any way as it requires a very specific workflow to function.
 > Long story short, i do not recommend that anyone else uses this tool due to the reasons above.
