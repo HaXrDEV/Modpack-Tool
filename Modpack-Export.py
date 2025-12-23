@@ -218,6 +218,7 @@ class Settings:
     breakneck_fixes: bool = False
     github_auth: bool = False
     changelog_side_tag: bool = True
+    changelog_updated_mods: bool = False
 
     # String settings
     bh_banner: str = ""

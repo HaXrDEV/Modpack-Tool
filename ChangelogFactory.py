@@ -361,7 +361,7 @@ class ChangelogFactory:
                     mdFile.new_paragraph(markdown.markdown_list_maker(removed_resourcepacks))
 
                 # Modified section
-                if mod_differences['modified']:
+                if mod_differences['modified'] and self.settings.changelog_updated_mods:
                     mdFile.new_paragraph("### Updated Mods 🔄")
                     #print(modified_mods)
                     mdFile.new_paragraph(markdown.markdown_list_maker([item[0] for item in modified_mods]))
