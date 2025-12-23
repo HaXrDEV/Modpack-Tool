@@ -219,6 +219,7 @@ class Settings:
     github_auth: bool = False
     changelog_side_tag: bool = True
     changelog_updated_mods: bool = False
+    changelog_updated_resoucepacks: bool = False
 
     # String settings
     bh_banner: str = ""

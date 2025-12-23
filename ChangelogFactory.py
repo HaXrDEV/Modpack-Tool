@@ -369,7 +369,7 @@ class ChangelogFactory:
                     #     mdFile.new_paragraph(f"- **{(name)}**: Changed from `{old_version}` to `{new_version}`")
                                 # Modified section
 
-                if resourcepack_differences['modified']:
+                if resourcepack_differences['modified'] and self.settings.changelog_updated_resoucepacks:
                     mdFile.new_paragraph("### Updated Resource Packs 🔃")
                     #print(modified_mods)
                     mdFile.new_paragraph(markdown.markdown_list_maker([item[0] for item in modified_resourcepacks]))
