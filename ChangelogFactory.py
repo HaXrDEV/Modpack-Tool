@@ -1,35 +1,36 @@
 import os
-import yaml
+
+from ruamel.yaml.error import YAMLError
+
 from mdutils.mdutils import MdUtils
 import re
 import toml
-import itertools
 import MarkdownHelper as markdown
-import GitHubHelper as github
 from packaging import version as version_helper
 import requests
 from datetime import datetime
 
 class ChangelogFactory:
-    def __init__(self, changelog_dir, modpack_name, modpack_version, settings):
-        self.changelog_dir: bool = changelog_dir
-        self.modpack_name: bool = modpack_name
-        self.modpack_version: bool = modpack_version
+    def __init__(self, changelog_dir, modpack_name, modpack_version, settings, yaml_instance):
+        self.changelog_dir = changelog_dir
+        self.modpack_name = modpack_name
+        self.modpack_version = modpack_version
         self.settings = settings
-    
+        self.yaml = yaml_instance
+        
     def get_changelog_value(self, changelog_yml, key):
-        if changelog_yml.endswith(('.yml', '.yaml')) and changelog_yml:  # Filter only YAML files
+        if changelog_yml and changelog_yml.endswith(('.yml', '.yaml')):
             file_path = os.path.join(self.changelog_dir, changelog_yml)
             try:
-                with open(file_path, "r", encoding="utf8") as f: # Open the YAML file and load its contents
-                    changelog_data = yaml.safe_load(f)
-                    return changelog_data[key] # Returns value of key
-            except yaml.YAMLError as e:
-                print(f"Error parsing {file_path}: {e}") # Handle YAML errors gracefully
+                with open(file_path, "r", encoding="utf-8") as f:
+                    changelog_data = self.yaml.load(f) or {}
+                return changelog_data[key]
+            except YAMLError as e:
+                print(f"Error parsing {file_path}: {e}")
             except KeyError:
-                print(f"Key '{key}' not found in {file_path}") # Handle missing key
-            finally:
-                f.close()
+                print(f"Key '{key}' not found in {file_path}")
+            except OSError as e:
+                print(f"Error reading {file_path}: {e}")
 
 
 
@@ -360,18 +361,14 @@ class ChangelogFactory:
                     mdFile.new_paragraph("### Removed Resource Packs ❌")
                     mdFile.new_paragraph(markdown.markdown_list_maker(removed_resourcepacks))
 
-                # Modified section
-                if mod_differences['modified'] and self.settings.changelog_updated_mods:
+                # Modified mods section
+                if mod_differences and mod_differences.get('modified') and self.settings.changelog_updated_mods:
                     mdFile.new_paragraph("### Updated Mods 🔄")
-                    #print(modified_mods)
                     mdFile.new_paragraph(markdown.markdown_list_maker([item[0] for item in modified_mods]))
-                    # for name, old_version, new_version in mod_differences['modified']:
-                    #     mdFile.new_paragraph(f"- **{(name)}**: Changed from `{old_version}` to `{new_version}`")
-                                # Modified section
-
-                if resourcepack_differences['modified'] and self.settings.changelog_updated_resoucepacks:
+                
+                # Modified resource packs section
+                if resourcepack_differences and resourcepack_differences.get('modified') and self.settings.changelog_updated_resoucepacks:
                     mdFile.new_paragraph("### Updated Resource Packs 🔃")
-                    #print(modified_mods)
                     mdFile.new_paragraph(markdown.markdown_list_maker([item[0] for item in modified_resourcepacks]))
 
                 if script_changes:

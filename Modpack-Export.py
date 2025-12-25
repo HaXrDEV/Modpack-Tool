@@ -274,7 +274,7 @@ if settings.print_path_debug:
 ############################################################
 # Class Objects
 
-changelog_factory = ChangelogFactory(changelog_dir_path, modpack_name, pack_version, settings)
+changelog_factory = ChangelogFactory(changelog_dir_path, modpack_name, pack_version, settings, yaml)
 
 ############################################################
 # Main Program
