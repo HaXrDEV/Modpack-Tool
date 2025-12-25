@@ -15,11 +15,10 @@ from pathlib import Path
 import toml  # pip install toml
 import yaml # pip install PyYAML
 from ruamel.yaml import YAML
+from ruamel.yaml.comments import CommentedMap
+from ruamel.yaml.scalarstring import LiteralScalarString
 from mdutils.mdutils import MdUtils
-from mdutils import Html
-import re
 import requests
-# from packaging import version as version_helper
 
 # Settings
 from dataclasses import dataclass
@@ -189,6 +188,7 @@ with open(packwiz_manifest, "r") as f:
 pack_version = pack_toml["version"]
 modpack_name = pack_toml["name"]
 minecraft_version = pack_toml["versions"]["minecraft"]
+fabric_version = pack_toml["versions"]["fabric"]
 
 input(f"""{launch_message}
 Modpack: {modpack_name}
@@ -351,10 +351,33 @@ def main():
             md_element_bh_banner = f"[![BisectHosting Banner]({settings.bh_banner})](https://bisecthosting.com/CRISM)"
             mdFile_CF = MdUtils(file_name='CurseForge-Release')
             mdFile_MR = MdUtils(file_name='Modrinth-Release')
+            
             if "beta" in pack_version or "alpha" in pack_version:
                 print("pack_version = " + pack_version)
                 mdFile_CF.new_paragraph(md_element_pre_release)
                 mdFile_MR.new_paragraph(md_element_pre_release)
+
+            if not os.path.isfile(changelog_path):
+                print(f"No changelog found for {pack_version}, creating a template...")
+
+                yaml2 = YAML()
+                yaml2.indent(mapping=2, sequence=4, offset=2)
+                yaml2.default_flow_style = False
+
+                data = CommentedMap()
+                data["version"] = pack_version
+                data["Fabric version"] = fabric_version
+
+                # Intentionally empty sections
+                data["Changes/Improvements"] = None
+                data["Bug Fixes"] = None
+
+                # Literal block
+                data["Config Changes"] = LiteralScalarString("- : [mod], [Client]")
+
+                with open(changelog_path, "w", encoding="utf-8") as f:
+                    yaml2.dump(data, f)
+    
             with open(changelog_path, "r", encoding="utf8") as f:
                 changelog_yml = yaml.safe_load(f)
             try:
