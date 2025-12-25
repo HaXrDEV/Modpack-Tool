@@ -3,7 +3,7 @@ launch_message = """
 █                           █
 █  HaXr's Modpack CLI Tool  █
 █                           █
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀"""
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀"""
 
 import os, sys
 import os.path
