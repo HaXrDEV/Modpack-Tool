@@ -391,6 +391,13 @@ def main():
             with open(changelog_path, "r", encoding="utf-8") as f:
                 changelog_yml = yaml.load(f) or {}
 
+            # Update Fabric version in changelog if needed.
+            if changelog_yml.get("Fabric version") != fabric_version:
+                changelog_yml["Fabric version"] = fabric_version
+                
+                with open(changelog_path, "w", encoding="utf-8") as f:
+                    yaml.dump(changelog_yml, f)
+
             try:
                 update_overview = changelog_yml['Update overview']
                 mdFile_CF.new_paragraph(markdown.markdown_list_maker(update_overview))
