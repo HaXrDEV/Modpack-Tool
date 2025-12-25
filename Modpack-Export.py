@@ -3,7 +3,7 @@ launch_message = """
 █                           █
 █  HaXr's Modpack CLI Tool  █
 █                           █
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀"""
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀"""
 
 import os, sys
 import os.path
@@ -13,10 +13,12 @@ from shutil import rmtree, make_archive, move, copytree
 from pathlib import Path
 
 import toml  # pip install toml
-import yaml # pip install PyYAML
+# import yaml  # REMOVE PyYAML
+
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
 from ruamel.yaml.scalarstring import LiteralScalarString
+
 from mdutils.mdutils import MdUtils
 import requests
 
@@ -36,6 +38,14 @@ import MarkdownHelper as markdown
 
 # Semver stuff
 from packaging.version import Version, InvalidVersion
+
+############################################################
+# YAML (ruamel only) — one instance used everywhere
+
+yaml = YAML()  # round-trip by default (typ="rt")
+yaml.indent(mapping=2, sequence=4, offset=2)
+yaml.default_flow_style = False
+yaml.preserve_quotes = True  # harmless, helps if you ever edit existing YAML
 
 ############################################################
 # Variables
@@ -239,8 +249,9 @@ def update_settings_from_dict(settings: Settings, settings_dict: dict):
             print(f"Warning: '{key}' is not a valid setting attribute.")
 
 
-with open(settings_path, "r") as s_file:
-    settings_yml = yaml.safe_load(s_file)
+# Load settings.yml with ruamel (instead of yaml.safe_load)
+with open(settings_path, "r", encoding="utf-8") as s_file:
+    settings_yml = yaml.load(s_file) or {}
 
 settings = Settings()
 update_settings_from_dict(settings, settings_yml)
@@ -316,28 +327,35 @@ def main():
         #----------------------------------------
         if settings.generate_primary_changelog:
             os.chdir(git_path)
-            changelog_factory.build_markdown_changelog(settings.repo_owner, settings.repo_name, tempgit_path, packwiz_path, repo_branch = settings.repo_main_branch, mc_version=minecraft_version)
+            changelog_factory.build_markdown_changelog(
+                settings.repo_owner, settings.repo_name, tempgit_path,
+                packwiz_path, repo_branch=settings.repo_main_branch, mc_version=minecraft_version
+            )
 
         #----------------------------------------
         # Update publish workflow values.
         #----------------------------------------
         if settings.update_publish_workflow:
             os.chdir(git_path)
-            yaml2 = YAML()
             publish_workflow_path = os.path.join(git_path, ".github", "workflows", "publish.yml")
-            with open(publish_workflow_path, "r") as pw_file:
-                publish_workflow_yml = yaml2.load(pw_file)
+
+            with open(publish_workflow_path, "r", encoding="utf-8") as pw_file:
+                publish_workflow_yml = yaml.load(pw_file) or {}
+
             publish_workflow_yml['env']['MC_VERSION'] = minecraft_version
+
             if "beta" in pack_version:
                 pw_release_type = "beta"; pw_prerelease = True
             elif "alpha" in pack_version:
                 pw_release_type = "alpha"; pw_prerelease = True
             else:
                 pw_release_type = "release"; pw_prerelease = False
+
             publish_workflow_yml['env']['RELEASE_TYPE'] = pw_release_type
             publish_workflow_yml['env']['PRE_RELEASE'] = pw_prerelease
-            with open(publish_workflow_path, "w") as pw_file:
-                yaml2.dump(publish_workflow_yml, pw_file)
+
+            with open(publish_workflow_path, "w", encoding="utf-8") as pw_file:
+                yaml.dump(publish_workflow_yml, pw_file)
 
         #----------------------------------------
         # Create release notes.
@@ -351,7 +369,7 @@ def main():
             md_element_bh_banner = f"[![BisectHosting Banner]({settings.bh_banner})](https://bisecthosting.com/CRISM)"
             mdFile_CF = MdUtils(file_name='CurseForge-Release')
             mdFile_MR = MdUtils(file_name='Modrinth-Release')
-            
+
             if "beta" in pack_version or "alpha" in pack_version:
                 print("pack_version = " + pack_version)
                 mdFile_CF.new_paragraph(md_element_pre_release)
@@ -360,34 +378,28 @@ def main():
             if not os.path.isfile(changelog_path):
                 print(f"No changelog found for {pack_version}, creating a template...")
 
-                yaml2 = YAML()
-                yaml2.indent(mapping=2, sequence=4, offset=2)
-                yaml2.default_flow_style = False
-
                 data = CommentedMap()
                 data["version"] = pack_version
                 data["Fabric version"] = fabric_version
-
-                # Intentionally empty sections
                 data["Changes/Improvements"] = None
                 data["Bug Fixes"] = None
-
-                # Literal block
                 data["Config Changes"] = LiteralScalarString("- : [mod], [Client]")
 
                 with open(changelog_path, "w", encoding="utf-8") as f:
-                    yaml2.dump(data, f)
-    
-            with open(changelog_path, "r", encoding="utf8") as f:
-                changelog_yml = yaml.safe_load(f)
+                    yaml.dump(data, f)
+
+            with open(changelog_path, "r", encoding="utf-8") as f:
+                changelog_yml = yaml.load(f) or {}
+
             try:
                 update_overview = changelog_yml['Update overview']
                 mdFile_CF.new_paragraph(markdown.markdown_list_maker(update_overview))
                 mdFile_MR.new_paragraph(markdown.markdown_list_maker(update_overview))
-            except:
+            except Exception:
                 try:
-                    improvements = changelog_yml['Changes/Improvements']
-                    bug_fixes = changelog_yml['Bug Fixes']
+                    improvements = changelog_yml.get('Changes/Improvements')
+                    bug_fixes = changelog_yml.get('Bug Fixes')
+
                     if improvements:
                         mdFile_CF.new_paragraph("### Changes/Improvements ⭐")
                         mdFile_CF.new_paragraph(markdown.markdown_list_maker(improvements))
@@ -396,14 +408,16 @@ def main():
                         mdFile_CF.new_paragraph("### Bug Fixes 🪲")
                         mdFile_CF.new_paragraph(markdown.markdown_list_maker(bug_fixes))
                         mdFile_MR.new_paragraph(markdown.markdown_list_maker(bug_fixes))
-                except:
+                except Exception:
                     print(f"No 'Update overview' or 'Changes/Improvements' found for {pack_version}...")
+
             mdFile_CF.new_paragraph("#### " + md_element_full_changelog)
             mdFile_CF.new_paragraph("<br>")
             mdFile_CF.new_paragraph(md_element_bh_banner)
             mdFile_CF.create_md_file()
             mdFile_MR.new_paragraph(md_element_full_changelog)
             mdFile_MR.create_md_file()
+
 
         #----------------------------------------
         # Update BCC version number.
