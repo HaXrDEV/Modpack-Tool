@@ -91,6 +91,90 @@ def determine_server_export():
         return False
 
 
+def ensure_migration_targets(settings):
+    if not settings.migration_target_minecraft:
+        settings.migration_target_minecraft = input("Target Minecraft version for migration: ").strip()
+    if not settings.migration_target_minecraft:
+        raise ValueError("Migration selected but no target Minecraft version was provided.")
+
+    prompt = f"Target Fabric version [{settings.migration_target_fabric}]: "
+    target_fabric = input(prompt).strip()
+    if target_fabric:
+        settings.migration_target_fabric = target_fabric
+
+
+def configure_actions_via_menu(settings):
+    print(
+        """
+Choose action:
+1) Run configured workflow (settings.yml)
+2) Migration only
+3) Export client only
+4) Export server only
+5) Migration + export client
+6) Migration + export client + server
+7) Refresh only
+0) Exit
+"""
+    )
+
+    choice = input("Selection [1]: ").strip() or "1"
+
+    if choice == "0":
+        return False
+
+    # Reset runtime flow toggles before applying chosen mode.
+    settings.refresh_only = False
+    settings.migrate_minecraft_version = False
+    settings.export_client = False
+    settings.export_server = False
+
+    if choice == "1":
+        # Keep the configured export_client value while preserving existing server prompt behavior.
+        with open(settings_path, "r", encoding="utf-8") as s_file:
+            settings_yml_local = yaml.load(s_file) or {}
+        settings.export_client = bool(settings_yml_local.get("export_client", False))
+        settings.export_server = determine_server_export()
+        return True
+
+    if choice == "2":
+        settings.migrate_minecraft_version = True
+        ensure_migration_targets(settings)
+        return True
+
+    if choice == "3":
+        settings.export_client = True
+        return True
+
+    if choice == "4":
+        settings.export_server = True
+        return True
+
+    if choice == "5":
+        settings.migrate_minecraft_version = True
+        settings.export_client = True
+        ensure_migration_targets(settings)
+        return True
+
+    if choice == "6":
+        settings.migrate_minecraft_version = True
+        settings.export_client = True
+        settings.export_server = True
+        ensure_migration_targets(settings)
+        return True
+
+    if choice == "7":
+        settings.refresh_only = True
+        return True
+
+    print(f"Unknown choice '{choice}'. Falling back to configured workflow.")
+    with open(settings_path, "r", encoding="utf-8") as s_file:
+        settings_yml_local = yaml.load(s_file) or {}
+    settings.export_client = bool(settings_yml_local.get("export_client", False))
+    settings.export_server = determine_server_export()
+    return True
+
+
 def parse_active_projects(input_path, parse_object):
     """Parse pw.toml files and return names of active projects as a list."""
     active_project = []
@@ -391,7 +475,9 @@ with open(settings_path, "r", encoding="utf-8") as s_file:
 settings = Settings()
 update_settings_from_dict(settings, settings_yml)
 
-settings.export_server = determine_server_export()
+if not configure_actions_via_menu(settings):
+    print("No action selected. Exiting.")
+    sys.exit(0)
 
 ############################################################
 # Print Stuff

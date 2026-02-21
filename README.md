@@ -6,6 +6,18 @@ Requires Python 3.11
 > This tool is made for the sole purpose of automating stuff when i develop my modpacks. It is therefore not made to be user friendly or flexible in any way as it requires a very specific workflow to function.
 > Long story short, i do not recommend that anyone else uses this tool due to the reasons above.
 
+## Action menu
+
+At startup, the tool now shows an action menu so you can choose what to run for this session:
+
+- configured workflow from `settings.yml`
+- migration only
+- client export only
+- server export only
+- migration + client export
+- migration + client + server export
+- refresh only
+
 ## Breakneck specific stuff
 
 When migrating to a new Minecraft version (*For example, going from 1.21.3 to 1.21.4*), make sure to leave only the last changelog in the repository from the previous version like seen below. 
