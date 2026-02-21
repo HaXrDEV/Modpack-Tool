@@ -114,6 +114,7 @@ Choose action:
 5) Migration + export client
 6) Migration + export client + server
 7) Refresh only
+8) Update mods only
 0) Exit
 """
     )
@@ -125,6 +126,7 @@ Choose action:
 
     # Reset runtime flow toggles before applying chosen mode.
     settings.refresh_only = False
+    settings.update_mods_only = False
     settings.migrate_minecraft_version = False
     settings.export_client = False
     settings.export_server = False
@@ -165,6 +167,11 @@ Choose action:
 
     if choice == "7":
         settings.refresh_only = True
+        return True
+
+    if choice == "8":
+        settings.refresh_only = True
+        settings.update_mods_only = True
         return True
 
     print(f"Unknown choice '{choice}'. Falling back to configured workflow.")
@@ -443,6 +450,7 @@ class Settings:
     changelog_side_tag: bool = True
     changelog_updated_mods: bool = False
     changelog_updated_resoucepacks: bool = False
+    update_mods_only: bool = False
     migrate_minecraft_version: bool = False
     migration_disable_incompatible_mods: bool = True
     migration_update_all_mods: bool = True
@@ -866,7 +874,13 @@ def main():
         subprocess.call(f"{packwiz_exe_path} refresh", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     elif settings.refresh_only:
-        subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
+        if settings.update_mods_only:
+            subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
+            subprocess.call(f"{packwiz_exe_path} update --all -y", shell=True)
+            subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
+            print("[PackWiz] Mods updated.")
+        else:
+            subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
 
 
 if __name__ == "__main__":
