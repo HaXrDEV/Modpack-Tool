@@ -66,4 +66,4 @@ Run Ollama locally and pull a small model, for example:
 ollama pull qwen2.5:1.5b-instruct
 ```
 
-If the model call fails or no model is available, the tool falls back to a deterministic summary built from the same diff payload.
+If the model call fails or no model is available, the tool does not write `Update overview` and prints a notice instead.

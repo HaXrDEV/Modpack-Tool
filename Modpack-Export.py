@@ -117,6 +117,7 @@ Choose action:
 8) Update mods only
 9) Bump modpack version only
 10) Clear stored repository data
+11) Generate changelog summary only
 0) Exit
 """
     )
@@ -131,6 +132,7 @@ Choose action:
     settings.update_mods_only = False
     settings.bump_version_only = False
     settings.clear_repo_data_only = False
+    settings.generate_update_summary_only = False
     settings.migrate_minecraft_version = False
     settings.export_client = False
     settings.export_server = False
@@ -188,6 +190,11 @@ Choose action:
     if choice == "10":
         settings.refresh_only = True
         settings.clear_repo_data_only = True
+        return True
+
+    if choice == "11":
+        settings.refresh_only = True
+        settings.generate_update_summary_only = True
         return True
 
     print(f"Unknown choice '{choice}'. Falling back to configured workflow.")
@@ -543,7 +550,6 @@ def ensure_changelog_yml(target_pack_version, target_minecraft_version, target_f
                 "\n"
                 f"Fabric version: {target_fabric_version}\n"
                 "Update overview:\n"
-                "- Updated mods and resource packs.\n"
                 "Config Changes: |\n"
             )
             with open(changelog_path, "w", encoding="utf-8") as f:
@@ -582,48 +588,6 @@ def _extract_modified_names(modified_items):
     return [str(item[0]) for item in modified_items if isinstance(item, (list, tuple)) and item]
 
 
-def build_fallback_update_overview(diff_payload, max_items=8):
-    mod_diff = diff_payload.get("mod_differences") or {}
-    res_diff = diff_payload.get("resourcepack_differences") or {}
-
-    added_mods = mod_diff.get("added", [])
-    removed_mods = mod_diff.get("removed", [])
-    updated_mods = _extract_modified_names(mod_diff.get("modified", []))
-
-    added_res = res_diff.get("added", [])
-    removed_res = res_diff.get("removed", [])
-    updated_res = _extract_modified_names(res_diff.get("modified", []))
-
-    summary_lines = []
-    summary_lines.append(
-        "Compared against "
-        f"{diff_payload.get('previous_version')}: "
-        f"{len(updated_mods)} mod updates, {len(added_mods)} mod additions, {len(removed_mods)} mod removals."
-    )
-
-    if updated_res or added_res or removed_res:
-        summary_lines.append(
-            f"Resource packs: {len(updated_res)} updated, {len(added_res)} added, {len(removed_res)} removed."
-        )
-
-    if added_mods:
-        summary_lines.append("Added mods: " + ", ".join(_truncate_names(added_mods, max_items)) + ".")
-    if removed_mods:
-        summary_lines.append("Removed mods: " + ", ".join(_truncate_names(removed_mods, max_items)) + ".")
-    if updated_mods:
-        summary_lines.append("Key updated mods: " + ", ".join(_truncate_names(updated_mods, max_items)) + ".")
-
-    if added_res:
-        summary_lines.append("Added resource packs: " + ", ".join(_truncate_names(added_res, max_items)) + ".")
-    if removed_res:
-        summary_lines.append("Removed resource packs: " + ", ".join(_truncate_names(removed_res, max_items)) + ".")
-
-    if not summary_lines:
-        summary_lines.append("Maintenance update with dependency and metadata refreshes.")
-
-    return summary_lines[:5]
-
-
 def normalize_llm_summary_to_bullets(raw_summary: str):
     lines = []
     for raw_line in str(raw_summary or "").splitlines():
@@ -641,28 +605,63 @@ def build_llm_prompt_from_diff(diff_payload, max_items=8):
     mod_diff = diff_payload.get("mod_differences") or {}
     res_diff = diff_payload.get("resourcepack_differences") or {}
 
-    added_mods = _truncate_names(mod_diff.get("added", []), max_items)
-    removed_mods = _truncate_names(mod_diff.get("removed", []), max_items)
-    updated_mods = _truncate_names(_extract_modified_names(mod_diff.get("modified", [])), max_items)
+    mod_changes_total = (
+        len(mod_diff.get("added", []))
+        + len(mod_diff.get("removed", []))
+        + len(_extract_modified_names(mod_diff.get("modified", [])))
+    )
+    res_changes_total = (
+        len(res_diff.get("added", []))
+        + len(res_diff.get("removed", []))
+        + len(_extract_modified_names(res_diff.get("modified", [])))
+    )
 
-    added_res = _truncate_names(res_diff.get("added", []), max_items)
-    removed_res = _truncate_names(res_diff.get("removed", []), max_items)
-    updated_res = _truncate_names(_extract_modified_names(res_diff.get("modified", [])), max_items)
+    def _change_level(total):
+        if total <= 2:
+            return "low"
+        if total <= 12:
+            return "moderate"
+        return "high"
+
+    style_examples = (
+        "Style examples from previous logs:\n"
+        "Example A:\n"
+        "- Updated mods & resource packs.\n"
+        "- Re-added some mods that have become available.\n\n"
+        "Example B:\n"
+        "- Updated to Minecraft 1.21.11.\n"
+        "- Removed mods that are not yet compatible.\n\n"
+        "Example C:\n"
+        "- Added a crash-reporting utility mod.\n"
+        "- Updated mods & resource packs.\n"
+        "- Re-added mods that have been updated to this version.\n\n"
+        "Example D:\n"
+        "- Initial migration update for this Minecraft version.\n"
+        "- Temporarily removed incompatible mods.\n"
+    )
 
     return (
-        "You write concise Minecraft modpack changelog summaries.\n"
-        "Output exactly 3-5 bullet points and nothing else.\n"
-        "Each bullet must be plain text, max 130 chars.\n"
-        "No markdown headers, no code blocks, no intro/outro.\n\n"
+        "You write 'Update Overview' bullets for a Minecraft modpack changelog.\n"
+        "Match this style used in previous logs: short, past tense, plain wording.\n"
+        "Output exactly 2-4 bullet points and nothing else.\n"
+        "Each bullet must be one sentence, max 100 chars.\n"
+        "Do not mention specific mod/resource pack names.\n"
+        "Do not include exact counts.\n"
+        "No fluffy wording. No marketing tone. No markdown headers.\n"
+        "Prefer lines like:\n"
+        "- Updated mods & resource packs.\n"
+        "- Re-added mods that have become available for this version.\n"
+        "- Removed mods that are not yet compatible.\n"
+        "- Updated to Minecraft <version>.\n\n"
+        + style_examples +
+        "\n"
         f"Current version: {diff_payload.get('current_version')}\n"
         f"Compared from: {diff_payload.get('previous_version')}\n"
         f"Minecraft: {diff_payload.get('mc_version')}\n"
-        f"Updated mods ({len(_extract_modified_names(mod_diff.get('modified', [])))}): {', '.join(updated_mods) or 'none'}\n"
-        f"Added mods ({len(mod_diff.get('added', []))}): {', '.join(added_mods) or 'none'}\n"
-        f"Removed mods ({len(mod_diff.get('removed', []))}): {', '.join(removed_mods) or 'none'}\n"
-        f"Updated resource packs ({len(_extract_modified_names(res_diff.get('modified', [])))}): {', '.join(updated_res) or 'none'}\n"
-        f"Added resource packs ({len(res_diff.get('added', []))}): {', '.join(added_res) or 'none'}\n"
-        f"Removed resource packs ({len(res_diff.get('removed', []))}): {', '.join(removed_res) or 'none'}\n"
+        f"Mod changes level: {_change_level(mod_changes_total)}\n"
+        f"Resource pack changes level: {_change_level(res_changes_total)}\n"
+        f"Has mod additions/removals: {'yes' if (mod_diff.get('added') or mod_diff.get('removed')) else 'no'}\n"
+        f"Has resource pack additions/removals: {'yes' if (res_diff.get('added') or res_diff.get('removed')) else 'no'}\n"
     )
 
 
@@ -711,16 +710,74 @@ def maybe_generate_update_overview(changelog_path, diff_payload):
         return
 
     llm_summary = generate_update_overview_with_small_llm(diff_payload, settings)
-    if llm_summary:
-        summary_lines = llm_summary
-    else:
-        summary_lines = build_fallback_update_overview(diff_payload, max_items=settings.auto_summary_max_items)
+    if not llm_summary:
+        print(
+            "[Changelog] Skipping 'Update overview': "
+            "LLM summary was not generated (model/endpoint unavailable or returned empty output)."
+        )
+        return
 
-    changelog_yml["Update overview"] = summary_lines
+    changelog_yml["Update overview"] = llm_summary
     with open(changelog_path, "w", encoding="utf-8") as f:
         yaml.dump(changelog_yml, f)
 
     print(f"[Changelog] Auto-generated 'Update overview' in {os.path.basename(changelog_path)}.")
+
+
+def download_missing_comparison_files():
+    if not settings.download_comparison_files:
+        return
+
+    if settings.github_auth:
+        github_token = input("Your personal access token: ")
+    else:
+        github_token = None
+
+    async def download_compare_files_async(input_version, destination, tag_mc_ver):
+        print(f"Downloading {input_version} comparison files.")
+        if settings.breakneck_fixes and is_version_in_range(input_version, "4.0.0-beta.3", "4.4.0-beta.1"):
+            packwiz_mods_folder = f"Packwiz/{tag_mc_ver}/mods"
+            packwiz_resourcepacks_folder = f"Packwiz/{tag_mc_ver}/resourcepacks"
+        else:
+            packwiz_mods_folder = "Packwiz/mods"
+            packwiz_resourcepacks_folder = "Packwiz/resourcepacks"
+
+        local_downloader = AsyncGitHubDownloader(
+            settings.repo_owner,
+            settings.repo_name,
+            token=github_token,
+            branch=input_version,
+        )
+        await local_downloader.download_folder(packwiz_mods_folder, os.path.join(destination, "mods"))
+        await local_downloader.download_folder(packwiz_resourcepacks_folder, os.path.join(destination, "resourcepacks"))
+
+    for changelog in reversed(os.listdir(changelog_dir_path)):
+        if changelog.endswith((".yml", ".yaml")):
+            version = str(changelog_factory.get_changelog_value(changelog, "version"))
+            tag_mc_ver = str(changelog_factory.get_changelog_value(changelog, "mc_version"))
+            version_path = os.path.join(tempgit_path, version)
+            if version != pack_version and not os.path.exists(version_path):
+                os.makedirs(version_path)
+                try:
+                    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+                    asyncio.run(download_compare_files_async(version, version_path, tag_mc_ver))
+                except Exception as ex:
+                    print(ex)
+
+
+def run_update_overview_generation():
+    os.chdir(git_path)
+    changelog_path = os.path.join(changelog_dir_path, f"{pack_version}+{minecraft_version}.yml")
+    if not os.path.isfile(changelog_path):
+        ensure_changelog_yml(pack_version, minecraft_version, fabric_version)
+
+    diff_payload = changelog_factory.get_current_pack_diff_payload(
+        target_version=pack_version,
+        mc_version=minecraft_version,
+        tempgit_path=tempgit_path,
+        packwiz_path=packwiz_path,
+    )
+    maybe_generate_update_overview(changelog_path, diff_payload)
 
 
 def clear_stored_repository_data():
@@ -776,6 +833,7 @@ class Settings:
     update_mods_only: bool = False
     bump_version_only: bool = False
     clear_repo_data_only: bool = False
+    generate_update_summary_only: bool = False
     migrate_minecraft_version: bool = False
     migration_disable_incompatible_mods: bool = True
     migration_update_all_mods: bool = True
@@ -853,58 +911,13 @@ def main():
         #----------------------------------------
         # Download comparison files.
         #----------------------------------------
-        if settings.download_comparison_files:
-            # Handle GitHub authentication
-            if settings.github_auth:
-                github_token = input("Your personal access token: ")
-            else:
-                github_token = None
-
-            async def download_compare_files_async(input_version, destination):
-                print(f"Downloading {input_version} comparison files.")
-                if settings.breakneck_fixes and (
-                    is_version_in_range(input_version, "4.0.0-beta.3", "4.4.0-beta.1")
-                ):
-                    tag_mc_ver = changelog_factory.get_changelog_value(changelog, "mc_version")
-                    packwiz_mods_folder = f'Packwiz/{tag_mc_ver}/mods'
-                    packwiz_resourcepacks_folder = f'Packwiz/{tag_mc_ver}/resourcepacks'
-                else:
-                    packwiz_mods_folder = 'Packwiz/mods'
-                    packwiz_resourcepacks_folder = 'Packwiz/resourcepacks'
-
-                local_downloader = AsyncGitHubDownloader(settings.repo_owner, settings.repo_name, token=github_token, branch=input_version)
-                await local_downloader.download_folder(packwiz_mods_folder, os.path.join(destination, "mods"))
-                await local_downloader.download_folder(packwiz_resourcepacks_folder, os.path.join(destination, "resourcepacks"))
-                return
-
-            for changelog in reversed(os.listdir(changelog_dir_path)):
-                if changelog.endswith(('.yml', '.yaml')):
-                    version = str(changelog_factory.get_changelog_value(changelog, "version"))
-                    version_path = os.path.join(tempgit_path, version)
-                    if version != pack_version and not os.path.exists(version_path):
-                        os.makedirs(version_path)
-                        try:
-                            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-                            asyncio.run(download_compare_files_async(version, version_path))
-                        except Exception as ex:
-                            print(ex)
+        download_missing_comparison_files()
 
         #----------------------------------------
         # Auto-generate changelog update overview.
         #----------------------------------------
         if settings.auto_generate_update_overview:
-            os.chdir(git_path)
-            changelog_path = os.path.join(changelog_dir_path, f"{pack_version}+{minecraft_version}.yml")
-            if not os.path.isfile(changelog_path):
-                ensure_changelog_yml(pack_version, minecraft_version, fabric_version)
-
-            diff_payload = changelog_factory.get_current_pack_diff_payload(
-                target_version=pack_version,
-                mc_version=minecraft_version,
-                tempgit_path=tempgit_path,
-                packwiz_path=packwiz_path,
-            )
-            maybe_generate_update_overview(changelog_path, diff_payload)
+            run_update_overview_generation()
 
         #----------------------------------------
         # Generate CHANGELOG.md file.
@@ -1225,6 +1238,9 @@ def main():
         elif settings.bump_version_only:
             bump_modpack_version(settings.bump_target_version)
             subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
+        elif settings.generate_update_summary_only:
+            download_missing_comparison_files()
+            run_update_overview_generation()
         elif settings.update_mods_only:
             previous_snapshot = snapshot_mod_toml_content()
             subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
