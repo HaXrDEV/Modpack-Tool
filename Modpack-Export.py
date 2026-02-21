@@ -529,14 +529,27 @@ def ensure_changelog_yml(target_pack_version, target_minecraft_version, target_f
     changelog_path = os.path.join(changelog_dir_path, f"{target_pack_version}+{target_minecraft_version}.yml")
 
     if not os.path.isfile(changelog_path):
-        data = CommentedMap()
-        data["version"] = target_pack_version
-        data["Fabric version"] = target_fabric_version
-        data["Changes/Improvements"] = None
-        data["Bug Fixes"] = None
-        data["Config Changes"] = LiteralScalarString("- : [mod], [Client]")
-        with open(changelog_path, "w", encoding="utf-8") as f:
-            yaml.dump(data, f)
+        if settings.breakneck_fixes:
+            breakneck_template = (
+                f"version: {target_pack_version}\n"
+                f"mc_version: {target_minecraft_version}\n"
+                "\n"
+                f"Fabric version: {target_fabric_version}\n"
+                "Update overview:\n"
+                "- Updated mods and resource packs.\n"
+                "Config Changes: |\n"
+            )
+            with open(changelog_path, "w", encoding="utf-8") as f:
+                f.write(breakneck_template)
+        else:
+            data = CommentedMap()
+            data["version"] = target_pack_version
+            data["Fabric version"] = target_fabric_version
+            data["Changes/Improvements"] = None
+            data["Bug Fixes"] = None
+            data["Config Changes"] = LiteralScalarString("- : [mod], [Client]")
+            with open(changelog_path, "w", encoding="utf-8") as f:
+                yaml.dump(data, f)
         print(f"[Version] Created changelog template: {changelog_path}")
         return changelog_path
 
