@@ -104,6 +104,17 @@ def ensure_migration_targets(settings):
 
 
 def configure_actions_via_menu(settings):
+    def prompt_update_overview_overwrite(force_prompt=False):
+        should_prompt = force_prompt or settings.auto_generate_update_overview or settings.generate_update_summary_only
+        if not should_prompt:
+            return
+
+        default_label = "Y" if settings.auto_summary_overwrite_existing else "N"
+        answer = input(f"Override existing 'Update overview' for this run? [{default_label}]: ").strip()
+        if not answer:
+            return
+        settings.auto_summary_overwrite_existing = answer.lower() in ("y", "yes")
+
     print(
         """
 Choose action:
@@ -143,25 +154,30 @@ Choose action:
             settings_yml_local = yaml.load(s_file) or {}
         settings.export_client = bool(settings_yml_local.get("export_client", False))
         settings.export_server = determine_server_export()
+        prompt_update_overview_overwrite()
         return True
 
     if choice == "2":
         settings.migrate_minecraft_version = True
         ensure_migration_targets(settings)
+        prompt_update_overview_overwrite()
         return True
 
     if choice == "3":
         settings.export_client = True
+        prompt_update_overview_overwrite()
         return True
 
     if choice == "4":
         settings.export_server = True
+        prompt_update_overview_overwrite()
         return True
 
     if choice == "5":
         settings.migrate_minecraft_version = True
         settings.export_client = True
         ensure_migration_targets(settings)
+        prompt_update_overview_overwrite()
         return True
 
     if choice == "6":
@@ -169,6 +185,7 @@ Choose action:
         settings.export_client = True
         settings.export_server = True
         ensure_migration_targets(settings)
+        prompt_update_overview_overwrite()
         return True
 
     if choice == "7":
@@ -195,6 +212,7 @@ Choose action:
     if choice == "11":
         settings.refresh_only = True
         settings.generate_update_summary_only = True
+        prompt_update_overview_overwrite(force_prompt=True)
         return True
 
     print(f"Unknown choice '{choice}'. Falling back to configured workflow.")
@@ -202,6 +220,7 @@ Choose action:
         settings_yml_local = yaml.load(s_file) or {}
     settings.export_client = bool(settings_yml_local.get("export_client", False))
     settings.export_server = determine_server_export()
+    prompt_update_overview_overwrite()
     return True
 
 
@@ -601,7 +620,16 @@ def normalize_llm_summary_to_bullets(raw_summary: str):
     return lines
 
 
-def filter_summary_lines_for_context(lines, migration_mode=False, has_true_additions=True, has_reenabled=False):
+def filter_summary_lines_for_context(
+    lines,
+    migration_mode=False,
+    has_true_additions=True,
+    has_reenabled=False,
+    true_addition_names=None,
+):
+    true_addition_names = [str(name).lower() for name in (true_addition_names or [])]
+    has_crash_assistant_addition = any("crash assistant" in name for name in true_addition_names)
+
     filtered = []
     for line in lines:
         normalized = line.strip()
@@ -610,6 +638,8 @@ def filter_summary_lines_for_context(lines, migration_mode=False, has_true_addit
         if not has_true_additions and re.search(r"^added\b", normalized, flags=re.IGNORECASE):
             continue
         if not has_reenabled and re.search(r"^re-?added\b", normalized, flags=re.IGNORECASE):
+            continue
+        if not has_crash_assistant_addition and re.search(r"\bcrash[- ]report", normalized, flags=re.IGNORECASE):
             continue
         filtered.append(line)
     return filtered
@@ -650,7 +680,7 @@ def build_llm_prompt_from_diff(diff_payload, max_items=8, migration_mode=False):
         "- Updated to Minecraft 1.21.11.\n"
         "- Removed mods that are not yet compatible.\n\n"
         "Example C:\n"
-        "- Added a crash-reporting utility mod.\n"
+        "- Added new mods where needed.\n"
         "- Updated mods & resource packs.\n"
         "- Re-added mods that have been updated to this version.\n\n"
         "Example D:\n"
@@ -678,6 +708,7 @@ def build_llm_prompt_from_diff(diff_payload, max_items=8, migration_mode=False):
         "Output exactly 2-4 bullet points and nothing else.\n"
         "Each bullet must be one sentence, max 100 chars.\n"
         "Do not include exact counts.\n"
+        "Do not copy example lines verbatim.\n"
         "No fluffy wording. No marketing tone. No markdown headers.\n"
         "Prefer lines like:\n"
         "- Updated mods & resource packs.\n"
@@ -735,6 +766,7 @@ def generate_update_overview_with_small_llm(diff_payload, settings) -> Optional[
             migration_mode=migration_mode,
             has_true_additions=bool(mod_addition_breakdown.get("newly_added")),
             has_reenabled=bool(mod_addition_breakdown.get("reenabled_from_disabled")),
+            true_addition_names=mod_addition_breakdown.get("newly_added", []),
         )
         if parsed:
             return parsed[:5]
