@@ -13,3 +13,19 @@ This is due to the program reading the files and thereby being able to recognize
 This feature is only active when enabling the `breakneck-fixes` option.
 
 ![1736264492349](image/README/1736264492349.png)
+
+## Automated Minecraft migration
+
+You can enable automated migration in `settings.yml`:
+
+- `migrate_minecraft_version`: Enables the migration flow.
+- `migration_target_minecraft`: Target Minecraft version.
+- `migration_target_fabric`: Optional target Fabric loader version.
+- `migration_mod_loader`: Loader used for compatibility checks (default: `fabric`).
+- `migration_update_all_mods`: Runs `packwiz update --all -y` after changing MC version.
+- `migration_disable_incompatible_mods`: Disables mods that do not have a target-compatible update.
+
+When enabled, the tool will:
+1. Update `Packwiz/pack.toml` to the target Minecraft/Fabric versions.
+2. Refresh and update mods with Packwiz.
+3. Disable incompatible mods by setting `side = "...(disabled)"` in their `.toml` entries.

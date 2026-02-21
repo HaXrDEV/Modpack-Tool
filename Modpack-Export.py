@@ -8,6 +8,7 @@ launch_message = """
 import os, sys
 import os.path
 import json
+import re
 import subprocess
 from shutil import rmtree, make_archive, move, copytree
 from pathlib import Path
@@ -74,6 +75,7 @@ changelog_dir_path = os.path.join(git_path, "Changelogs")
 tempgit_path = os.path.join(git_path, "Modpack-CLI-Tool", "tempgit")
 mods_path = os.path.join(packwiz_path, "mods")
 crash_assistant_config_path = os.path.join(packwiz_path, "config", "crash_assistant", "modlist.json")
+modrinth_api_base = "https://api.modrinth.com/v2"
 
 ############################################################
 # Functions
@@ -188,6 +190,133 @@ def clear_mmc_cache(path):
             except:
                 pass
 
+
+def normalize_disabled_side(side_value):
+    side_text = str(side_value).strip()
+    if "disabled" in side_text:
+        return side_text
+    side_base = side_text.split("(", 1)[0].strip() or "both"
+    return f"{side_base}(disabled)"
+
+
+def infer_compatibility_from_metadata(mod_toml, target_minecraft_version):
+    target_minor = ".".join(target_minecraft_version.split(".", 2)[:2])
+    metadata = " ".join([
+        str(mod_toml.get("filename", "")),
+        str(mod_toml.get("download", {}).get("url", "")),
+    ]).lower()
+    if target_minecraft_version.lower() in metadata:
+        return True
+    explicit_mc_versions = re.findall(r"(?:mc|minecraft)[-_ +]?(\d+\.\d+(?:\.\d+)?)", metadata)
+    if explicit_mc_versions:
+        if target_minecraft_version in explicit_mc_versions:
+            return True
+        if target_minor in explicit_mc_versions:
+            return True
+        return False
+    return True
+
+
+def has_modrinth_version_for_target(mod_toml, target_minecraft_version, mod_loader):
+    try:
+        project_id = mod_toml.get("update", {}).get("modrinth", {}).get("mod-id")
+        if not project_id:
+            return None
+        response = requests.get(
+            f"{modrinth_api_base}/project/{project_id}/version",
+            params={
+                "loaders": json.dumps([mod_loader]),
+                "game_versions": json.dumps([target_minecraft_version]),
+            },
+            timeout=20,
+        )
+        response.raise_for_status()
+        return len(response.json()) > 0
+    except Exception as ex:
+        mod_name = mod_toml.get("name", "unknown mod")
+        print(f"[Migration] Modrinth compatibility check failed for '{mod_name}': {ex}")
+        return None
+
+
+def disable_incompatible_mods(target_minecraft_version, mod_loader):
+    disabled_mods = []
+    os.chdir(mods_path)
+    for item in sorted(os.listdir()):
+        item_path = os.path.join(mods_path, item)
+        if not os.path.isfile(item_path) or not item.endswith(".toml"):
+            continue
+        try:
+            with open(item_path, "r", encoding="utf8") as f:
+                mod_toml = toml.load(f)
+            side_value = str(mod_toml.get("side", "both"))
+            if "disabled" in side_value:
+                continue
+
+            compatible = has_modrinth_version_for_target(mod_toml, target_minecraft_version, mod_loader)
+            if compatible is None:
+                compatible = infer_compatibility_from_metadata(mod_toml, target_minecraft_version)
+
+            if compatible:
+                continue
+
+            mod_toml["side"] = normalize_disabled_side(side_value)
+            with open(item_path, "w", encoding="utf8") as f:
+                toml.dump(mod_toml, f)
+            disabled_mods.append(mod_toml.get("name", item))
+        except Exception as ex:
+            print(f"[Migration] Failed to process '{item}': {ex}")
+
+    return disabled_mods
+
+
+def migrate_minecraft_version(
+    target_minecraft_version,
+    target_fabric_version=None,
+    update_all_mods=True,
+    disable_outdated_mods=True,
+    mod_loader="fabric",
+):
+    os.chdir(packwiz_path)
+    with open(packwiz_manifest, "r", encoding="utf8") as f:
+        local_pack_toml = toml.load(f)
+
+    current_minecraft = str(local_pack_toml["versions"]["minecraft"])
+    current_fabric = str(local_pack_toml["versions"].get("fabric", ""))
+
+    if not target_minecraft_version:
+        print("[Migration] migration_target_minecraft is empty. Skipping migration.")
+        return current_minecraft, current_fabric
+
+    local_pack_toml["versions"]["minecraft"] = target_minecraft_version
+    if target_fabric_version:
+        local_pack_toml["versions"]["fabric"] = target_fabric_version
+
+    with open(packwiz_manifest, "w", encoding="utf8") as f:
+        toml.dump(local_pack_toml, f)
+
+    subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
+    if update_all_mods:
+        subprocess.call(f"{packwiz_exe_path} update --all -y", shell=True)
+        subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
+
+    disabled_mods = []
+    if disable_outdated_mods:
+        disabled_mods = disable_incompatible_mods(target_minecraft_version, mod_loader)
+        subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
+
+    print(
+        f"[Migration] Minecraft {current_minecraft} -> {target_minecraft_version}"
+        + (f", Fabric -> {target_fabric_version}" if target_fabric_version else "")
+    )
+    print(f"[Migration] Disabled {len(disabled_mods)} incompatible mods.")
+    if disabled_mods:
+        print("[Migration] Disabled mods: " + ", ".join(disabled_mods))
+
+    return (
+        target_minecraft_version,
+        target_fabric_version if target_fabric_version else current_fabric,
+    )
+
 ############################################################
 # Start Message
 
@@ -230,12 +359,18 @@ class Settings:
     changelog_side_tag: bool = True
     changelog_updated_mods: bool = False
     changelog_updated_resoucepacks: bool = False
+    migrate_minecraft_version: bool = False
+    migration_disable_incompatible_mods: bool = True
+    migration_update_all_mods: bool = True
 
     # String settings
     bh_banner: str = ""
     repo_owner: str = ""
     repo_name: str = ""
     repo_main_branch: str = ""
+    migration_target_minecraft: str = ""
+    migration_target_fabric: str = ""
+    migration_mod_loader: str = "fabric"
 
     # List settings
     server_mods_remove_list: List[str] = None
@@ -280,8 +415,17 @@ changelog_factory = ChangelogFactory(changelog_dir_path, modpack_name, pack_vers
 # Main Program
 
 def main():
+    global minecraft_version, fabric_version
 
     if not settings.refresh_only:
+        if settings.migrate_minecraft_version:
+            minecraft_version, fabric_version = migrate_minecraft_version(
+                target_minecraft_version=settings.migration_target_minecraft,
+                target_fabric_version=settings.migration_target_fabric,
+                update_all_mods=settings.migration_update_all_mods,
+                disable_outdated_mods=settings.migration_disable_incompatible_mods,
+                mod_loader=settings.migration_mod_loader,
+            )
 
         #----------------------------------------
         # Download comparison files.
