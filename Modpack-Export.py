@@ -290,6 +290,79 @@ def normalize_disabled_side(side_value):
     return f"{side_base}(disabled)"
 
 
+def normalize_enabled_side(side_value):
+    side_text = str(side_value).strip()
+    if "disabled" not in side_text:
+        return side_text or "both"
+    side_base = side_text.split("(", 1)[0].strip() or "both"
+    return side_base
+
+
+def snapshot_mod_toml_content():
+    snapshot = {}
+    os.chdir(mods_path)
+    for item in sorted(os.listdir()):
+        item_path = os.path.join(mods_path, item)
+        if not os.path.isfile(item_path) or not item.endswith(".toml"):
+            continue
+        try:
+            with open(item_path, "r", encoding="utf8") as f:
+                snapshot[item] = f.read()
+        except Exception as ex:
+            print(f"[Update] Failed to snapshot '{item}': {ex}")
+    os.chdir(packwiz_path)
+    return snapshot
+
+
+def find_updated_disabled_mods(previous_snapshot):
+    updated_disabled_mods = []
+    os.chdir(mods_path)
+    for item in sorted(os.listdir()):
+        item_path = os.path.join(mods_path, item)
+        if not os.path.isfile(item_path) or not item.endswith(".toml"):
+            continue
+        try:
+            with open(item_path, "r", encoding="utf8") as f:
+                current_content = f.read()
+            if previous_snapshot.get(item) == current_content:
+                continue
+
+            mod_toml = toml.loads(current_content)
+            side_value = str(mod_toml.get("side", "both"))
+            if "disabled" in side_value:
+                updated_disabled_mods.append((item, mod_toml.get("name", item)))
+        except Exception as ex:
+            print(f"[Update] Failed to inspect '{item}' after update: {ex}")
+    os.chdir(packwiz_path)
+    return updated_disabled_mods
+
+
+def enable_mods_by_files(mod_files):
+    enabled_mods = []
+    os.chdir(mods_path)
+    for item in mod_files:
+        item_path = os.path.join(mods_path, item)
+        if not os.path.isfile(item_path) or not item.endswith(".toml"):
+            continue
+        try:
+            with open(item_path, "r", encoding="utf8") as f:
+                mod_toml = toml.load(f)
+
+            side_value = str(mod_toml.get("side", "both"))
+            if "disabled" not in side_value:
+                continue
+
+            mod_toml["side"] = normalize_enabled_side(side_value)
+            with open(item_path, "w", encoding="utf8") as f:
+                toml.dump(mod_toml, f)
+            enabled_mods.append(mod_toml.get("name", item))
+        except Exception as ex:
+            print(f"[Update] Failed to re-enable '{item}': {ex}")
+
+    os.chdir(packwiz_path)
+    return enabled_mods
+
+
 def infer_compatibility_from_metadata(mod_toml, target_minecraft_version):
     target_minor = ".".join(target_minecraft_version.split(".", 2)[:2])
     metadata = " ".join([
@@ -875,10 +948,20 @@ def main():
 
     elif settings.refresh_only:
         if settings.update_mods_only:
+            previous_snapshot = snapshot_mod_toml_content()
             subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
             subprocess.call(f"{packwiz_exe_path} update --all -y", shell=True)
             subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
             print("[PackWiz] Mods updated.")
+
+            updated_disabled_mods = find_updated_disabled_mods(previous_snapshot)
+            if updated_disabled_mods:
+                updated_disabled_names = [mod_name for _, mod_name in updated_disabled_mods]
+                print("[PackWiz] Updated mods that are still disabled: " + ", ".join(updated_disabled_names))
+                if input("Enable these updated disabled mods? [N]: ") in ("y", "Y", "yes", "Yes"):
+                    enabled_mods = enable_mods_by_files([mod_file for mod_file, _ in updated_disabled_mods])
+                    subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
+                    print(f"[PackWiz] Re-enabled {len(enabled_mods)} updated disabled mods.")
         else:
             subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
 
