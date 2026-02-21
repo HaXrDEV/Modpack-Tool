@@ -116,6 +116,7 @@ Choose action:
 7) Refresh only
 8) Update mods only
 9) Bump modpack version only
+10) Clear stored repository data
 0) Exit
 """
     )
@@ -129,6 +130,7 @@ Choose action:
     settings.refresh_only = False
     settings.update_mods_only = False
     settings.bump_version_only = False
+    settings.clear_repo_data_only = False
     settings.migrate_minecraft_version = False
     settings.export_client = False
     settings.export_server = False
@@ -181,6 +183,11 @@ Choose action:
         settings.bump_version_only = True
         target_version = input(f"New modpack version [{pack_version}]: ").strip()
         settings.bump_target_version = target_version if target_version else pack_version
+        return True
+
+    if choice == "10":
+        settings.refresh_only = True
+        settings.clear_repo_data_only = True
         return True
 
     print(f"Unknown choice '{choice}'. Falling back to configured workflow.")
@@ -562,6 +569,15 @@ def ensure_changelog_yml(target_pack_version, target_minecraft_version, target_f
         print(f"[Version] Updated Fabric version in changelog: {changelog_path}")
     return changelog_path
 
+
+def clear_stored_repository_data():
+    repo_data_paths = [tempgit_path, prev_release]
+    for path in repo_data_paths:
+        if os.path.isdir(path):
+            rmtree(path)
+        os.makedirs(path, exist_ok=True)
+        print(f"[RepoData] Cleared: {path}")
+
 ############################################################
 # Start Message
 
@@ -606,6 +622,7 @@ class Settings:
     changelog_updated_resoucepacks: bool = False
     update_mods_only: bool = False
     bump_version_only: bool = False
+    clear_repo_data_only: bool = False
     migrate_minecraft_version: bool = False
     migration_disable_incompatible_mods: bool = True
     migration_update_all_mods: bool = True
@@ -1026,7 +1043,9 @@ def main():
         subprocess.call(f"{packwiz_exe_path} refresh", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     elif settings.refresh_only:
-        if settings.bump_version_only:
+        if settings.clear_repo_data_only:
+            clear_stored_repository_data()
+        elif settings.bump_version_only:
             bump_modpack_version(settings.bump_target_version)
             subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
         elif settings.update_mods_only:

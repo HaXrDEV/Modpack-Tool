@@ -18,6 +18,7 @@ At startup, the tool now shows an action menu so you can choose what to run for 
 - migration + client + server export
 - refresh only
 - bump modpack version only
+- clear stored repository data
 
 ## Breakneck specific stuff
 
