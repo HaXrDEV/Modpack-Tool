@@ -115,6 +115,7 @@ Choose action:
 6) Migration + export client + server
 7) Refresh only
 8) Update mods only
+9) Bump modpack version only
 0) Exit
 """
     )
@@ -127,6 +128,7 @@ Choose action:
     # Reset runtime flow toggles before applying chosen mode.
     settings.refresh_only = False
     settings.update_mods_only = False
+    settings.bump_version_only = False
     settings.migrate_minecraft_version = False
     settings.export_client = False
     settings.export_server = False
@@ -172,6 +174,13 @@ Choose action:
     if choice == "8":
         settings.refresh_only = True
         settings.update_mods_only = True
+        return True
+
+    if choice == "9":
+        settings.refresh_only = True
+        settings.bump_version_only = True
+        target_version = input(f"New modpack version [{pack_version}]: ").strip()
+        settings.bump_target_version = target_version if target_version else pack_version
         return True
 
     print(f"Unknown choice '{choice}'. Falling back to configured workflow.")
@@ -481,6 +490,38 @@ def migrate_minecraft_version(
         target_fabric_version if target_fabric_version else current_fabric,
     )
 
+
+def bump_modpack_version(new_pack_version):
+    global pack_version, changelog_factory
+    if not new_pack_version:
+        print("[Version] No target version provided. Skipping.")
+        return
+
+    os.chdir(packwiz_path)
+    with open(packwiz_manifest, "r", encoding="utf8") as f:
+        local_pack_toml = toml.load(f)
+
+    old_pack_version = str(local_pack_toml.get("version", ""))
+    local_pack_toml["version"] = new_pack_version
+    with open(packwiz_manifest, "w", encoding="utf8") as f:
+        toml.dump(local_pack_toml, f)
+
+    for bcc_path in (bcc_client_config_path, bcc_server_config_path):
+        if not os.path.isfile(bcc_path):
+            continue
+        try:
+            with open(bcc_path, "r", encoding="utf8") as f:
+                bcc_json = json.load(f)
+            bcc_json["modpackVersion"] = new_pack_version
+            with open(bcc_path, "w", encoding="utf8") as f:
+                json.dump(bcc_json, f)
+        except Exception as ex:
+            print(f"[Version] Failed updating {bcc_path}: {ex}")
+
+    pack_version = new_pack_version
+    changelog_factory = ChangelogFactory(changelog_dir_path, modpack_name, pack_version, settings, yaml)
+    print(f"[Version] Modpack version bumped: {old_pack_version} -> {new_pack_version}")
+
 ############################################################
 # Start Message
 
@@ -524,6 +565,7 @@ class Settings:
     changelog_updated_mods: bool = False
     changelog_updated_resoucepacks: bool = False
     update_mods_only: bool = False
+    bump_version_only: bool = False
     migrate_minecraft_version: bool = False
     migration_disable_incompatible_mods: bool = True
     migration_update_all_mods: bool = True
@@ -536,6 +578,7 @@ class Settings:
     migration_target_minecraft: str = ""
     migration_target_fabric: str = ""
     migration_mod_loader: str = "fabric"
+    bump_target_version: str = ""
 
     # List settings
     server_mods_remove_list: List[str] = None
@@ -943,7 +986,10 @@ def main():
         subprocess.call(f"{packwiz_exe_path} refresh", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     elif settings.refresh_only:
-        if settings.update_mods_only:
+        if settings.bump_version_only:
+            bump_modpack_version(settings.bump_target_version)
+            subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
+        elif settings.update_mods_only:
             previous_snapshot = snapshot_mod_toml_content()
             subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
             subprocess.call(f"{packwiz_exe_path} update --all -y", shell=True)
