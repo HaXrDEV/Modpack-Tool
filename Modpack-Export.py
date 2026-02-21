@@ -25,7 +25,7 @@ import requests
 
 # Settings
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
 # GitHub Download
 from GitHubDownloader import AsyncGitHubDownloader
@@ -570,6 +570,159 @@ def ensure_changelog_yml(target_pack_version, target_minecraft_version, target_f
     return changelog_path
 
 
+def _truncate_names(items, max_items):
+    names = [str(item) for item in items if item]
+    if len(names) <= max_items:
+        return names
+    remainder = len(names) - max_items
+    return names[:max_items] + [f"...and {remainder} more"]
+
+
+def _extract_modified_names(modified_items):
+    return [str(item[0]) for item in modified_items if isinstance(item, (list, tuple)) and item]
+
+
+def build_fallback_update_overview(diff_payload, max_items=8):
+    mod_diff = diff_payload.get("mod_differences") or {}
+    res_diff = diff_payload.get("resourcepack_differences") or {}
+
+    added_mods = mod_diff.get("added", [])
+    removed_mods = mod_diff.get("removed", [])
+    updated_mods = _extract_modified_names(mod_diff.get("modified", []))
+
+    added_res = res_diff.get("added", [])
+    removed_res = res_diff.get("removed", [])
+    updated_res = _extract_modified_names(res_diff.get("modified", []))
+
+    summary_lines = []
+    summary_lines.append(
+        "Compared against "
+        f"{diff_payload.get('previous_version')}: "
+        f"{len(updated_mods)} mod updates, {len(added_mods)} mod additions, {len(removed_mods)} mod removals."
+    )
+
+    if updated_res or added_res or removed_res:
+        summary_lines.append(
+            f"Resource packs: {len(updated_res)} updated, {len(added_res)} added, {len(removed_res)} removed."
+        )
+
+    if added_mods:
+        summary_lines.append("Added mods: " + ", ".join(_truncate_names(added_mods, max_items)) + ".")
+    if removed_mods:
+        summary_lines.append("Removed mods: " + ", ".join(_truncate_names(removed_mods, max_items)) + ".")
+    if updated_mods:
+        summary_lines.append("Key updated mods: " + ", ".join(_truncate_names(updated_mods, max_items)) + ".")
+
+    if added_res:
+        summary_lines.append("Added resource packs: " + ", ".join(_truncate_names(added_res, max_items)) + ".")
+    if removed_res:
+        summary_lines.append("Removed resource packs: " + ", ".join(_truncate_names(removed_res, max_items)) + ".")
+
+    if not summary_lines:
+        summary_lines.append("Maintenance update with dependency and metadata refreshes.")
+
+    return summary_lines[:5]
+
+
+def normalize_llm_summary_to_bullets(raw_summary: str):
+    lines = []
+    for raw_line in str(raw_summary or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        line = re.sub(r"^[\-\*\u2022]\s*", "", line)
+        line = re.sub(r"^\d+[.)]\s*", "", line)
+        if line:
+            lines.append(line.rstrip(".") + ".")
+    return lines
+
+
+def build_llm_prompt_from_diff(diff_payload, max_items=8):
+    mod_diff = diff_payload.get("mod_differences") or {}
+    res_diff = diff_payload.get("resourcepack_differences") or {}
+
+    added_mods = _truncate_names(mod_diff.get("added", []), max_items)
+    removed_mods = _truncate_names(mod_diff.get("removed", []), max_items)
+    updated_mods = _truncate_names(_extract_modified_names(mod_diff.get("modified", [])), max_items)
+
+    added_res = _truncate_names(res_diff.get("added", []), max_items)
+    removed_res = _truncate_names(res_diff.get("removed", []), max_items)
+    updated_res = _truncate_names(_extract_modified_names(res_diff.get("modified", [])), max_items)
+
+    return (
+        "You write concise Minecraft modpack changelog summaries.\n"
+        "Output exactly 3-5 bullet points and nothing else.\n"
+        "Each bullet must be plain text, max 130 chars.\n"
+        "No markdown headers, no code blocks, no intro/outro.\n\n"
+        f"Current version: {diff_payload.get('current_version')}\n"
+        f"Compared from: {diff_payload.get('previous_version')}\n"
+        f"Minecraft: {diff_payload.get('mc_version')}\n"
+        f"Updated mods ({len(_extract_modified_names(mod_diff.get('modified', [])))}): {', '.join(updated_mods) or 'none'}\n"
+        f"Added mods ({len(mod_diff.get('added', []))}): {', '.join(added_mods) or 'none'}\n"
+        f"Removed mods ({len(mod_diff.get('removed', []))}): {', '.join(removed_mods) or 'none'}\n"
+        f"Updated resource packs ({len(_extract_modified_names(res_diff.get('modified', [])))}): {', '.join(updated_res) or 'none'}\n"
+        f"Added resource packs ({len(res_diff.get('added', []))}): {', '.join(added_res) or 'none'}\n"
+        f"Removed resource packs ({len(res_diff.get('removed', []))}): {', '.join(removed_res) or 'none'}\n"
+    )
+
+
+def generate_update_overview_with_small_llm(diff_payload, settings) -> Optional[List[str]]:
+    if str(settings.auto_summary_provider).lower() != "ollama":
+        print(f"[Changelog] Unsupported auto_summary_provider '{settings.auto_summary_provider}'.")
+        return None
+
+    prompt = build_llm_prompt_from_diff(diff_payload, max_items=settings.auto_summary_max_items)
+    try:
+        response = requests.post(
+            settings.auto_summary_endpoint,
+            json={
+                "model": settings.auto_summary_model,
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "temperature": 0.2,
+                    "num_predict": 220,
+                },
+            },
+            timeout=int(settings.auto_summary_timeout_seconds),
+        )
+        response.raise_for_status()
+        response_json = response.json()
+        parsed = normalize_llm_summary_to_bullets(response_json.get("response", ""))
+        if parsed:
+            return parsed[:5]
+    except Exception as ex:
+        print(f"[Changelog] LLM summary generation failed: {ex}")
+
+    return None
+
+
+def maybe_generate_update_overview(changelog_path, diff_payload):
+    if not diff_payload:
+        print("[Changelog] No diff payload available. Skipping auto summary.")
+        return
+
+    with open(changelog_path, "r", encoding="utf-8") as f:
+        changelog_yml = yaml.load(f) or {}
+
+    existing_overview = changelog_yml.get("Update overview")
+    if existing_overview and not settings.auto_summary_overwrite_existing:
+        print("[Changelog] 'Update overview' already exists. Skipping auto summary.")
+        return
+
+    llm_summary = generate_update_overview_with_small_llm(diff_payload, settings)
+    if llm_summary:
+        summary_lines = llm_summary
+    else:
+        summary_lines = build_fallback_update_overview(diff_payload, max_items=settings.auto_summary_max_items)
+
+    changelog_yml["Update overview"] = summary_lines
+    with open(changelog_path, "w", encoding="utf-8") as f:
+        yaml.dump(changelog_yml, f)
+
+    print(f"[Changelog] Auto-generated 'Update overview' in {os.path.basename(changelog_path)}.")
+
+
 def clear_stored_repository_data():
     repo_data_paths = [tempgit_path, prev_release]
     for path in repo_data_paths:
@@ -626,6 +779,8 @@ class Settings:
     migrate_minecraft_version: bool = False
     migration_disable_incompatible_mods: bool = True
     migration_update_all_mods: bool = True
+    auto_generate_update_overview: bool = False
+    auto_summary_overwrite_existing: bool = False
 
     # String settings
     bh_banner: str = ""
@@ -636,9 +791,14 @@ class Settings:
     migration_target_fabric: str = ""
     migration_mod_loader: str = "fabric"
     bump_target_version: str = ""
+    auto_summary_provider: str = "ollama"
+    auto_summary_model: str = "qwen2.5:1.5b-instruct"
+    auto_summary_endpoint: str = "http://127.0.0.1:11434/api/generate"
 
     # List settings
     server_mods_remove_list: List[str] = None
+    auto_summary_timeout_seconds: int = 45
+    auto_summary_max_items: int = 8
 
 
 def update_settings_from_dict(settings: Settings, settings_dict: dict):
@@ -728,6 +888,23 @@ def main():
                             asyncio.run(download_compare_files_async(version, version_path))
                         except Exception as ex:
                             print(ex)
+
+        #----------------------------------------
+        # Auto-generate changelog update overview.
+        #----------------------------------------
+        if settings.auto_generate_update_overview:
+            os.chdir(git_path)
+            changelog_path = os.path.join(changelog_dir_path, f"{pack_version}+{minecraft_version}.yml")
+            if not os.path.isfile(changelog_path):
+                ensure_changelog_yml(pack_version, minecraft_version, fabric_version)
+
+            diff_payload = changelog_factory.get_current_pack_diff_payload(
+                target_version=pack_version,
+                mc_version=minecraft_version,
+                tempgit_path=tempgit_path,
+                packwiz_path=packwiz_path,
+            )
+            maybe_generate_update_overview(changelog_path, diff_payload)
 
         #----------------------------------------
         # Generate CHANGELOG.md file.

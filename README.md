@@ -43,3 +43,27 @@ When enabled, the tool will:
 1. Update `Packwiz/pack.toml` to the target Minecraft/Fabric versions.
 2. Refresh and update mods with Packwiz.
 3. Disable incompatible mods by setting `side = "...(disabled)"` in their `.toml` entries.
+
+## Auto-generated changelog summary (small LLM)
+
+The export flow can now auto-generate `Update overview` in `Changelogs/<version>+<mc_version>.yml` using existing diff data (added/removed/updated mods and resource packs).
+
+### Settings
+
+- `auto_generate_update_overview`: Enables automatic summary generation during export.
+- `auto_summary_overwrite_existing`: Overwrites existing `Update overview` when `true`.
+- `auto_summary_provider`: Provider name (`ollama` currently supported).
+- `auto_summary_model`: Model used by Ollama (default: `qwen2.5:1.5b-instruct`).
+- `auto_summary_endpoint`: Ollama generate endpoint (default: `http://127.0.0.1:11434/api/generate`).
+- `auto_summary_timeout_seconds`: HTTP timeout for the model call.
+- `auto_summary_max_items`: Max diff items per category included in the prompt/fallback summary.
+
+### Requirements
+
+Run Ollama locally and pull a small model, for example:
+
+```powershell
+ollama pull qwen2.5:1.5b-instruct
+```
+
+If the model call fails or no model is available, the tool falls back to a deterministic summary built from the same diff payload.

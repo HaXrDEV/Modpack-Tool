@@ -110,6 +110,60 @@ class ChangelogFactory:
 
         return results
 
+    def get_previous_version_for_mc(self, target_version, mc_version):
+        version_candidates = []
+        for changelog in os.listdir(self.changelog_dir):
+            if not changelog.endswith((".yml", ".yaml")):
+                continue
+            try:
+                if str(self.get_changelog_value(changelog, "mc_version")) != str(mc_version):
+                    continue
+                current_version = str(self.get_changelog_value(changelog, "version"))
+                version_candidates.append(current_version)
+            except Exception:
+                continue
+
+        if not version_candidates:
+            return None
+
+        sorted_versions = sorted(
+            version_candidates,
+            key=lambda x: version_helper.parse(self.normalize_version(str(x))),
+            reverse=True,
+        )
+        target_parsed = version_helper.parse(self.normalize_version(str(target_version)))
+        for candidate in sorted_versions:
+            candidate_parsed = version_helper.parse(self.normalize_version(candidate))
+            if candidate_parsed < target_parsed:
+                return candidate
+        return None
+
+    def get_current_pack_diff_payload(self, target_version, mc_version, tempgit_path, packwiz_path):
+        previous_version = self.get_previous_version_for_mc(target_version, mc_version)
+        if not previous_version:
+            return None
+
+        previous_version_path = os.path.join(tempgit_path, str(previous_version))
+        previous_mods_path = os.path.join(previous_version_path, "mods")
+        previous_resourcepacks_path = os.path.join(previous_version_path, "resourcepacks")
+
+        current_mods_path = os.path.join(packwiz_path, "mods")
+        current_resourcepacks_path = os.path.join(packwiz_path, "resourcepacks")
+
+        if not os.path.isdir(previous_mods_path) or not os.path.isdir(previous_resourcepacks_path):
+            return None
+
+        mod_differences = self.compare_toml_files(previous_mods_path, current_mods_path)
+        resourcepack_differences = self.compare_toml_files(previous_resourcepacks_path, current_resourcepacks_path)
+
+        return {
+            "previous_version": previous_version,
+            "current_version": str(target_version),
+            "mc_version": str(mc_version),
+            "mod_differences": mod_differences,
+            "resourcepack_differences": resourcepack_differences,
+        }
+
     def sort_versions(self, version_list):
         """
         Sort versions according to semantic versioning rules, handling post-releases correctly.
