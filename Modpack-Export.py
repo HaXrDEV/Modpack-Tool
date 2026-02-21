@@ -556,15 +556,8 @@ with open(settings_path, "r", encoding="utf-8") as s_file:
 settings = Settings()
 update_settings_from_dict(settings, settings_yml)
 
-if not configure_actions_via_menu(settings):
-    print("No action selected. Exiting.")
-    sys.exit(0)
-
 ############################################################
 # Print Stuff
-
-if settings.breakneck_fixes:
-    input("Using fixes for Breakneck. Press Enter to continue...")
 
 if settings.print_path_debug:
     print("[DEBUG] " + git_path)
@@ -585,6 +578,9 @@ def main():
     global minecraft_version, fabric_version
 
     if not settings.refresh_only:
+        if settings.breakneck_fixes and (settings.export_client or settings.export_server):
+            input("Using fixes for Breakneck. Press Enter to continue...")
+
         if settings.migrate_minecraft_version:
             minecraft_version, fabric_version = migrate_minecraft_version(
                 target_minecraft_version=settings.migration_target_minecraft,
@@ -968,8 +964,13 @@ def main():
 
 if __name__ == "__main__":
     try:
-        print("")
-        main()
+        while True:
+            if not configure_actions_via_menu(settings):
+                print("No action selected. Exiting.")
+                break
+            print("")
+            main()
+            input("\nWorkflow complete. Press Enter to return to the menu...")
     except KeyboardInterrupt:
         print("Operation aborted by user.")
         exit(-1)
