@@ -53,7 +53,7 @@ The export flow can now auto-generate `Update overview` in `Changelogs/<version>
 - `auto_generate_update_overview`: Enables automatic summary generation during export.
 - `auto_summary_overwrite_existing`: Overwrites existing `Update overview` when `true`.
 - `auto_summary_provider`: Provider name (`ollama` currently supported).
-- `auto_summary_model`: Model used by Ollama (default: `qwen2.5:1.5b-instruct`).
+- `auto_summary_model`: Model used by Ollama (default: `qwen3:4b-instruct`).
 - `auto_summary_endpoint`: Ollama generate endpoint (default: `http://127.0.0.1:11434/api/generate`).
 - `auto_summary_timeout_seconds`: HTTP timeout for the model call.
 - `auto_summary_max_items`: Max diff items per category included in the prompt/fallback summary.
@@ -63,7 +63,7 @@ The export flow can now auto-generate `Update overview` in `Changelogs/<version>
 Run Ollama locally and pull a small model, for example:
 
 ```powershell
-ollama pull qwen2.5:1.5b-instruct
+ollama pull qwen3:4b-instruct
 ```
 
 If the model call fails or no model is available, the tool does not write `Update overview` and prints a notice instead.

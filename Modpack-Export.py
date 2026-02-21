@@ -595,14 +595,6 @@ def ensure_changelog_yml(target_pack_version, target_minecraft_version, target_f
     return changelog_path
 
 
-def _truncate_names(items, max_items):
-    names = [str(item) for item in items if item]
-    if len(names) <= max_items:
-        return names
-    remainder = len(names) - max_items
-    return names[:max_items] + [f"...and {remainder} more"]
-
-
 def _extract_modified_names(modified_items):
     return [str(item[0]) for item in modified_items if isinstance(item, (list, tuple)) and item]
 
@@ -680,7 +672,6 @@ def build_llm_prompt_from_diff(diff_payload, max_items=8, migration_mode=False):
         "- Updated to Minecraft 1.21.11.\n"
         "- Removed mods that are not yet compatible.\n\n"
         "Example C:\n"
-        "- Added new mods where needed.\n"
         "- Updated mods & resource packs.\n"
         "- Re-added mods that have been updated to this version.\n\n"
         "Example D:\n"
@@ -709,7 +700,7 @@ def build_llm_prompt_from_diff(diff_payload, max_items=8, migration_mode=False):
         "Each bullet must be one sentence, max 100 chars.\n"
         "Do not include exact counts.\n"
         "Do not copy example lines verbatim.\n"
-        "No fluffy wording. No marketing tone. No markdown headers.\n"
+        "No fluffy wording. No marketing tone. No markdown headers. Avoid wording like 'improved gameplay', 'enhanced experience' or similar.\n"
         "Prefer lines like:\n"
         "- Updated mods & resource packs.\n"
         "- Re-added mods that have become available for this version.\n"
@@ -930,7 +921,7 @@ class Settings:
     migration_mod_loader: str = "fabric"
     bump_target_version: str = ""
     auto_summary_provider: str = "ollama"
-    auto_summary_model: str = "qwen2.5:1.5b-instruct"
+    auto_summary_model: str = "qwen3:4b-instruct"
     auto_summary_endpoint: str = "http://127.0.0.1:11434/api/generate"
 
     # List settings
