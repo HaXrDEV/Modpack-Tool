@@ -519,8 +519,35 @@ def bump_modpack_version(new_pack_version):
             print(f"[Version] Failed updating {bcc_path}: {ex}")
 
     pack_version = new_pack_version
+    ensure_changelog_yml(pack_version, minecraft_version, fabric_version)
     changelog_factory = ChangelogFactory(changelog_dir_path, modpack_name, pack_version, settings, yaml)
     print(f"[Version] Modpack version bumped: {old_pack_version} -> {new_pack_version}")
+
+
+def ensure_changelog_yml(target_pack_version, target_minecraft_version, target_fabric_version):
+    os.makedirs(changelog_dir_path, exist_ok=True)
+    changelog_path = os.path.join(changelog_dir_path, f"{target_pack_version}+{target_minecraft_version}.yml")
+
+    if not os.path.isfile(changelog_path):
+        data = CommentedMap()
+        data["version"] = target_pack_version
+        data["Fabric version"] = target_fabric_version
+        data["Changes/Improvements"] = None
+        data["Bug Fixes"] = None
+        data["Config Changes"] = LiteralScalarString("- : [mod], [Client]")
+        with open(changelog_path, "w", encoding="utf-8") as f:
+            yaml.dump(data, f)
+        print(f"[Version] Created changelog template: {changelog_path}")
+        return changelog_path
+
+    with open(changelog_path, "r", encoding="utf-8") as f:
+        changelog_yml = yaml.load(f) or {}
+    if changelog_yml.get("Fabric version") != target_fabric_version:
+        changelog_yml["Fabric version"] = target_fabric_version
+        with open(changelog_path, "w", encoding="utf-8") as f:
+            yaml.dump(changelog_yml, f)
+        print(f"[Version] Updated Fabric version in changelog: {changelog_path}")
+    return changelog_path
 
 ############################################################
 # Start Message
