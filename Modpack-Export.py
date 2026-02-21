@@ -601,12 +601,30 @@ def normalize_llm_summary_to_bullets(raw_summary: str):
     return lines
 
 
-def build_llm_prompt_from_diff(diff_payload, max_items=8):
+def filter_summary_lines_for_context(lines, migration_mode=False, has_true_additions=True, has_reenabled=False):
+    filtered = []
+    for line in lines:
+        normalized = line.strip()
+        if not migration_mode and re.search(r"^updated to minecraft\b", normalized, flags=re.IGNORECASE):
+            continue
+        if not has_true_additions and re.search(r"^added\b", normalized, flags=re.IGNORECASE):
+            continue
+        if not has_reenabled and re.search(r"^re-?added\b", normalized, flags=re.IGNORECASE):
+            continue
+        filtered.append(line)
+    return filtered
+
+
+def build_llm_prompt_from_diff(diff_payload, max_items=8, migration_mode=False):
     mod_diff = diff_payload.get("mod_differences") or {}
     res_diff = diff_payload.get("resourcepack_differences") or {}
+    mod_addition_breakdown = diff_payload.get("mod_addition_breakdown") or {}
+    true_additions = mod_addition_breakdown.get("newly_added", [])
+    reenabled_mods = mod_addition_breakdown.get("reenabled_from_disabled", [])
 
     mod_changes_total = (
-        len(mod_diff.get("added", []))
+        len(true_additions)
+        + len(reenabled_mods)
         + len(mod_diff.get("removed", []))
         + len(_extract_modified_names(mod_diff.get("modified", [])))
     )
@@ -640,19 +658,35 @@ def build_llm_prompt_from_diff(diff_payload, max_items=8):
         "- Temporarily removed incompatible mods.\n"
     )
 
+    migration_rule = (
+        "Migration mode: yes. You may mention temporary removals due to compatibility.\n"
+        "Migration mode: yes. You may mention updating to a new Minecraft version.\n"
+        if migration_mode
+        else "Migration mode: no. Do NOT mention removals due to compatibility/incompatibility.\n"
+        "Migration mode: no. Do NOT mention updating to a new Minecraft version.\n"
+    )
+
+    addition_rule = (
+        "Use 'Added ...' only if true new additions exist.\n"
+        "Use 'Re-added ...' only for mods re-enabled from disabled state.\n"
+        "If there are only re-enabled mods, do not use 'Added ...'.\n"
+    )
+
     return (
         "You write 'Update Overview' bullets for a Minecraft modpack changelog.\n"
         "Match this style used in previous logs: short, past tense, plain wording.\n"
         "Output exactly 2-4 bullet points and nothing else.\n"
         "Each bullet must be one sentence, max 100 chars.\n"
-        "Do not mention specific mod/resource pack names.\n"
         "Do not include exact counts.\n"
         "No fluffy wording. No marketing tone. No markdown headers.\n"
         "Prefer lines like:\n"
         "- Updated mods & resource packs.\n"
         "- Re-added mods that have become available for this version.\n"
-        "- Removed mods that are not yet compatible.\n"
         "- Updated to Minecraft <version>.\n\n"
+        + migration_rule +
+        "\n"
+        + addition_rule +
+        "\n"
         + style_examples +
         "\n"
         f"Current version: {diff_payload.get('current_version')}\n"
@@ -660,7 +694,9 @@ def build_llm_prompt_from_diff(diff_payload, max_items=8):
         f"Minecraft: {diff_payload.get('mc_version')}\n"
         f"Mod changes level: {_change_level(mod_changes_total)}\n"
         f"Resource pack changes level: {_change_level(res_changes_total)}\n"
-        f"Has mod additions/removals: {'yes' if (mod_diff.get('added') or mod_diff.get('removed')) else 'no'}\n"
+        f"Has true new mods added: {'yes' if true_additions else 'no'}\n"
+        f"Has mods re-enabled from disabled: {'yes' if reenabled_mods else 'no'}\n"
+        f"Has mod removals: {'yes' if mod_diff.get('removed') else 'no'}\n"
         f"Has resource pack additions/removals: {'yes' if (res_diff.get('added') or res_diff.get('removed')) else 'no'}\n"
     )
 
@@ -670,7 +706,12 @@ def generate_update_overview_with_small_llm(diff_payload, settings) -> Optional[
         print(f"[Changelog] Unsupported auto_summary_provider '{settings.auto_summary_provider}'.")
         return None
 
-    prompt = build_llm_prompt_from_diff(diff_payload, max_items=settings.auto_summary_max_items)
+    migration_mode = bool(settings.migrate_minecraft_version)
+    prompt = build_llm_prompt_from_diff(
+        diff_payload,
+        max_items=settings.auto_summary_max_items,
+        migration_mode=migration_mode,
+    )
     try:
         response = requests.post(
             settings.auto_summary_endpoint,
@@ -688,6 +729,13 @@ def generate_update_overview_with_small_llm(diff_payload, settings) -> Optional[
         response.raise_for_status()
         response_json = response.json()
         parsed = normalize_llm_summary_to_bullets(response_json.get("response", ""))
+        mod_addition_breakdown = diff_payload.get("mod_addition_breakdown") or {}
+        parsed = filter_summary_lines_for_context(
+            parsed,
+            migration_mode=migration_mode,
+            has_true_additions=bool(mod_addition_breakdown.get("newly_added")),
+            has_reenabled=bool(mod_addition_breakdown.get("reenabled_from_disabled")),
+        )
         if parsed:
             return parsed[:5]
     except Exception as ex:

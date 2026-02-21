@@ -155,6 +155,7 @@ class ChangelogFactory:
 
         mod_differences = self.compare_toml_files(previous_mods_path, current_mods_path)
         resourcepack_differences = self.compare_toml_files(previous_resourcepacks_path, current_resourcepacks_path)
+        mod_addition_breakdown = self.get_mod_addition_breakdown(previous_mods_path, current_mods_path)
 
         return {
             "previous_version": previous_version,
@@ -162,6 +163,55 @@ class ChangelogFactory:
             "mc_version": str(mc_version),
             "mod_differences": mod_differences,
             "resourcepack_differences": resourcepack_differences,
+            "mod_addition_breakdown": mod_addition_breakdown,
+        }
+
+    def _load_toml_state(self, input_dir):
+        state = {}
+        for filename in os.listdir(input_dir):
+            if not filename.endswith(".toml"):
+                continue
+            filepath = os.path.join(input_dir, filename)
+            if not os.path.isfile(filepath):
+                continue
+            try:
+                with open(filepath, "r", encoding="utf8") as f:
+                    mod_toml = toml.load(f)
+                side_raw = str(mod_toml.get("side", "both")).strip()
+                state[filename] = {
+                    "name": markdown.remove_bracketed_text(mod_toml.get("name", filename)),
+                    "side": side_raw,
+                    "enabled": "disabled" not in side_raw.lower(),
+                }
+            except Exception:
+                continue
+        return state
+
+    def get_mod_addition_breakdown(self, previous_mods_path, current_mods_path):
+        previous_state = self._load_toml_state(previous_mods_path)
+        current_state = self._load_toml_state(current_mods_path)
+
+        newly_added = []
+        reenabled_from_disabled = []
+
+        for filename, current_entry in current_state.items():
+            if not current_entry["enabled"]:
+                continue
+
+            previous_entry = previous_state.get(filename)
+            if not previous_entry:
+                newly_added.append(current_entry["name"])
+                continue
+
+            if not previous_entry["enabled"]:
+                reenabled_from_disabled.append(current_entry["name"])
+
+        def unique_sorted(items):
+            return sorted(set(items), key=lambda x: x.lower())
+
+        return {
+            "newly_added": unique_sorted(newly_added),
+            "reenabled_from_disabled": unique_sorted(reenabled_from_disabled),
         }
 
     def sort_versions(self, version_list):
