@@ -77,6 +77,7 @@ mods_path = os.path.join(packwiz_path, "mods")
 crash_assistant_config_path = os.path.join(packwiz_path, "config", "crash_assistant", "modlist.json")
 crash_assistant_markdown_path = os.path.join(git_path, "modlist.md")
 modrinth_api_base = "https://api.modrinth.com/v2"
+_mod_label_index_cache = None
 
 ############################################################
 # Functions
@@ -900,61 +901,137 @@ def format_config_filename_as_title(filename: str) -> str:
     return " ".join(token.capitalize() for token in tokens)
 
 
+def _normalize_lookup_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+
+def _load_modlist_label_index():
+    global _mod_label_index_cache
+    if _mod_label_index_cache is not None:
+        return _mod_label_index_cache
+
+    index = {}
+    entries = []
+    try:
+        active_mod_names = parse_active_projects(packwiz_mods_path, "name")
+    except Exception:
+        active_mod_names = []
+
+    for raw_name in active_mod_names:
+        name_no_side = re.sub(r"\s*\[[^\]]+\]\s*$", "", str(raw_name or "")).strip()
+        mod_name = re.sub(r"\s*-\s*$", "", name_no_side).strip() or name_no_side
+        if not mod_name:
+            continue
+        key = _normalize_lookup_key(mod_name)
+        if not key:
+            continue
+        index.setdefault(key, mod_name)
+        entries.append(mod_name)
+
+    _mod_label_index_cache = {"index": index, "entries": entries}
+    return _mod_label_index_cache
+
+
+def derive_mod_display_label_from_config_path(path: str) -> str:
+    raw_path = str(path or "").replace("\\", "/").strip("/")
+    filename = derive_mod_label_from_config_path(raw_path)
+    stem = os.path.splitext(filename)[0].strip()
+    parts = [p for p in raw_path.split("/") if p]
+    parent = parts[-2] if len(parts) > 1 else ""
+
+    label_index = _load_modlist_label_index()
+    index = label_index.get("index", {})
+    entries = label_index.get("entries", [])
+
+    candidate_keys = [
+        _normalize_lookup_key(stem),
+        _normalize_lookup_key(filename),
+        _normalize_lookup_key(parent),
+    ]
+    for key in candidate_keys:
+        if key and key in index:
+            return index[key]
+
+    # Loose fallback: match by containment on normalized keys.
+    stem_key = _normalize_lookup_key(stem)
+    if stem_key:
+        best_name = None
+        best_score = 0
+        for mod_name in entries:
+            alias_key = _normalize_lookup_key(mod_name)
+            if not alias_key:
+                continue
+            if stem_key == alias_key:
+                return mod_name
+            if stem_key in alias_key or alias_key in stem_key:
+                score = min(len(stem_key), len(alias_key))
+                if score > best_score:
+                    best_score = score
+                    best_name = mod_name
+        if best_name and best_score >= 6:
+            return best_name
+
+    return format_config_filename_as_title(filename)
+
+
 def _build_config_label_maps(diff_payload):
     config_diff = diff_payload.get("config_differences") or {}
     line_diffs = list(config_diff.get("modified_line_diffs", []))
-    stem_to_filename = {}
-    alias_to_title = {}
+    stem_to_label = {}
+    alias_to_label = {}
 
     for entry in line_diffs:
         file_path = str(entry.get("path", "")).strip()
         if not file_path:
             continue
 
-        filename = derive_mod_label_from_config_path(file_path)
-        stem = os.path.splitext(filename)[0].strip().lower()
-        title_label = format_config_filename_as_title(filename)
+        config_filename = derive_mod_label_from_config_path(file_path)
+        stem = os.path.splitext(config_filename)[0].strip().lower()
+        title_label = format_config_filename_as_title(config_filename)
+        resolved_label = derive_mod_display_label_from_config_path(file_path)
 
-        if stem and filename:
-            stem_to_filename[stem] = filename
+        if stem and resolved_label:
+            stem_to_label[stem] = resolved_label
 
-        if filename:
-            alias_to_title[filename.strip().lower()] = title_label
+        if config_filename:
+            alias_to_label[config_filename.strip().lower()] = resolved_label
         if stem:
-            alias_to_title[stem] = title_label
+            alias_to_label[stem] = resolved_label
         if title_label:
-            alias_to_title[title_label.strip().lower()] = title_label
+            alias_to_label[title_label.strip().lower()] = resolved_label
+        if resolved_label:
+            alias_to_label[resolved_label.strip().lower()] = resolved_label
 
-    return stem_to_filename, alias_to_title
+    return stem_to_label, alias_to_label
 
 
 def _normalize_config_change_labels(text: str, diff_payload) -> str:
-    stem_to_filename, _ = _build_config_label_maps(diff_payload)
+    stem_to_label, _ = _build_config_label_maps(diff_payload)
 
-    if not stem_to_filename:
+    if not stem_to_label:
         return str(text or "")
 
     def _replace_label(match):
         label = str(match.group(1) or "").strip()
         lowered = label.lower()
-        if lowered in stem_to_filename:
-            return f"[{stem_to_filename[lowered]}]"
+        if lowered in stem_to_label:
+            return f"[{stem_to_label[lowered]}]"
         return match.group(0)
 
     return re.sub(r"\[([^\]]+)\]", _replace_label, str(text or ""))
 
 
 def _normalize_config_change_title_labels(text: str, diff_payload) -> str:
-    _, alias_to_title = _build_config_label_maps(diff_payload)
-    if not alias_to_title:
+    _, alias_to_label = _build_config_label_maps(diff_payload)
+    if not alias_to_label:
         return str(text or "")
 
     def _replace_label(match):
         label = str(match.group(1) or "").strip()
         lowered = label.lower()
-        title_label = alias_to_title.get(lowered)
-        if title_label:
-            return f"[{title_label}]"
+        resolved_label = alias_to_label.get(lowered)
+        if resolved_label:
+            return f"[{resolved_label}]"
         return match.group(0)
 
     return re.sub(r"\[([^\]]+)\]", _replace_label, str(text or ""))
@@ -1129,17 +1206,17 @@ def build_config_label_title_prompt(text: str, diff_payload, max_items=20):
         if not path:
             continue
         filename = derive_mod_label_from_config_path(path)
-        title_label = format_config_filename_as_title(filename)
-        mapping_lines.append(f"- {filename} => {title_label}")
+        resolved_label = derive_mod_display_label_from_config_path(path)
+        mapping_lines.append(f"- {filename} => {resolved_label}")
 
     mapping = "\n".join(mapping_lines) if mapping_lines else "none"
     return (
         "Rewrite only bracket labels in these bullets.\n"
         "Keep the bullets, wording, order, and punctuation unchanged.\n"
-        "Only update text inside square brackets to title-style labels using this mapping.\n"
-        "If a bracket label is already title-style and matches mapping intent, keep it.\n"
+        "Only update text inside square brackets to the mapped mod labels from the mod list.\n"
+        "If a bracket label already matches the mapped mod label, keep it.\n"
         "Output only bullet lines.\n\n"
-        "Filename to title mapping:\n"
+        "Filename to mod label mapping:\n"
         f"{mapping}\n\n"
         "Bullets:\n"
         f"{str(text or '').strip()}\n"
@@ -1181,7 +1258,7 @@ def build_config_changes_prompt(diff_payload, max_items=12):
         rendered = []
         for entry in items[:max_items]:
             path = str(entry.get("path", ""))
-            label = derive_mod_label_from_config_path(path)
+            label = derive_mod_display_label_from_config_path(path)
             rendered.append(f"- {path} => {label}")
         return "\n".join(rendered)
 
@@ -1218,7 +1295,7 @@ def generate_config_changes_fallback_from_line_diffs(diff_payload, max_lines=8) 
 
     for entry in line_diffs:
         file_path = str(entry.get("path", "")).strip()
-        mod_label = format_config_filename_as_title(derive_mod_label_from_config_path(file_path))
+        mod_label = derive_mod_display_label_from_config_path(file_path)
         added_lines = entry.get("added_lines", [])
         removed_lines = entry.get("removed_lines", [])
         candidate_lines = list(added_lines) + list(removed_lines)
@@ -1298,7 +1375,7 @@ def generate_removed_config_file_bullets(diff_payload, max_lines=8) -> List[str]
         seen.add(dedupe_key)
 
         filename = derive_mod_label_from_config_path(relative_path)
-        mod_label = format_config_filename_as_title(filename)
+        mod_label = derive_mod_display_label_from_config_path(relative_path)
         bullets.append(f"- Removed config file {relative_path}: [{mod_label}].")
         if len(bullets) >= max_lines:
             break
