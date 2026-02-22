@@ -107,17 +107,19 @@ def configure_actions_via_menu(settings):
     def prompt_changelog_autogen_overwrite(force_prompt=False):
         should_prompt_overview = force_prompt or settings.auto_generate_update_overview or settings.generate_update_summary_only
         if should_prompt_overview:
-            default_label = "Y" if settings.auto_summary_overwrite_existing else "N"
-            answer = input(f"Override existing 'Update overview' for this run? [{default_label}]: ").strip()
+            answer = input("Override existing 'Update overview' for this run? [Y]: ").strip()
             if answer:
                 settings.auto_summary_overwrite_existing = answer.lower() in ("y", "yes")
+            else:
+                settings.auto_summary_overwrite_existing = True
 
         should_prompt_config = force_prompt or settings.auto_generate_config_changes
         if should_prompt_config:
-            default_label = "Y" if settings.auto_config_overwrite_existing else "N"
-            answer = input(f"Override existing 'Config Changes' for this run? [{default_label}]: ").strip()
+            answer = input("Override existing 'Config Changes' for this run? [Y]: ").strip()
             if answer:
                 settings.auto_config_overwrite_existing = answer.lower() in ("y", "yes")
+            else:
+                settings.auto_config_overwrite_existing = True
 
     print(
         """
@@ -926,9 +928,6 @@ def maybe_generate_config_changes(changelog_path, diff_payload):
 
     config_diff = diff_payload.get("config_differences") or {}
     modified_line_diffs = list(config_diff.get("modified_line_diffs", []))
-    if not modified_line_diffs:
-        print("[Changelog] No in-file config line changes found. Skipping 'Config Changes'.")
-        return
 
     with open(changelog_path, "r", encoding="utf-8") as f:
         changelog_yml = yaml.load(f) or {}
@@ -938,6 +937,13 @@ def maybe_generate_config_changes(changelog_path, diff_payload):
     is_default_placeholder = existing_config_text in ("- : [mod], [Client]", "")
     if existing_config_changes and not is_default_placeholder and not settings.auto_config_overwrite_existing:
         print("[Changelog] 'Config Changes' already exists. Skipping auto generation.")
+        return
+
+    if not modified_line_diffs:
+        changelog_yml["Config Changes"] = ""
+        with open(changelog_path, "w", encoding="utf-8") as f:
+            yaml.dump(changelog_yml, f)
+        print(f"[Changelog] Cleared 'Config Changes' (no config changes detected) in {os.path.basename(changelog_path)}.")
         return
 
     llm_config_changes = generate_config_changes_with_llm(diff_payload, settings)
