@@ -105,10 +105,21 @@ class ChangelogFactory:
         # Handle modified files (unchanged from original)
         for filename, data in toml_data_2.items():
             if filename in toml_data_1:
-                version1 = toml_data_1[filename].get('filename', None)
-                version2 = data.get('filename', None)
-                if version1 != version2:
-                    results['modified'].append((markdown.remove_bracketed_text(data.get('name', filename)), version1, version2))
+                previous_entry = toml_data_1[filename]
+                current_entry = data
+
+                prev_filename = previous_entry.get("filename", None)
+                curr_filename = current_entry.get("filename", None)
+                prev_hash = str(previous_entry.get("download", {}).get("hash", ""))
+                curr_hash = str(current_entry.get("download", {}).get("hash", ""))
+
+                # Detect updates even when providers keep artifact filenames stable.
+                if prev_filename != curr_filename or prev_hash != curr_hash:
+                    before = prev_filename or prev_hash or ""
+                    after = curr_filename or curr_hash or ""
+                    results['modified'].append(
+                        (markdown.remove_bracketed_text(current_entry.get('name', filename)), before, after)
+                    )
 
         return results
 

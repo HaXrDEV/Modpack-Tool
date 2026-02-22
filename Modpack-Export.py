@@ -608,6 +608,18 @@ def _format_quoted_names(names):
     return ", ".join(f"'{name}'" for name in cleaned)
 
 
+def _format_name_list(names):
+    cleaned = [str(name).strip() for name in names if str(name).strip()]
+    quoted = [f"'{name}'" for name in cleaned]
+    if not quoted:
+        return ""
+    if len(quoted) == 1:
+        return quoted[0]
+    if len(quoted) == 2:
+        return f"{quoted[0]} & {quoted[1]}"
+    return f"{', '.join(quoted[:-1])} & {quoted[-1]}"
+
+
 def generate_deterministic_update_overview(diff_payload, migration_mode=False) -> List[str]:
     mod_diff = diff_payload.get("mod_differences") or {}
     res_diff = diff_payload.get("resourcepack_differences") or {}
@@ -638,7 +650,10 @@ def generate_deterministic_update_overview(diff_payload, migration_mode=False) -
     is_alpha_or_beta = bool(re.search(r"\b(alpha|beta)\b", current_version, re.IGNORECASE))
 
     if new_mod_count > 0:
-        lines.append(f"Added {_format_quoted_names(new_mod_names)}.")
+        if new_mod_count == 1:
+            lines.append(f"Added '{new_mod_names[0]}' mod.")
+        else:
+            lines.append(f"Added {_format_name_list(new_mod_names)} mods.")
     if reenabled_mod_count > 0:
         if is_alpha_or_beta:
             lines.append(f"Re-added some mods that have become available for {diff_payload.get('mc_version')}.")
@@ -650,7 +665,10 @@ def generate_deterministic_update_overview(diff_payload, migration_mode=False) -
         if migration_mode:
             lines.append(f"Temporarily removed incompatible mods: {_format_quoted_names(removed_mod_names)}.")
         else:
-            lines.append(f"Removed {_format_quoted_names(removed_mod_names)}.")
+            if removed_mod_count == 1:
+                lines.append(f"Removed '{removed_mod_names[0]}' mod.")
+            else:
+                lines.append(f"Removed {_format_name_list(removed_mod_names)} mods.")
 
     updated_categories = []
     if updated_mod_count > 0:
@@ -712,6 +730,33 @@ def _normalize_llm_text_to_bullets(raw_text: str, max_lines: int):
     return lines[:max_lines]
 
 
+def _normalize_config_change_labels(text: str, diff_payload) -> str:
+    config_diff = diff_payload.get("config_differences") or {}
+    line_diffs = list(config_diff.get("modified_line_diffs", []))
+    stem_to_filename = {}
+
+    for entry in line_diffs:
+        file_path = str(entry.get("path", "")).strip()
+        if not file_path:
+            continue
+        filename = derive_mod_label_from_config_path(file_path)
+        stem = os.path.splitext(filename)[0].strip().lower()
+        if stem and filename:
+            stem_to_filename[stem] = filename
+
+    if not stem_to_filename:
+        return str(text or "")
+
+    def _replace_label(match):
+        label = str(match.group(1) or "").strip()
+        lowered = label.lower()
+        if lowered in stem_to_filename:
+            return f"[{stem_to_filename[lowered]}]"
+        return match.group(0)
+
+    return re.sub(r"\[([^\]]+)\]", _replace_label, str(text or ""))
+
+
 def derive_mod_label_from_config_path(path: str) -> str:
     raw_path = str(path or "").replace("\\", "/").strip("/")
     if not raw_path:
@@ -719,11 +764,7 @@ def derive_mod_label_from_config_path(path: str) -> str:
 
     parts = [p for p in raw_path.split("/") if p]
     filename = parts[-1] if parts else raw_path
-    stem = os.path.splitext(filename)[0]
-    normalized = re.sub(r"[_\-]+", " ", stem).strip()
-    if not normalized:
-        normalized = stem
-    return normalized.title()
+    return filename
 
 
 def build_config_changes_prompt(diff_payload, max_items=12):
@@ -847,7 +888,7 @@ def generate_config_changes_with_llm(diff_payload, settings) -> Optional[str]:
             max_lines=settings.auto_config_max_lines,
         )
         if bullet_lines:
-            return "\n".join(bullet_lines)
+            return _normalize_config_change_labels("\n".join(bullet_lines), diff_payload)
     except Exception as ex:
         print(f"[Changelog] LLM config change generation failed: {ex}")
 
