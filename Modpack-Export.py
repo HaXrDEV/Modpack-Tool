@@ -1178,6 +1178,65 @@ def _format_name_list(names):
     return f"{', '.join(quoted[:-1])} & {quoted[-1]}"
 
 
+def _resolve_mod_display_label(name: str) -> str:
+    raw_name = str(name or "").strip()
+    if not raw_name:
+        return ""
+
+    # Remove side suffixes used in some diff views, then normalize trailing separators.
+    base_name = re.sub(r"\s*`[^`]+`\s*$", "", raw_name).strip()
+    base_name = re.sub(r"\s*\[[^\]]+\]\s*$", "", base_name).strip()
+    base_name = re.sub(r"\s*-\s*$", "", base_name).strip() or base_name
+
+    label_index = _load_modlist_label_index()
+    index = label_index.get("index", {})
+    entries = label_index.get("entries", [])
+
+    candidate_keys = [
+        _normalize_lookup_key(base_name),
+        _normalize_lookup_key(raw_name),
+    ]
+    for key in candidate_keys:
+        if key and key in index:
+            return index[key]
+
+    # Loose fallback: containment match on normalized names.
+    base_key = _normalize_lookup_key(base_name)
+    if base_key:
+        best_name = None
+        best_score = 0
+        for mod_name in entries:
+            alias_key = _normalize_lookup_key(mod_name)
+            if not alias_key:
+                continue
+            if base_key == alias_key:
+                return mod_name
+            if base_key in alias_key or alias_key in base_key:
+                score = min(len(base_key), len(alias_key))
+                if score > best_score:
+                    best_score = score
+                    best_name = mod_name
+        if best_name and best_score >= 6:
+            return best_name
+
+    return base_name
+
+
+def _dedupe_preserve_order(items):
+    output = []
+    seen = set()
+    for item in items:
+        value = str(item or "").strip()
+        if not value:
+            continue
+        lowered = value.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        output.append(value)
+    return output
+
+
 def _append_added_removed_summary(lines, added_names, removed_names, singular_label, plural_label):
     cleaned_added = [str(name).strip() for name in added_names if str(name).strip()]
     cleaned_removed = [str(name).strip() for name in removed_names if str(name).strip()]
@@ -1196,9 +1255,15 @@ def generate_deterministic_update_overview(diff_payload, migration_mode=False) -
     shader_diff = diff_payload.get("shaderpack_differences") or {}
     mod_addition_breakdown = diff_payload.get("mod_addition_breakdown") or {}
 
-    new_mod_names = list(mod_addition_breakdown.get("newly_added", []))
-    reenabled_mod_names = list(mod_addition_breakdown.get("reenabled_from_disabled", []))
-    removed_mod_names = list(mod_diff.get("removed", []))
+    new_mod_names = _dedupe_preserve_order(
+        _resolve_mod_display_label(name) for name in mod_addition_breakdown.get("newly_added", [])
+    )
+    reenabled_mod_names = _dedupe_preserve_order(
+        _resolve_mod_display_label(name) for name in mod_addition_breakdown.get("reenabled_from_disabled", [])
+    )
+    removed_mod_names = _dedupe_preserve_order(
+        _resolve_mod_display_label(name) for name in mod_diff.get("removed", [])
+    )
     added_res_names = list(res_diff.get("added", []))
     removed_res_names = list(res_diff.get("removed", []))
     added_shader_names = list(shader_diff.get("added", []))
