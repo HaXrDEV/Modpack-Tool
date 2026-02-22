@@ -1617,6 +1617,41 @@ def _get_missing_config_labels_from_bullets(bullets: List[str], diff_payload) ->
     return sorted(expected_labels - existing_labels)
 
 
+def _get_expected_yosbr_moves(diff_payload) -> List[str]:
+    config_diff = diff_payload.get("config_differences") or {}
+    moved_to_yosbr = list(config_diff.get("moved_to_yosbr", []))
+    moves = []
+    seen = set()
+
+    for move in moved_to_yosbr:
+        from_path = str(move.get("from", "")).replace("\\", "/").strip("/")
+        to_path = str(move.get("to", "")).replace("\\", "/").strip("/")
+        if not from_path or not to_path:
+            continue
+        key = f"{from_path.lower()}->{to_path.lower()}"
+        if key in seen:
+            continue
+        seen.add(key)
+        moves.append(f"{from_path} -> {to_path}")
+    return moves
+
+
+def _get_missing_yosbr_moves_from_bullets(bullets: List[str], diff_payload) -> List[str]:
+    expected_moves = _get_expected_yosbr_moves(diff_payload)
+    if not expected_moves:
+        return []
+
+    lowered_bullets = [str(line or "").strip().lower() for line in bullets if str(line or "").strip()]
+    missing = []
+    for move in expected_moves:
+        from_path, to_path = move.split(" -> ", 1)
+        signature = f"moved {from_path.lower()} to {to_path.lower()}"
+        found = any(signature in bullet for bullet in lowered_bullets)
+        if not found:
+            missing.append(move)
+    return missing
+
+
 def derive_mod_label_from_config_path(path: str) -> str:
     raw_path = str(path or "").replace("\\", "/").strip("/")
     if not raw_path:
@@ -1880,10 +1915,11 @@ def build_config_changes_prompt(diff_payload, max_items=12):
         "Files under 'yosbr/' are defaults applied only on first launch.\n"
         "When summarizing those files, use 'Changed default ...' instead of 'Changed ...'.\n"
         "Do not treat regular config -> yosbr moves as removals.\n"
+        "For each item listed under 'Regular config files moved to yosbr', include one explicit bullet that starts with 'Moved <from> to <to>' and explains it now applies as a default on first launch.\n"
         "For added/removed list entries, explicitly mention the section path when provided in '(section: ...)' context.\n"
         "Do not write generic lines like 'updated config files'.\n"
         "Do not write about added/removed config files.\n"
-        "Only summarize in-file setting/value changes from modified files.\n"
+        "Summarize in-file setting/value changes from modified files, and also include yosbr move bullets.\n"
         "Each bullet must end with ': [Mod Name]'.\n"
         "Use the file-to-mod mapping below when possible.\n"
         "Preferred style examples:\n"
@@ -1892,6 +1928,8 @@ def build_config_changes_prompt(diff_payload, max_items=12):
         "- Changed \"coloredText\" to false: [Breakneck Menu]\n\n"
         "YOSBR style example:\n"
         "- Changed default \"coloredText\" to false: [Breakneck Menu]\n\n"
+        "YOSBR move style example:\n"
+        "- Moved breakneckmenu.json5 to be handled by YOSBR: [Breakneck Menu]\n\n"
         f"Current version: {diff_payload.get('current_version')}\n"
         f"Compared from: {diff_payload.get('previous_version')}\n"
         f"Minecraft: {diff_payload.get('mc_version')}\n\n"
@@ -2087,9 +2125,13 @@ def format_config_change_labels_with_llm(text: str, diff_payload, settings) -> O
     return None
 
 
-def generate_config_changes_with_llm(diff_payload, settings) -> Optional[str]:
+def generate_config_changes_with_llm(diff_payload, settings, max_lines: Optional[int] = None) -> Optional[str]:
     if str(settings.auto_config_provider).lower() != "ollama":
         print(f"[Changelog] Unsupported auto_config_provider '{settings.auto_config_provider}'.")
+        return None
+
+    effective_max_lines = int(max_lines) if max_lines is not None else int(settings.auto_config_max_lines)
+    if effective_max_lines <= 0:
         return None
 
     base_prompt = build_config_changes_prompt(
@@ -2098,19 +2140,32 @@ def generate_config_changes_with_llm(diff_payload, settings) -> Optional[str]:
     )
     max_attempts = 5
     best_text = None
-    best_missing_labels = None
+    best_missing_score = None
     missing_labels_for_retry = []
+    missing_moves_for_retry = []
 
     for attempt in range(max_attempts):
         num_predict = 260 + (attempt * 180)
         coverage_hint = ""
-        if missing_labels_for_retry:
-            missing_render = "\n".join(f"- {label}" for label in missing_labels_for_retry[:12])
+        if missing_labels_for_retry or missing_moves_for_retry:
+            coverage_hint_parts = []
+            if missing_labels_for_retry:
+                missing_label_render = "\n".join(f"- {label}" for label in missing_labels_for_retry[:12])
+                coverage_hint_parts.append(
+                    "Ensure at least one bullet for each missing label below.\n"
+                    "Keep exact label spelling inside [] for these:\n"
+                    f"{missing_label_render}\n"
+                )
+            if missing_moves_for_retry:
+                missing_move_render = "\n".join(f"- {move}" for move in missing_moves_for_retry[:12])
+                coverage_hint_parts.append(
+                    "Ensure one bullet for each missing yosbr move below.\n"
+                    "Start each move bullet with 'Moved <from> to <to>' using these exact paths:\n"
+                    f"{missing_move_render}\n"
+                )
             coverage_hint = (
                 "\nCoverage retry requirement:\n"
-                "Ensure at least one bullet for each missing label below.\n"
-                "Keep exact label spelling inside [] for these:\n"
-                f"{missing_render}\n"
+                f"{''.join(coverage_hint_parts)}"
             )
 
         prompt = f"{base_prompt}{coverage_hint}"
@@ -2132,7 +2187,7 @@ def generate_config_changes_with_llm(diff_payload, settings) -> Optional[str]:
             response_json = response.json()
             bullet_lines, invalid_count = _normalize_config_llm_bullets(
                 response_json.get("response", ""),
-                max_lines=settings.auto_config_max_lines,
+                max_lines=effective_max_lines,
             )
             done_reason = str(response_json.get("done_reason", "") or "").strip().lower()
             if bullet_lines and invalid_count == 0:
@@ -2149,19 +2204,22 @@ def generate_config_changes_with_llm(diff_payload, settings) -> Optional[str]:
                         diff_payload,
                     )
 
-                max_lines = int(settings.auto_config_max_lines)
-                llm_bullets = _normalize_llm_text_to_bullets(llm_text, max_lines=max_lines)
+                llm_bullets = _normalize_llm_text_to_bullets(llm_text, max_lines=effective_max_lines)
                 missing_labels = _get_missing_config_labels_from_bullets(llm_bullets, diff_payload)
-                if best_text is None or (best_missing_labels is not None and len(missing_labels) < len(best_missing_labels)):
-                    best_text = "\n".join(llm_bullets)
-                    best_missing_labels = list(missing_labels)
+                missing_moves = _get_missing_yosbr_moves_from_bullets(llm_bullets, diff_payload)
+                missing_score = len(missing_labels) + len(missing_moves)
 
-                if not missing_labels:
+                if best_text is None or (best_missing_score is not None and missing_score < best_missing_score):
+                    best_text = "\n".join(llm_bullets)
+                    best_missing_score = missing_score
+
+                if not missing_labels and not missing_moves:
                     return "\n".join(llm_bullets)
 
                 if attempt + 1 < max_attempts:
-                    print("[Changelog] LLM config output missed some config labels. Retrying...")
+                    print("[Changelog] LLM config output missed required config coverage. Retrying...")
                     missing_labels_for_retry = list(missing_labels)
+                    missing_moves_for_retry = list(missing_moves)
                     continue
 
                 return best_text
@@ -2210,10 +2268,15 @@ def maybe_generate_config_changes(changelog_path, diff_payload):
 
     config_diff = diff_payload.get("config_differences") or {}
     modified_line_diffs = list(config_diff.get("modified_line_diffs", []))
-    moved_to_yosbr_bullets = generate_yosbr_default_move_bullets(
-        diff_payload,
-        max_lines=settings.auto_config_max_lines,
-    )
+    moved_to_yosbr_entries = list(config_diff.get("moved_to_yosbr", []))
+    use_llm = uses_llm_config_changes(settings)
+    if use_llm:
+        moved_to_yosbr_bullets = []
+    else:
+        moved_to_yosbr_bullets = generate_yosbr_default_move_bullets(
+            diff_payload,
+            max_lines=settings.auto_config_max_lines,
+        )
     remaining_after_yosbr = max(int(settings.auto_config_max_lines) - len(moved_to_yosbr_bullets), 0)
     removed_config_file_bullets = generate_removed_config_file_bullets(
         diff_payload,
@@ -2230,7 +2293,7 @@ def maybe_generate_config_changes(changelog_path, diff_payload):
         print("[Changelog] 'Config Changes' already exists. Skipping auto generation.")
         return
 
-    if not modified_line_diffs and not removed_config_file_bullets and not moved_to_yosbr_bullets:
+    if not modified_line_diffs and not removed_config_file_bullets and not moved_to_yosbr_bullets and not moved_to_yosbr_entries:
         changelog_yml["Config Changes"] = ""
         with open(changelog_path, "w", encoding="utf-8") as f:
             yaml.dump(changelog_yml, f)
@@ -2247,15 +2310,20 @@ def maybe_generate_config_changes(changelog_path, diff_payload):
     remaining_line_budget = max(int(settings.auto_config_max_lines) - len(final_bullets), 0)
     line_change_text = None
 
-    if modified_line_diffs and remaining_line_budget > 0:
-        if uses_llm_config_changes(settings):
-            line_change_text = generate_config_changes_with_llm(diff_payload, settings)
+    has_llm_line_source = bool(modified_line_diffs or moved_to_yosbr_entries)
+    if has_llm_line_source and remaining_line_budget > 0:
+        if use_llm:
+            line_change_text = generate_config_changes_with_llm(
+                diff_payload,
+                settings,
+                max_lines=remaining_line_budget,
+            )
             if line_change_text:
                 source_parts.append("LLM")
             else:
                 print("[Changelog] LLM output was empty or failed after retries. Skipping deterministic fallback.")
 
-        if not line_change_text and not uses_llm_config_changes(settings):
+        if not line_change_text and not use_llm:
             line_change_text = generate_config_changes_fallback_from_line_diffs(
                 diff_payload,
                 max_lines=remaining_line_budget,
