@@ -102,21 +102,33 @@ class ChangelogFactory:
             if base_name not in duplicates:
                 results['removed'].append(full_name)
 
-        # Handle modified files (unchanged from original)
+        def local_short_hash(raw_hash):
+            value = str(raw_hash or "").strip()
+            if not value:
+                return ""
+            return value[:12]
+
+        # Handle modified files.
         for filename, data in toml_data_2.items():
             if filename in toml_data_1:
                 previous_entry = toml_data_1[filename]
                 current_entry = data
 
-                prev_filename = previous_entry.get("filename", None)
-                curr_filename = current_entry.get("filename", None)
+                prev_filename = str(previous_entry.get("filename", "") or "")
+                curr_filename = str(current_entry.get("filename", "") or "")
                 prev_hash = str(previous_entry.get("download", {}).get("hash", ""))
                 curr_hash = str(current_entry.get("download", {}).get("hash", ""))
 
                 # Detect updates even when providers keep artifact filenames stable.
                 if prev_filename != curr_filename or prev_hash != curr_hash:
-                    before = prev_filename or prev_hash or ""
-                    after = curr_filename or curr_hash or ""
+                    if prev_filename == curr_filename and prev_hash != curr_hash and prev_filename:
+                        prev_hash_short = local_short_hash(prev_hash)
+                        curr_hash_short = local_short_hash(curr_hash)
+                        before = f"{prev_filename} (hash {prev_hash_short})" if prev_hash_short else prev_filename
+                        after = f"{curr_filename} (hash {curr_hash_short})" if curr_hash_short else curr_filename
+                    else:
+                        before = prev_filename or prev_hash or ""
+                        after = curr_filename or curr_hash or ""
                     results['modified'].append(
                         (markdown.remove_bracketed_text(current_entry.get('name', filename)), before, after)
                     )
