@@ -1156,13 +1156,18 @@ def _extract_modified_names(modified_items):
     return [str(item[0]) for item in modified_items if isinstance(item, (list, tuple)) and item]
 
 
+def _yaml_plain_safe_name(name):
+    # Prevent YAML from forcing quoted scalars for names containing ": ".
+    return str(name).replace(": ", ":\u00A0")
+
+
 def _format_quoted_names(names):
-    cleaned = [str(name).strip() for name in names if str(name).strip()]
+    cleaned = [_yaml_plain_safe_name(str(name).strip()) for name in names if str(name).strip()]
     return ", ".join(f"'{name}'" for name in cleaned)
 
 
 def _format_name_list(names):
-    cleaned = [str(name).strip() for name in names if str(name).strip()]
+    cleaned = [_yaml_plain_safe_name(str(name).strip()) for name in names if str(name).strip()]
     quoted = [f"'{name}'" for name in cleaned]
     if not quoted:
         return ""
@@ -1171,6 +1176,18 @@ def _format_name_list(names):
     if len(quoted) == 2:
         return f"{quoted[0]} & {quoted[1]}"
     return f"{', '.join(quoted[:-1])} & {quoted[-1]}"
+
+
+def _append_added_removed_summary(lines, added_names, removed_names, singular_label, plural_label):
+    cleaned_added = [str(name).strip() for name in added_names if str(name).strip()]
+    cleaned_removed = [str(name).strip() for name in removed_names if str(name).strip()]
+
+    if cleaned_added:
+        label = singular_label if len(cleaned_added) == 1 else plural_label
+        lines.append(f"Added {_format_name_list(cleaned_added)} {label}.")
+    if cleaned_removed:
+        label = singular_label if len(cleaned_removed) == 1 else plural_label
+        lines.append(f"Removed {_format_name_list(cleaned_removed)} {label}.")
 
 
 def generate_deterministic_update_overview(diff_payload, migration_mode=False) -> List[str]:
@@ -1182,17 +1199,21 @@ def generate_deterministic_update_overview(diff_payload, migration_mode=False) -
     new_mod_names = list(mod_addition_breakdown.get("newly_added", []))
     reenabled_mod_names = list(mod_addition_breakdown.get("reenabled_from_disabled", []))
     removed_mod_names = list(mod_diff.get("removed", []))
+    added_res_names = list(res_diff.get("added", []))
+    removed_res_names = list(res_diff.get("removed", []))
+    added_shader_names = list(shader_diff.get("added", []))
+    removed_shader_names = list(shader_diff.get("removed", []))
 
     new_mod_count = len(new_mod_names)
     reenabled_mod_count = len(reenabled_mod_names)
     removed_mod_count = len(removed_mod_names)
     updated_mod_count = len(_extract_modified_names(mod_diff.get("modified", [])))
 
-    added_res_count = len(res_diff.get("added", []))
-    removed_res_count = len(res_diff.get("removed", []))
+    added_res_count = len(added_res_names)
+    removed_res_count = len(removed_res_names)
     updated_res_count = len(_extract_modified_names(res_diff.get("modified", [])))
-    added_shader_count = len(shader_diff.get("added", []))
-    removed_shader_count = len(shader_diff.get("removed", []))
+    added_shader_count = len(added_shader_names)
+    removed_shader_count = len(removed_shader_names)
     updated_shader_count = len(_extract_modified_names(shader_diff.get("modified", [])))
 
     lines = []
@@ -1240,19 +1261,21 @@ def generate_deterministic_update_overview(diff_payload, migration_mode=False) -
             f"Updated {', '.join(updated_categories[:-1])}, & {updated_categories[-1]}."
         )
 
-    if added_res_count > 0 and removed_res_count > 0:
-        lines.append("Updated resource pack lineup.")
-    elif added_res_count > 0:
-        lines.append("Added resource packs.")
-    elif removed_res_count > 0:
-        lines.append("Removed resource packs.")
+    _append_added_removed_summary(
+        lines,
+        added_res_names,
+        removed_res_names,
+        singular_label="resource pack",
+        plural_label="resource packs",
+    )
 
-    if added_shader_count > 0 and removed_shader_count > 0:
-        lines.append("Updated shaderpack lineup.")
-    elif added_shader_count > 0:
-        lines.append("Added shaderpacks.")
-    elif removed_shader_count > 0:
-        lines.append("Removed shaderpacks.")
+    _append_added_removed_summary(
+        lines,
+        added_shader_names,
+        removed_shader_names,
+        singular_label="shaderpack",
+        plural_label="shaderpacks",
+    )
 
     if not lines:
         lines.append("Maintenance update.")
