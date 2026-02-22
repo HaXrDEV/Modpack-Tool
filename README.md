@@ -50,6 +50,7 @@ You can enable automated migration in `settings.yml`:
 - `migration_target_minecraft`: Target Minecraft version.
 - `migration_target_fabric`: Optional target Fabric loader version.
 - `migration_mod_loader`: Loader used for compatibility checks (default: `fabric`).
+- `alpha_update_policy`: `prompt` asks before allowing non-alpha mods to move to alpha; `always_skip` always blocks that move.
 - `migration_update_all_mods`: Runs `packwiz update --all -y` after changing MC version.
 - `migration_disable_incompatible_mods`: Disables mods that do not have a target-compatible update.
 

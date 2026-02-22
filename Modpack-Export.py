@@ -565,9 +565,264 @@ def get_pack_update_constraints():
     return [game_version], loaders
 
 
+def infer_release_channel_from_metadata(mod_toml):
+    metadata = " ".join(
+        [
+            str(mod_toml.get("filename", "")),
+            str(mod_toml.get("download", {}).get("url", "")),
+        ]
+    ).lower()
+    if "alpha" in metadata:
+        return "alpha"
+    if "beta" in metadata:
+        return "beta"
+    return "release"
+
+
+def fetch_modrinth_version_by_id(version_id, version_cache):
+    version_id = str(version_id or "").strip()
+    if not version_id:
+        return None
+    if version_id in version_cache:
+        return version_cache[version_id]
+
+    try:
+        response = requests.get(f"{modrinth_api_base}/version/{version_id}", timeout=20)
+        response.raise_for_status()
+        version_cache[version_id] = response.json()
+    except Exception as ex:
+        print(f"[Update] Failed to fetch Modrinth version '{version_id}': {ex}")
+        version_cache[version_id] = None
+
+    return version_cache[version_id]
+
+
+def fetch_modrinth_project_versions(project_id, game_versions, loaders, project_versions_cache):
+    project_id = str(project_id or "").strip()
+    if not project_id:
+        return []
+
+    cache_key = (project_id, tuple(game_versions), tuple(loaders))
+    if cache_key in project_versions_cache:
+        return project_versions_cache[cache_key]
+
+    versions = []
+    try:
+        response = requests.get(
+            f"{modrinth_api_base}/project/{project_id}/version",
+            params={
+                "loaders": json.dumps(loaders),
+                "game_versions": json.dumps(game_versions),
+            },
+            timeout=20,
+        )
+        response.raise_for_status()
+        versions = response.json()
+    except Exception as ex:
+        print(f"[Update] Failed to fetch Modrinth versions for project '{project_id}': {ex}")
+
+    project_versions_cache[cache_key] = versions
+    return versions
+
+
+def get_modrinth_version_type(mod_toml, version_cache):
+    version_id = mod_toml.get("update", {}).get("modrinth", {}).get("version")
+    version_payload = fetch_modrinth_version_by_id(version_id, version_cache)
+    if version_payload:
+        version_type = str(version_payload.get("version_type", "")).lower().strip()
+        if version_type in ("release", "beta", "alpha"):
+            return version_type
+    return infer_release_channel_from_metadata(mod_toml)
+
+
+def get_allowed_update_channels(current_channel):
+    if str(current_channel).lower() == "alpha":
+        return {"release", "beta", "alpha"}
+    return {"release", "beta"}
+
+
+def get_alpha_update_policy():
+    raw_policy = str(getattr(settings, "alpha_update_policy", "prompt")).strip().lower()
+    if raw_policy in ("always_skip", "skip", "never"):
+        return "always_skip"
+    if raw_policy in ("always_allow", "allow"):
+        return "always_allow"
+    return "prompt"
+
+
+def should_keep_alpha_update(mod_name, current_channel, log_prefix="[Update]"):
+    policy = get_alpha_update_policy()
+    if policy == "always_skip":
+        return False
+    if policy == "always_allow":
+        return True
+
+    answer = input(
+        f"{log_prefix} '{mod_name}' has only an alpha update available (current: {current_channel}). Allow alpha update? [N]: "
+    ).strip()
+    return answer in ("y", "Y", "yes", "Yes")
+
+
+def select_latest_allowed_modrinth_version(project_id, current_channel, game_versions, loaders, project_versions_cache):
+    allowed_channels = get_allowed_update_channels(current_channel)
+    versions = fetch_modrinth_project_versions(project_id, game_versions, loaders, project_versions_cache)
+    for version_payload in versions:
+        version_type = str(version_payload.get("version_type", "")).lower().strip()
+        if version_type in allowed_channels:
+            return version_payload
+    return None
+
+
+def select_modrinth_primary_file(version_payload):
+    files = list(version_payload.get("files", []) or [])
+    if not files:
+        return None
+    for file_payload in files:
+        if bool(file_payload.get("primary", False)):
+            return file_payload
+    return files[0]
+
+
+def apply_modrinth_version_to_mod_toml(mod_toml, version_payload):
+    target_version_id = str(version_payload.get("id", "")).strip()
+    if not target_version_id:
+        return False
+
+    primary_file = select_modrinth_primary_file(version_payload)
+    if not primary_file:
+        return False
+
+    hashes = primary_file.get("hashes", {}) or {}
+    hash_format = ""
+    hash_value = ""
+    if "sha512" in hashes:
+        hash_format = "sha512"
+        hash_value = str(hashes["sha512"])
+    elif "sha1" in hashes:
+        hash_format = "sha1"
+        hash_value = str(hashes["sha1"])
+
+    download_url = str(primary_file.get("url", "")).strip()
+    filename = str(primary_file.get("filename", "")).strip()
+    if not download_url or not filename or not hash_format or not hash_value:
+        return False
+
+    mod_toml["filename"] = filename
+    mod_toml.setdefault("download", {})
+    mod_toml["download"]["url"] = download_url
+    mod_toml["download"]["hash-format"] = hash_format
+    mod_toml["download"]["hash"] = hash_value
+    mod_toml.setdefault("update", {}).setdefault("modrinth", {})
+    mod_toml["update"]["modrinth"]["version"] = target_version_id
+    return True
+
+
+def enforce_release_channel_policy(previous_snapshot, log_prefix="[Update]", allowed_alpha_mod_files=None):
+    if not previous_snapshot:
+        return {"blocked_alpha": [], "retargeted": []}
+
+    blocked_alpha = []
+    retargeted = []
+    allowed_alpha_mod_files = set(allowed_alpha_mod_files or [])
+    version_cache = {}
+    project_versions_cache = {}
+    game_versions, loaders = get_pack_update_constraints()
+
+    os.chdir(mods_path)
+    for item in sorted(os.listdir()):
+        item_path = os.path.join(mods_path, item)
+        if not os.path.isfile(item_path) or not item.endswith(".toml"):
+            continue
+
+        previous_content = previous_snapshot.get(item)
+        if previous_content is None:
+            continue
+
+        try:
+            with open(item_path, "r", encoding="utf8") as f:
+                current_content = f.read()
+            if current_content == previous_content:
+                continue
+
+            previous_toml = toml.loads(previous_content)
+            current_toml = toml.loads(current_content)
+        except Exception as ex:
+            print(f"{log_prefix} Failed to inspect '{item}' for release-channel enforcement: {ex}")
+            continue
+
+        mod_name = str(current_toml.get("name", previous_toml.get("name", item)))
+        previous_modrinth_meta = previous_toml.get("update", {}).get("modrinth", {})
+        current_modrinth_meta = current_toml.get("update", {}).get("modrinth", {})
+        project_id = current_modrinth_meta.get("mod-id") or previous_modrinth_meta.get("mod-id")
+        previous_version_id = str(previous_modrinth_meta.get("version", "")).strip()
+        current_version_id = str(current_modrinth_meta.get("version", "")).strip()
+
+        if not project_id or not previous_version_id or not current_version_id or previous_version_id == current_version_id:
+            continue
+
+        previous_channel = get_modrinth_version_type(previous_toml, version_cache)
+        current_channel = get_modrinth_version_type(current_toml, version_cache)
+        if previous_channel == "alpha" or current_channel != "alpha":
+            continue
+        if item in allowed_alpha_mod_files:
+            continue
+        if should_keep_alpha_update(mod_name, previous_channel, log_prefix=log_prefix):
+            continue
+
+        replacement_version = select_latest_allowed_modrinth_version(
+            project_id=project_id,
+            current_channel=previous_channel,
+            game_versions=game_versions,
+            loaders=loaders,
+            project_versions_cache=project_versions_cache,
+        )
+        replacement_version_id = str((replacement_version or {}).get("id", "")).strip()
+
+        if (
+            replacement_version
+            and replacement_version_id
+            and replacement_version_id != current_version_id
+            and replacement_version_id != previous_version_id
+            and apply_modrinth_version_to_mod_toml(current_toml, replacement_version)
+        ):
+            try:
+                with open(item_path, "w", encoding="utf8") as f:
+                    toml.dump(current_toml, f)
+                target_label = str(
+                    replacement_version.get("version_number")
+                    or replacement_version.get("name")
+                    or replacement_version_id
+                )
+                retargeted.append((mod_name, target_label))
+                continue
+            except Exception as ex:
+                print(f"{log_prefix} Failed to retarget '{mod_name}' to non-alpha version: {ex}")
+
+        try:
+            with open(item_path, "w", encoding="utf8") as f:
+                f.write(previous_content)
+            blocked_alpha.append(mod_name)
+        except Exception as ex:
+            print(f"{log_prefix} Failed to rollback disallowed alpha update for '{mod_name}': {ex}")
+
+    os.chdir(packwiz_path)
+
+    if blocked_alpha:
+        print(f"{log_prefix} Blocked {len(blocked_alpha)} disallowed alpha updates.")
+        print(f"{log_prefix} Reverted: {', '.join(blocked_alpha)}")
+    if retargeted:
+        retargeted_labels = [f"{name} -> {target}" for name, target in retargeted]
+        print(f"{log_prefix} Redirected {len(retargeted)} updates to beta/release versions.")
+        print(f"{log_prefix} Redirected: {', '.join(retargeted_labels)}")
+
+    return {"blocked_alpha": blocked_alpha, "retargeted": retargeted}
+
+
 def find_pinned_mods_with_available_updates():
     update_candidates = []
     game_versions, loaders = get_pack_update_constraints()
+    version_cache = {}
+    project_versions_cache = {}
 
     os.chdir(mods_path)
     for item in sorted(os.listdir()):
@@ -591,33 +846,64 @@ def find_pinned_mods_with_available_updates():
                 print(f"[Update] Skipping pinned mod '{mod_name}' (unsupported update source).")
                 continue
 
-            response = requests.get(
-                f"{modrinth_api_base}/project/{project_id}/version",
-                params={
-                    "loaders": json.dumps(loaders),
-                    "game_versions": json.dumps(game_versions),
-                },
-                timeout=20,
+            current_channel = get_modrinth_version_type(mod_toml, version_cache)
+            project_versions = fetch_modrinth_project_versions(
+                project_id=project_id,
+                game_versions=game_versions,
+                loaders=loaders,
+                project_versions_cache=project_versions_cache,
             )
-            response.raise_for_status()
-            versions = response.json()
-            if not versions:
+            if not project_versions:
                 continue
 
-            latest = versions[0]
-            latest_version_id = str(latest.get("id", ""))
-            if not latest_version_id or latest_version_id == str(current_version_id):
+            latest_any = project_versions[0]
+            latest_any_id = str(latest_any.get("id", ""))
+            latest_any_type = str(latest_any.get("version_type", "")).strip().lower()
+            latest_allowed = select_latest_allowed_modrinth_version(
+                project_id=project_id,
+                current_channel=current_channel,
+                game_versions=game_versions,
+                loaders=loaders,
+                project_versions_cache=project_versions_cache,
+            )
+            if latest_allowed:
+                latest_version_id = str(latest_allowed.get("id", ""))
+                if latest_version_id and latest_version_id != str(current_version_id):
+                    update_candidates.append(
+                        {
+                            "file": item,
+                            "name": mod_name,
+                            "current_version_id": str(current_version_id),
+                            "latest_version_id": latest_version_id,
+                            "latest_version_label": str(
+                                latest_allowed.get("version_number") or latest_allowed.get("name") or latest_version_id
+                            ),
+                            "latest_version_type": str(latest_allowed.get("version_type", "")).strip().lower(),
+                            "requires_alpha_consent": False,
+                        }
+                    )
                 continue
 
-            update_candidates.append(
-                {
-                    "file": item,
-                    "name": mod_name,
-                    "current_version_id": str(current_version_id),
-                    "latest_version_id": latest_version_id,
-                    "latest_version_label": str(latest.get("version_number") or latest.get("name") or latest_version_id),
-                }
-            )
+            if (
+                latest_any_id
+                and latest_any_id != str(current_version_id)
+                and latest_any_type == "alpha"
+                and current_channel != "alpha"
+                and get_alpha_update_policy() != "always_skip"
+            ):
+                update_candidates.append(
+                    {
+                        "file": item,
+                        "name": mod_name,
+                        "current_version_id": str(current_version_id),
+                        "latest_version_id": latest_any_id,
+                        "latest_version_label": str(
+                            latest_any.get("version_number") or latest_any.get("name") or latest_any_id
+                        ),
+                        "latest_version_type": latest_any_type,
+                        "requires_alpha_consent": True,
+                    }
+                )
         except Exception as ex:
             print(f"[Update] Failed to check pinned mod '{item}': {ex}")
 
@@ -627,15 +913,25 @@ def find_pinned_mods_with_available_updates():
 
 def prompt_for_pinned_mod_updates(update_candidates):
     selected_files = []
+    approved_alpha_files = []
     for candidate in update_candidates:
         mod_name = candidate["name"]
         latest_label = candidate["latest_version_label"]
-        answer = input(
-            f"[PackWiz] Pinned mod '{mod_name}' has an update available ({latest_label}). Update it and keep it pinned? [N]: "
-        ).strip()
+        latest_type = str(candidate.get("latest_version_type", "")).strip()
+        latest_type_text = f", {latest_type}" if latest_type else ""
+        if bool(candidate.get("requires_alpha_consent", False)):
+            answer = input(
+                f"[PackWiz] Pinned mod '{mod_name}' only has an alpha update available ({latest_label}{latest_type_text}). Update it and keep it pinned? [N]: "
+            ).strip()
+        else:
+            answer = input(
+                f"[PackWiz] Pinned mod '{mod_name}' has an update available ({latest_label}{latest_type_text}). Update it and keep it pinned? [N]: "
+            ).strip()
         if answer in ("y", "Y", "yes", "Yes"):
             selected_files.append(candidate["file"])
-    return selected_files
+            if bool(candidate.get("requires_alpha_consent", False)):
+                approved_alpha_files.append(candidate["file"])
+    return selected_files, approved_alpha_files
 
 
 def set_pin_state_for_mod_files(mod_files, should_pin):
@@ -761,7 +1057,9 @@ def migrate_minecraft_version(
 
     subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
     if update_all_mods:
+        previous_snapshot = snapshot_mod_toml_content()
         subprocess.call(f"{packwiz_exe_path} update --all -y", shell=True)
+        enforce_release_channel_policy(previous_snapshot, log_prefix="[Migration]")
         subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
 
     disabled_mods = []
@@ -1839,6 +2137,7 @@ class Settings:
     migration_target_minecraft: str = ""
     migration_target_fabric: str = ""
     migration_mod_loader: str = "fabric"
+    alpha_update_policy: str = "prompt"
     bump_target_version: str = ""
     auto_summary_provider: str = "ollama"
     auto_summary_model: str = "qwen3:4b-instruct"
@@ -2254,8 +2553,9 @@ def main():
 
             pinned_updates = find_pinned_mods_with_available_updates()
             temp_unpinned_mod_files = []
+            allowed_alpha_mod_files = []
             if pinned_updates:
-                selected_pinned_mod_files = prompt_for_pinned_mod_updates(pinned_updates)
+                selected_pinned_mod_files, allowed_alpha_mod_files = prompt_for_pinned_mod_updates(pinned_updates)
                 if selected_pinned_mod_files:
                     temp_unpinned_mod_files = set_pin_state_for_mod_files(selected_pinned_mod_files, should_pin=False)
                     if temp_unpinned_mod_files:
@@ -2270,6 +2570,11 @@ def main():
                         subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
                         print(f"[PackWiz] Re-pinned {len(repinned_mod_files)} pinned mods after update.")
 
+            enforce_release_channel_policy(
+                previous_snapshot,
+                log_prefix="[Update]",
+                allowed_alpha_mod_files=allowed_alpha_mod_files,
+            )
             subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
             print("[PackWiz] Mods updated.")
 

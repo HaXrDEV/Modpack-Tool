@@ -19,6 +19,7 @@ migrate_minecraft_version: False
 migration_target_minecraft: "" # Example: "1.21.12"
 migration_target_fabric: "" # Optional. Leave empty to keep current Fabric loader version.
 migration_mod_loader: "fabric"
+alpha_update_policy: "prompt" # "prompt" or "always_skip"
 migration_update_all_mods: True
 migration_disable_incompatible_mods: True
 auto_generate_update_overview: False
