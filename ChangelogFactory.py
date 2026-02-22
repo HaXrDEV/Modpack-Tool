@@ -1,4 +1,6 @@
 import os
+import hashlib
+import difflib
 
 from ruamel.yaml.error import YAMLError
 
@@ -146,9 +148,11 @@ class ChangelogFactory:
         previous_version_path = os.path.join(tempgit_path, str(previous_version))
         previous_mods_path = os.path.join(previous_version_path, "mods")
         previous_resourcepacks_path = os.path.join(previous_version_path, "resourcepacks")
+        previous_config_path = os.path.join(previous_version_path, "config")
 
         current_mods_path = os.path.join(packwiz_path, "mods")
         current_resourcepacks_path = os.path.join(packwiz_path, "resourcepacks")
+        current_config_path = os.path.join(packwiz_path, "config")
 
         if not os.path.isdir(previous_mods_path) or not os.path.isdir(previous_resourcepacks_path):
             return None
@@ -156,6 +160,10 @@ class ChangelogFactory:
         mod_differences = self.compare_toml_files(previous_mods_path, current_mods_path)
         resourcepack_differences = self.compare_toml_files(previous_resourcepacks_path, current_resourcepacks_path)
         mod_addition_breakdown = self.get_mod_addition_breakdown(previous_mods_path, current_mods_path)
+        if os.path.isdir(previous_config_path) and os.path.isdir(current_config_path):
+            config_differences = self.compare_directory_files(previous_config_path, current_config_path)
+        else:
+            config_differences = {"added": [], "removed": [], "modified": []}
 
         return {
             "previous_version": previous_version,
@@ -164,6 +172,108 @@ class ChangelogFactory:
             "mod_differences": mod_differences,
             "resourcepack_differences": resourcepack_differences,
             "mod_addition_breakdown": mod_addition_breakdown,
+            "config_differences": config_differences,
+        }
+
+    def compare_directory_files(self, previous_dir, current_dir):
+        line_diff_extensions = {
+            ".json",
+            ".json5",
+            ".yaml",
+            ".yml",
+            ".toml",
+            ".cfg",
+            ".conf",
+            ".ini",
+            ".properties",
+            ".txt",
+        }
+
+        def _is_excluded_config_path(relative_path):
+            normalized = str(relative_path or "").replace("\\", "/").lower()
+            filename = os.path.basename(normalized)
+            stem, _ = os.path.splitext(filename)
+            # Exclude Better Compatibility Checker config changes from changelog generation.
+            return stem == "bcc" or "/bcc/" in normalized
+
+        def _collect_state(base_dir):
+            state = {}
+            for root, _, files in os.walk(base_dir):
+                for filename in files:
+                    absolute_path = os.path.join(root, filename)
+                    relative_path = os.path.relpath(absolute_path, base_dir).replace("\\", "/")
+                    if _is_excluded_config_path(relative_path):
+                        continue
+                    try:
+                        with open(absolute_path, "rb") as f:
+                            file_hash = hashlib.sha256(f.read()).hexdigest()
+                        state[relative_path] = file_hash
+                    except OSError:
+                        continue
+            return state
+
+        def _collect_line_diff_for_file(relative_path):
+            _, ext = os.path.splitext(relative_path.lower())
+            if ext not in line_diff_extensions:
+                return None
+
+            previous_abs = os.path.join(previous_dir, relative_path)
+            current_abs = os.path.join(current_dir, relative_path)
+            try:
+                with open(previous_abs, "r", encoding="utf-8", errors="replace") as f_prev:
+                    old_lines = f_prev.read().splitlines()
+                with open(current_abs, "r", encoding="utf-8", errors="replace") as f_cur:
+                    new_lines = f_cur.read().splitlines()
+            except OSError:
+                return None
+
+            # Keep only concrete changes and cap payload size.
+            removed_lines = []
+            added_lines = []
+            for diff_line in difflib.ndiff(old_lines, new_lines):
+                if diff_line.startswith("- "):
+                    removed_lines.append(diff_line[2:].strip())
+                elif diff_line.startswith("+ "):
+                    added_lines.append(diff_line[2:].strip())
+
+            removed_lines = [line for line in removed_lines if line][:20]
+            added_lines = [line for line in added_lines if line][:20]
+            if not removed_lines and not added_lines:
+                return None
+            return {
+                "path": relative_path,
+                "removed_lines": removed_lines,
+                "added_lines": added_lines,
+            }
+
+        previous_state = _collect_state(previous_dir)
+        current_state = _collect_state(current_dir)
+
+        previous_paths = set(previous_state.keys())
+        current_paths = set(current_state.keys())
+
+        added = sorted(current_paths - previous_paths, key=lambda x: x.lower())
+        removed = sorted(previous_paths - current_paths, key=lambda x: x.lower())
+        modified = sorted(
+            [
+                rel_path
+                for rel_path in (current_paths & previous_paths)
+                if current_state[rel_path] != previous_state[rel_path]
+            ],
+            key=lambda x: x.lower(),
+        )
+
+        modified_line_diffs = []
+        for rel_path in modified:
+            line_diff = _collect_line_diff_for_file(rel_path)
+            if line_diff:
+                modified_line_diffs.append(line_diff)
+
+        return {
+            "added": added,
+            "removed": removed,
+            "modified": modified,
+            "modified_line_diffs": modified_line_diffs,
         }
 
     def _load_toml_state(self, input_dir):

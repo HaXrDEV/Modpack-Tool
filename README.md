@@ -44,19 +44,27 @@ When enabled, the tool will:
 2. Refresh and update mods with Packwiz.
 3. Disable incompatible mods by setting `side = "...(disabled)"` in their `.toml` entries.
 
-## Auto-generated changelog summary (small LLM)
+## Auto-generated changelog text
 
-The export flow can now auto-generate `Update overview` in `Changelogs/<version>+<mc_version>.yml` using existing diff data (added/removed/updated mods and resource packs).
+The export flow can auto-populate changelog fields in `Changelogs/<version>+<mc_version>.yml`:
+
+- `Update overview` is now fully deterministic and generated from local diff data.
+- `Config Changes` can be generated with an LLM from config file diffs.
 
 ### Settings
 
-- `auto_generate_update_overview`: Enables automatic summary generation during export.
+- `auto_generate_update_overview`: Enables deterministic `Update overview` generation during export.
 - `auto_summary_overwrite_existing`: Overwrites existing `Update overview` when `true`.
-- `auto_summary_provider`: Provider name (`ollama` currently supported).
-- `auto_summary_model`: Model used by Ollama (default: `qwen3:4b-instruct`).
-- `auto_summary_endpoint`: Ollama generate endpoint (default: `http://127.0.0.1:11434/api/generate`).
-- `auto_summary_timeout_seconds`: HTTP timeout for the model call.
-- `auto_summary_max_items`: Max diff items per category included in the prompt/fallback summary.
+- `auto_generate_config_changes`: Enables LLM generation for `Config Changes`.
+- `auto_config_overwrite_existing`: Overwrites existing `Config Changes` when `true`.
+- `auto_config_provider`: Provider name (`ollama` currently supported).
+- `auto_config_model`: Model used by Ollama (default: `qwen3:4b-instruct`).
+- `auto_config_endpoint`: Ollama generate endpoint (default: `http://127.0.0.1:11434/api/generate`).
+- `auto_config_timeout_seconds`: HTTP timeout for the model call.
+- `auto_config_max_items`: Max config diff items per category included in the prompt.
+- `auto_config_max_lines`: Max output bullet lines written to `Config Changes`.
+
+`Config Changes` generation uses line-level diffs from modified files (old/new lines) so the model can summarize concrete option/value changes instead of only reporting that a file changed.
 
 ### Requirements
 
@@ -66,4 +74,4 @@ Run Ollama locally and pull a small model, for example:
 ollama pull qwen3:4b-instruct
 ```
 
-If the model call fails or no model is available, the tool does not write `Update overview` and prints a notice instead.
+If the model call fails or no model is available, the tool does not write `Config Changes` and prints a notice instead.

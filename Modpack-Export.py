@@ -104,16 +104,20 @@ def ensure_migration_targets(settings):
 
 
 def configure_actions_via_menu(settings):
-    def prompt_update_overview_overwrite(force_prompt=False):
-        should_prompt = force_prompt or settings.auto_generate_update_overview or settings.generate_update_summary_only
-        if not should_prompt:
-            return
+    def prompt_changelog_autogen_overwrite(force_prompt=False):
+        should_prompt_overview = force_prompt or settings.auto_generate_update_overview or settings.generate_update_summary_only
+        if should_prompt_overview:
+            default_label = "Y" if settings.auto_summary_overwrite_existing else "N"
+            answer = input(f"Override existing 'Update overview' for this run? [{default_label}]: ").strip()
+            if answer:
+                settings.auto_summary_overwrite_existing = answer.lower() in ("y", "yes")
 
-        default_label = "Y" if settings.auto_summary_overwrite_existing else "N"
-        answer = input(f"Override existing 'Update overview' for this run? [{default_label}]: ").strip()
-        if not answer:
-            return
-        settings.auto_summary_overwrite_existing = answer.lower() in ("y", "yes")
+        should_prompt_config = force_prompt or settings.auto_generate_config_changes
+        if should_prompt_config:
+            default_label = "Y" if settings.auto_config_overwrite_existing else "N"
+            answer = input(f"Override existing 'Config Changes' for this run? [{default_label}]: ").strip()
+            if answer:
+                settings.auto_config_overwrite_existing = answer.lower() in ("y", "yes")
 
     print(
         """
@@ -154,30 +158,30 @@ Choose action:
             settings_yml_local = yaml.load(s_file) or {}
         settings.export_client = bool(settings_yml_local.get("export_client", False))
         settings.export_server = determine_server_export()
-        prompt_update_overview_overwrite()
+        prompt_changelog_autogen_overwrite()
         return True
 
     if choice == "2":
         settings.migrate_minecraft_version = True
         ensure_migration_targets(settings)
-        prompt_update_overview_overwrite()
+        prompt_changelog_autogen_overwrite()
         return True
 
     if choice == "3":
         settings.export_client = True
-        prompt_update_overview_overwrite()
+        prompt_changelog_autogen_overwrite()
         return True
 
     if choice == "4":
         settings.export_server = True
-        prompt_update_overview_overwrite()
+        prompt_changelog_autogen_overwrite()
         return True
 
     if choice == "5":
         settings.migrate_minecraft_version = True
         settings.export_client = True
         ensure_migration_targets(settings)
-        prompt_update_overview_overwrite()
+        prompt_changelog_autogen_overwrite()
         return True
 
     if choice == "6":
@@ -185,7 +189,7 @@ Choose action:
         settings.export_client = True
         settings.export_server = True
         ensure_migration_targets(settings)
-        prompt_update_overview_overwrite()
+        prompt_changelog_autogen_overwrite()
         return True
 
     if choice == "7":
@@ -212,7 +216,7 @@ Choose action:
     if choice == "11":
         settings.refresh_only = True
         settings.generate_update_summary_only = True
-        prompt_update_overview_overwrite(force_prompt=True)
+        prompt_changelog_autogen_overwrite(force_prompt=True)
         return True
 
     print(f"Unknown choice '{choice}'. Falling back to configured workflow.")
@@ -220,7 +224,7 @@ Choose action:
         settings_yml_local = yaml.load(s_file) or {}
     settings.export_client = bool(settings_yml_local.get("export_client", False))
     settings.export_server = determine_server_export()
-    prompt_update_overview_overwrite()
+    prompt_changelog_autogen_overwrite()
     return True
 
 
@@ -599,172 +603,220 @@ def _extract_modified_names(modified_items):
     return [str(item[0]) for item in modified_items if isinstance(item, (list, tuple)) and item]
 
 
-def normalize_llm_summary_to_bullets(raw_summary: str):
+def generate_deterministic_update_overview(diff_payload, migration_mode=False) -> List[str]:
+    mod_diff = diff_payload.get("mod_differences") or {}
+    res_diff = diff_payload.get("resourcepack_differences") or {}
+    mod_addition_breakdown = diff_payload.get("mod_addition_breakdown") or {}
+
+    new_mod_count = len(mod_addition_breakdown.get("newly_added", []))
+    reenabled_mod_count = len(mod_addition_breakdown.get("reenabled_from_disabled", []))
+    removed_mod_count = len(mod_diff.get("removed", []))
+    updated_mod_count = len(_extract_modified_names(mod_diff.get("modified", [])))
+
+    added_res_count = len(res_diff.get("added", []))
+    removed_res_count = len(res_diff.get("removed", []))
+    updated_res_count = len(_extract_modified_names(res_diff.get("modified", [])))
+
     lines = []
-    for raw_line in str(raw_summary or "").splitlines():
+    if migration_mode:
+        lines.append(f"Updated to Minecraft {diff_payload.get('mc_version')}.")
+
+    if updated_mod_count > 0 and updated_res_count > 0:
+        lines.append("Updated mods & resource packs.")
+    elif updated_mod_count > 0:
+        lines.append("Updated mods.")
+    elif updated_res_count > 0:
+        lines.append("Updated resource packs.")
+
+    if new_mod_count > 0:
+        lines.append("Added new mods.")
+    if reenabled_mod_count > 0:
+        lines.append("Re-added some mods that have become available for this version.")
+    if removed_mod_count > 0:
+        if migration_mode:
+            lines.append("Temporarily removed incompatible mods.")
+        else:
+            lines.append("Removed mods.")
+
+    if added_res_count > 0 and removed_res_count > 0:
+        lines.append("Updated resource pack lineup.")
+    elif added_res_count > 0:
+        lines.append("Added resource packs.")
+    elif removed_res_count > 0:
+        lines.append("Removed resource packs.")
+
+    if not lines:
+        lines.append("Maintenance update.")
+
+    # Keep stable order but remove accidental duplicates.
+    unique_lines = []
+    seen = set()
+    for line in lines:
+        key = line.strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_lines.append(line)
+    return unique_lines
+
+
+def _normalize_llm_text_to_bullets(raw_text: str, max_lines: int):
+    lines = []
+    for raw_line in str(raw_text or "").splitlines():
         line = raw_line.strip()
         if not line:
             continue
         line = re.sub(r"^[\-\*\u2022]\s*", "", line)
         line = re.sub(r"^\d+[.)]\s*", "", line)
         if line:
-            lines.append(line.rstrip(".") + ".")
-    return lines
+            normalized = line.rstrip(".")
+            lines.append(f"- {normalized}.")
+    return lines[:max_lines]
 
 
-def filter_summary_lines_for_context(
-    lines,
-    migration_mode=False,
-    has_true_additions=True,
-    has_reenabled=False,
-    true_addition_names=None,
-):
-    true_addition_names = [str(name).lower() for name in (true_addition_names or [])]
-    has_crash_assistant_addition = any("crash assistant" in name for name in true_addition_names)
+def derive_mod_label_from_config_path(path: str) -> str:
+    raw_path = str(path or "").replace("\\", "/").strip("/")
+    if not raw_path:
+        return "Unknown"
 
-    filtered = []
-    for line in lines:
-        normalized = line.strip()
-        if not migration_mode and re.search(r"^updated to minecraft\b", normalized, flags=re.IGNORECASE):
-            continue
-        if not has_true_additions and re.search(r"^added\b", normalized, flags=re.IGNORECASE):
-            continue
-        if not has_reenabled and re.search(r"^re-?added\b", normalized, flags=re.IGNORECASE):
-            continue
-        if not has_crash_assistant_addition and re.search(r"\bcrash[- ]report", normalized, flags=re.IGNORECASE):
-            continue
-        filtered.append(line)
-    return filtered
+    parts = [p for p in raw_path.split("/") if p]
+    filename = parts[-1] if parts else raw_path
+    stem = os.path.splitext(filename)[0]
+    normalized = re.sub(r"[_\-]+", " ", stem).strip()
+    if not normalized:
+        normalized = stem
+    return normalized.title()
 
 
-def build_llm_prompt_from_diff(diff_payload, max_items=8, migration_mode=False):
-    mod_diff = diff_payload.get("mod_differences") or {}
-    res_diff = diff_payload.get("resourcepack_differences") or {}
-    mod_addition_breakdown = diff_payload.get("mod_addition_breakdown") or {}
-    true_additions = mod_addition_breakdown.get("newly_added", [])
-    reenabled_mods = mod_addition_breakdown.get("reenabled_from_disabled", [])
+def build_config_changes_prompt(diff_payload, max_items=12):
+    config_diff = diff_payload.get("config_differences") or {}
+    modified_line_diffs = list(config_diff.get("modified_line_diffs", []))
 
-    mod_changes_total = (
-        len(true_additions)
-        + len(reenabled_mods)
-        + len(mod_diff.get("removed", []))
-        + len(_extract_modified_names(mod_diff.get("modified", [])))
-    )
-    res_changes_total = (
-        len(res_diff.get("added", []))
-        + len(res_diff.get("removed", []))
-        + len(_extract_modified_names(res_diff.get("modified", [])))
-    )
+    def _render_line_changes(items):
+        if not items:
+            return "none"
+        rendered = []
+        for entry in items[:max_items]:
+            rendered.append(f"File: {entry.get('path')}")
+            removed_lines = entry.get("removed_lines", [])[:8]
+            added_lines = entry.get("added_lines", [])[:8]
+            if removed_lines:
+                rendered.append("Removed lines:")
+                rendered.extend(f"- {line}" for line in removed_lines)
+            if added_lines:
+                rendered.append("Added lines:")
+                rendered.extend(f"- {line}" for line in added_lines)
+            rendered.append("")
+        return "\n".join(rendered).strip()
 
-    def _change_level(total):
-        if total <= 2:
-            return "low"
-        if total <= 12:
-            return "moderate"
-        return "high"
-
-    style_examples = (
-        "Style examples from previous logs:\n"
-        "Example A:\n"
-        "- Updated mods & resource packs.\n"
-        "- Re-added some mods that have become available.\n\n"
-        "Example B:\n"
-        "- Updated to Minecraft 1.21.11.\n"
-        "- Removed mods that are not yet compatible.\n\n"
-        "Example C:\n"
-        "- Updated mods & resource packs.\n"
-        "- Re-added mods that have been updated to this version.\n\n"
-        "Example D:\n"
-        "- Initial migration update for this Minecraft version.\n"
-        "- Temporarily removed incompatible mods.\n"
-    )
-
-    migration_rule = (
-        "Migration mode: yes. You may mention temporary removals due to compatibility.\n"
-        "Migration mode: yes. You may mention updating to a new Minecraft version.\n"
-        if migration_mode
-        else "Migration mode: no. Do NOT mention removals due to compatibility/incompatibility.\n"
-        "Migration mode: no. Do NOT mention updating to a new Minecraft version.\n"
-    )
-
-    addition_rule = (
-        "Use 'Added ...' only if true new additions exist.\n"
-        "Use 'Re-added ...' only for mods re-enabled from disabled state.\n"
-        "If there are only re-enabled mods, do not use 'Added ...'.\n"
-    )
+    def _render_path_to_label(items):
+        if not items:
+            return "none"
+        rendered = []
+        for entry in items[:max_items]:
+            path = str(entry.get("path", ""))
+            label = derive_mod_label_from_config_path(path)
+            rendered.append(f"- {path} => {label}")
+        return "\n".join(rendered)
 
     return (
-        "You write 'Update Overview' bullets for a Minecraft modpack changelog.\n"
-        "Match this style used in previous logs: short, past tense, plain wording.\n"
-        "Output exactly 2-4 bullet points and nothing else.\n"
-        "Each bullet must be one sentence, max 100 chars.\n"
-        "Do not include exact counts.\n"
-        "Do not copy example lines verbatim.\n"
-        "No fluffy wording. No marketing tone. No markdown headers. Avoid wording like 'improved gameplay', 'enhanced experience' or similar.\n"
-        "Prefer lines like:\n"
-        "- Updated mods & resource packs.\n"
-        "- Re-added mods that have become available for this version.\n"
-        "- Updated to Minecraft <version>.\n\n"
-        + migration_rule +
-        "\n"
-        + addition_rule +
-        "\n"
-        + style_examples +
-        "\n"
+        "Write concise end-user facing config change bullets for a Minecraft modpack changelog.\n"
+        "Output only bullet lines. Each line must start with '- '.\n"
+        "Keep wording factual and short. No markdown headers and no counts.\n"
+        "Summarize what values or options changed, based on the changed lines.\n"
+        "Do not write generic lines like 'updated config files'.\n"
+        "Do not write about added/removed config files.\n"
+        "Only summarize in-file setting/value changes from modified files.\n"
+        "Each bullet must end with ': [Mod Name]'.\n"
+        "Use the file-to-mod mapping below when possible.\n"
+        "Preferred style examples:\n"
+        "- Changed adsEnabled to \"false\": [Resourcify]\n"
+        "- Changed button URL to use the new wiki format: [Simple Discord RPC]\n"
+        "- Changed \"coloredText\" to false: [Breakneck Menu]\n\n"
         f"Current version: {diff_payload.get('current_version')}\n"
         f"Compared from: {diff_payload.get('previous_version')}\n"
-        f"Minecraft: {diff_payload.get('mc_version')}\n"
-        f"Mod changes level: {_change_level(mod_changes_total)}\n"
-        f"Resource pack changes level: {_change_level(res_changes_total)}\n"
-        f"Has true new mods added: {'yes' if true_additions else 'no'}\n"
-        f"Has mods re-enabled from disabled: {'yes' if reenabled_mods else 'no'}\n"
-        f"Has mod removals: {'yes' if mod_diff.get('removed') else 'no'}\n"
-        f"Has resource pack additions/removals: {'yes' if (res_diff.get('added') or res_diff.get('removed')) else 'no'}\n"
+        f"Minecraft: {diff_payload.get('mc_version')}\n\n"
+        "File-to-mod mapping:\n"
+        f"{_render_path_to_label(modified_line_diffs)}\n\n"
+        "Modified config line changes (old/new):\n"
+        f"{_render_line_changes(modified_line_diffs)}\n"
     )
 
 
-def generate_update_overview_with_small_llm(diff_payload, settings) -> Optional[List[str]]:
-    if str(settings.auto_summary_provider).lower() != "ollama":
-        print(f"[Changelog] Unsupported auto_summary_provider '{settings.auto_summary_provider}'.")
+def generate_config_changes_fallback_from_line_diffs(diff_payload, max_lines=8) -> str:
+    config_diff = diff_payload.get("config_differences") or {}
+    line_diffs = list(config_diff.get("modified_line_diffs", []))
+    bullets = []
+
+    for entry in line_diffs:
+        file_path = str(entry.get("path", "")).strip()
+        mod_label = derive_mod_label_from_config_path(file_path)
+        added_lines = entry.get("added_lines", [])
+        removed_lines = entry.get("removed_lines", [])
+        candidate_lines = list(added_lines) + list(removed_lines)
+
+        keys = []
+        for raw_line in candidate_lines:
+            line = str(raw_line).strip()
+            if not line or line.startswith(("#", "//", ";", "/*", "*")):
+                continue
+            key_match = re.match(r'^["\']?([A-Za-z0-9_.-]+)["\']?\s*[:=]', line)
+            if key_match:
+                key = key_match.group(1)
+                if key not in keys:
+                    keys.append(key)
+            if len(keys) >= 4:
+                break
+
+        if keys:
+            keys_str = ", ".join(keys)
+            bullets.append(f"- Changed {keys_str}: [{mod_label}].")
+        else:
+            bullets.append(f"- Updated config values: [{mod_label}].")
+        if len(bullets) >= max_lines:
+            break
+
+    return "\n".join(bullets)
+
+
+def generate_config_changes_with_llm(diff_payload, settings) -> Optional[str]:
+    if str(settings.auto_config_provider).lower() != "ollama":
+        print(f"[Changelog] Unsupported auto_config_provider '{settings.auto_config_provider}'.")
         return None
 
-    migration_mode = bool(settings.migrate_minecraft_version)
-    prompt = build_llm_prompt_from_diff(
+    prompt = build_config_changes_prompt(
         diff_payload,
-        max_items=settings.auto_summary_max_items,
-        migration_mode=migration_mode,
+        max_items=settings.auto_config_max_items,
     )
     try:
         response = requests.post(
-            settings.auto_summary_endpoint,
+            settings.auto_config_endpoint,
             json={
-                "model": settings.auto_summary_model,
+                "model": settings.auto_config_model,
                 "prompt": prompt,
                 "stream": False,
                 "options": {
-                    "temperature": 0.2,
-                    "num_predict": 220,
+                    "temperature": 0,
+                    "num_predict": 260,
                 },
             },
-            timeout=int(settings.auto_summary_timeout_seconds),
+            timeout=int(settings.auto_config_timeout_seconds),
         )
         response.raise_for_status()
         response_json = response.json()
-        parsed = normalize_llm_summary_to_bullets(response_json.get("response", ""))
-        mod_addition_breakdown = diff_payload.get("mod_addition_breakdown") or {}
-        parsed = filter_summary_lines_for_context(
-            parsed,
-            migration_mode=migration_mode,
-            has_true_additions=bool(mod_addition_breakdown.get("newly_added")),
-            has_reenabled=bool(mod_addition_breakdown.get("reenabled_from_disabled")),
-            true_addition_names=mod_addition_breakdown.get("newly_added", []),
+        bullet_lines = _normalize_llm_text_to_bullets(
+            response_json.get("response", ""),
+            max_lines=settings.auto_config_max_lines,
         )
-        if parsed:
-            return parsed[:5]
+        if bullet_lines:
+            return "\n".join(bullet_lines)
     except Exception as ex:
-        print(f"[Changelog] LLM summary generation failed: {ex}")
+        print(f"[Changelog] LLM config change generation failed: {ex}")
 
-    return None
+    return generate_config_changes_fallback_from_line_diffs(
+        diff_payload,
+        max_lines=settings.auto_config_max_lines,
+    )
 
 
 def maybe_generate_update_overview(changelog_path, diff_payload):
@@ -780,19 +832,48 @@ def maybe_generate_update_overview(changelog_path, diff_payload):
         print("[Changelog] 'Update overview' already exists. Skipping auto summary.")
         return
 
-    llm_summary = generate_update_overview_with_small_llm(diff_payload, settings)
-    if not llm_summary:
-        print(
-            "[Changelog] Skipping 'Update overview': "
-            "LLM summary was not generated (model/endpoint unavailable or returned empty output)."
-        )
-        return
-
-    changelog_yml["Update overview"] = llm_summary
+    summary_lines = generate_deterministic_update_overview(
+        diff_payload,
+        migration_mode=bool(settings.migrate_minecraft_version),
+    )
+    changelog_yml["Update overview"] = summary_lines
     with open(changelog_path, "w", encoding="utf-8") as f:
         yaml.dump(changelog_yml, f)
 
-    print(f"[Changelog] Auto-generated 'Update overview' in {os.path.basename(changelog_path)}.")
+    print(f"[Changelog] Wrote deterministic 'Update overview' in {os.path.basename(changelog_path)}.")
+
+
+def maybe_generate_config_changes(changelog_path, diff_payload):
+    if not diff_payload:
+        print("[Changelog] No diff payload available. Skipping config change generation.")
+        return
+
+    config_diff = diff_payload.get("config_differences") or {}
+    modified_line_diffs = list(config_diff.get("modified_line_diffs", []))
+    if not modified_line_diffs:
+        print("[Changelog] No in-file config line changes found. Skipping 'Config Changes'.")
+        return
+
+    with open(changelog_path, "r", encoding="utf-8") as f:
+        changelog_yml = yaml.load(f) or {}
+
+    existing_config_changes = changelog_yml.get("Config Changes")
+    existing_config_text = str(existing_config_changes or "").strip()
+    is_default_placeholder = existing_config_text in ("- : [mod], [Client]", "")
+    if existing_config_changes and not is_default_placeholder and not settings.auto_config_overwrite_existing:
+        print("[Changelog] 'Config Changes' already exists. Skipping auto generation.")
+        return
+
+    llm_config_changes = generate_config_changes_with_llm(diff_payload, settings)
+    if not llm_config_changes:
+        print("[Changelog] Skipping 'Config Changes': LLM output was empty or failed.")
+        return
+
+    changelog_yml["Config Changes"] = LiteralScalarString(llm_config_changes)
+    with open(changelog_path, "w", encoding="utf-8") as f:
+        yaml.dump(changelog_yml, f)
+
+    print(f"[Changelog] Auto-generated 'Config Changes' in {os.path.basename(changelog_path)}.")
 
 
 def download_missing_comparison_files():
@@ -809,9 +890,11 @@ def download_missing_comparison_files():
         if settings.breakneck_fixes and is_version_in_range(input_version, "4.0.0-beta.3", "4.4.0-beta.1"):
             packwiz_mods_folder = f"Packwiz/{tag_mc_ver}/mods"
             packwiz_resourcepacks_folder = f"Packwiz/{tag_mc_ver}/resourcepacks"
+            packwiz_config_folder = f"Packwiz/{tag_mc_ver}/config"
         else:
             packwiz_mods_folder = "Packwiz/mods"
             packwiz_resourcepacks_folder = "Packwiz/resourcepacks"
+            packwiz_config_folder = "Packwiz/config"
 
         local_downloader = AsyncGitHubDownloader(
             settings.repo_owner,
@@ -821,14 +904,20 @@ def download_missing_comparison_files():
         )
         await local_downloader.download_folder(packwiz_mods_folder, os.path.join(destination, "mods"))
         await local_downloader.download_folder(packwiz_resourcepacks_folder, os.path.join(destination, "resourcepacks"))
+        await local_downloader.download_folder(packwiz_config_folder, os.path.join(destination, "config"))
 
     for changelog in reversed(os.listdir(changelog_dir_path)):
         if changelog.endswith((".yml", ".yaml")):
             version = str(changelog_factory.get_changelog_value(changelog, "version"))
             tag_mc_ver = str(changelog_factory.get_changelog_value(changelog, "mc_version"))
             version_path = os.path.join(tempgit_path, version)
-            if version != pack_version and not os.path.exists(version_path):
-                os.makedirs(version_path)
+            missing_compare_data = (
+                not os.path.isdir(os.path.join(version_path, "mods"))
+                or not os.path.isdir(os.path.join(version_path, "resourcepacks"))
+                or not os.path.isdir(os.path.join(version_path, "config"))
+            )
+            if version != pack_version and (not os.path.exists(version_path) or missing_compare_data):
+                os.makedirs(version_path, exist_ok=True)
                 try:
                     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
                     asyncio.run(download_compare_files_async(version, version_path, tag_mc_ver))
@@ -836,7 +925,7 @@ def download_missing_comparison_files():
                     print(ex)
 
 
-def run_update_overview_generation():
+def run_changelog_auto_generation():
     os.chdir(git_path)
     changelog_path = os.path.join(changelog_dir_path, f"{pack_version}+{minecraft_version}.yml")
     if not os.path.isfile(changelog_path):
@@ -848,7 +937,10 @@ def run_update_overview_generation():
         tempgit_path=tempgit_path,
         packwiz_path=packwiz_path,
     )
-    maybe_generate_update_overview(changelog_path, diff_payload)
+    if settings.auto_generate_update_overview or settings.generate_update_summary_only:
+        maybe_generate_update_overview(changelog_path, diff_payload)
+    if settings.auto_generate_config_changes or settings.generate_update_summary_only:
+        maybe_generate_config_changes(changelog_path, diff_payload)
 
 
 def clear_stored_repository_data():
@@ -910,6 +1002,8 @@ class Settings:
     migration_update_all_mods: bool = True
     auto_generate_update_overview: bool = False
     auto_summary_overwrite_existing: bool = False
+    auto_generate_config_changes: bool = False
+    auto_config_overwrite_existing: bool = False
 
     # String settings
     bh_banner: str = ""
@@ -923,11 +1017,17 @@ class Settings:
     auto_summary_provider: str = "ollama"
     auto_summary_model: str = "qwen3:4b-instruct"
     auto_summary_endpoint: str = "http://127.0.0.1:11434/api/generate"
+    auto_config_provider: str = "ollama"
+    auto_config_model: str = "qwen3:4b-instruct"
+    auto_config_endpoint: str = "http://127.0.0.1:11434/api/generate"
 
     # List settings
     server_mods_remove_list: List[str] = None
     auto_summary_timeout_seconds: int = 45
     auto_summary_max_items: int = 8
+    auto_config_timeout_seconds: int = 45
+    auto_config_max_items: int = 12
+    auto_config_max_lines: int = 8
 
 
 def update_settings_from_dict(settings: Settings, settings_dict: dict):
@@ -987,8 +1087,8 @@ def main():
         #----------------------------------------
         # Auto-generate changelog update overview.
         #----------------------------------------
-        if settings.auto_generate_update_overview:
-            run_update_overview_generation()
+        if settings.auto_generate_update_overview or settings.auto_generate_config_changes:
+            run_changelog_auto_generation()
 
         #----------------------------------------
         # Generate CHANGELOG.md file.
@@ -1311,7 +1411,7 @@ def main():
             subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
         elif settings.generate_update_summary_only:
             download_missing_comparison_files()
-            run_update_overview_generation()
+            run_changelog_auto_generation()
         elif settings.update_mods_only:
             previous_snapshot = snapshot_mod_toml_content()
             subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
