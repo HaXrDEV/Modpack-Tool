@@ -548,6 +548,122 @@ def enable_mods_by_files(mod_files):
     return enabled_mods
 
 
+def get_pack_update_constraints():
+    try:
+        with open(os.path.join(packwiz_path, packwiz_manifest), "r", encoding="utf8") as f:
+            local_pack_toml = toml.load(f)
+    except Exception as ex:
+        print(f"[Update] Failed to read pack manifest for update constraints: {ex}")
+        return [str(minecraft_version)], ["fabric"]
+
+    versions = local_pack_toml.get("versions", {})
+    game_version = str(versions.get("minecraft", minecraft_version))
+    loader_order = ("fabric", "quilt", "forge", "neoforge")
+    loaders = [loader for loader in loader_order if versions.get(loader)]
+    if not loaders:
+        loaders = ["fabric"]
+    return [game_version], loaders
+
+
+def find_pinned_mods_with_available_updates():
+    update_candidates = []
+    game_versions, loaders = get_pack_update_constraints()
+
+    os.chdir(mods_path)
+    for item in sorted(os.listdir()):
+        item_path = os.path.join(mods_path, item)
+        if not os.path.isfile(item_path) or not item.endswith(".toml"):
+            continue
+
+        try:
+            with open(item_path, "r", encoding="utf8") as f:
+                mod_toml = toml.load(f)
+
+            if not bool(mod_toml.get("pin", False)):
+                continue
+
+            mod_name = str(mod_toml.get("name", item))
+            modrinth_meta = mod_toml.get("update", {}).get("modrinth", {})
+            project_id = modrinth_meta.get("mod-id")
+            current_version_id = modrinth_meta.get("version")
+
+            if not project_id or not current_version_id:
+                print(f"[Update] Skipping pinned mod '{mod_name}' (unsupported update source).")
+                continue
+
+            response = requests.get(
+                f"{modrinth_api_base}/project/{project_id}/version",
+                params={
+                    "loaders": json.dumps(loaders),
+                    "game_versions": json.dumps(game_versions),
+                },
+                timeout=20,
+            )
+            response.raise_for_status()
+            versions = response.json()
+            if not versions:
+                continue
+
+            latest = versions[0]
+            latest_version_id = str(latest.get("id", ""))
+            if not latest_version_id or latest_version_id == str(current_version_id):
+                continue
+
+            update_candidates.append(
+                {
+                    "file": item,
+                    "name": mod_name,
+                    "current_version_id": str(current_version_id),
+                    "latest_version_id": latest_version_id,
+                    "latest_version_label": str(latest.get("version_number") or latest.get("name") or latest_version_id),
+                }
+            )
+        except Exception as ex:
+            print(f"[Update] Failed to check pinned mod '{item}': {ex}")
+
+    os.chdir(packwiz_path)
+    return update_candidates
+
+
+def prompt_for_pinned_mod_updates(update_candidates):
+    selected_files = []
+    for candidate in update_candidates:
+        mod_name = candidate["name"]
+        latest_label = candidate["latest_version_label"]
+        answer = input(
+            f"[PackWiz] Pinned mod '{mod_name}' has an update available ({latest_label}). Update it and keep it pinned? [N]: "
+        ).strip()
+        if answer in ("y", "Y", "yes", "Yes"):
+            selected_files.append(candidate["file"])
+    return selected_files
+
+
+def set_pin_state_for_mod_files(mod_files, should_pin):
+    updated_files = []
+    os.chdir(mods_path)
+    for item in mod_files:
+        item_path = os.path.join(mods_path, item)
+        if not os.path.isfile(item_path) or not item.endswith(".toml"):
+            continue
+        try:
+            with open(item_path, "r", encoding="utf8") as f:
+                mod_toml = toml.load(f)
+
+            if should_pin:
+                mod_toml["pin"] = True
+            else:
+                mod_toml.pop("pin", None)
+
+            with open(item_path, "w", encoding="utf8") as f:
+                toml.dump(mod_toml, f)
+            updated_files.append(item)
+        except Exception as ex:
+            print(f"[Update] Failed to set pin state for '{item}': {ex}")
+
+    os.chdir(packwiz_path)
+    return updated_files
+
+
 def infer_compatibility_from_metadata(mod_toml, target_minecraft_version):
     target_minor = ".".join(target_minecraft_version.split(".", 2)[:2])
     metadata = " ".join([
@@ -2135,7 +2251,25 @@ def main():
         elif settings.update_mods_only:
             previous_snapshot = snapshot_mod_toml_content()
             subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
-            subprocess.call(f"{packwiz_exe_path} update --all -y", shell=True)
+
+            pinned_updates = find_pinned_mods_with_available_updates()
+            temp_unpinned_mod_files = []
+            if pinned_updates:
+                selected_pinned_mod_files = prompt_for_pinned_mod_updates(pinned_updates)
+                if selected_pinned_mod_files:
+                    temp_unpinned_mod_files = set_pin_state_for_mod_files(selected_pinned_mod_files, should_pin=False)
+                    if temp_unpinned_mod_files:
+                        subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
+
+            try:
+                subprocess.call(f"{packwiz_exe_path} update --all -y", shell=True)
+            finally:
+                if temp_unpinned_mod_files:
+                    repinned_mod_files = set_pin_state_for_mod_files(temp_unpinned_mod_files, should_pin=True)
+                    if repinned_mod_files:
+                        subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
+                        print(f"[PackWiz] Re-pinned {len(repinned_mod_files)} pinned mods after update.")
+
             subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
             print("[PackWiz] Mods updated.")
 
