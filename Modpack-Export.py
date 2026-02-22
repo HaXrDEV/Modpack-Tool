@@ -611,6 +611,7 @@ def _format_quoted_names(names):
 def generate_deterministic_update_overview(diff_payload, migration_mode=False) -> List[str]:
     mod_diff = diff_payload.get("mod_differences") or {}
     res_diff = diff_payload.get("resourcepack_differences") or {}
+    shader_diff = diff_payload.get("shaderpack_differences") or {}
     mod_addition_breakdown = diff_payload.get("mod_addition_breakdown") or {}
 
     new_mod_names = list(mod_addition_breakdown.get("newly_added", []))
@@ -625,6 +626,9 @@ def generate_deterministic_update_overview(diff_payload, migration_mode=False) -
     added_res_count = len(res_diff.get("added", []))
     removed_res_count = len(res_diff.get("removed", []))
     updated_res_count = len(_extract_modified_names(res_diff.get("modified", [])))
+    added_shader_count = len(shader_diff.get("added", []))
+    removed_shader_count = len(shader_diff.get("removed", []))
+    updated_shader_count = len(_extract_modified_names(shader_diff.get("modified", [])))
 
     lines = []
     if migration_mode:
@@ -648,12 +652,22 @@ def generate_deterministic_update_overview(diff_payload, migration_mode=False) -
         else:
             lines.append(f"Removed {_format_quoted_names(removed_mod_names)}.")
 
-    if updated_mod_count > 0 and updated_res_count > 0:
-        lines.append("Updated mods & resource packs.")
-    elif updated_mod_count > 0:
-        lines.append("Updated mods.")
-    elif updated_res_count > 0:
-        lines.append("Updated resource packs.")
+    updated_categories = []
+    if updated_mod_count > 0:
+        updated_categories.append("mods")
+    if updated_res_count > 0:
+        updated_categories.append("resource packs")
+    if updated_shader_count > 0:
+        updated_categories.append("shaderpacks")
+
+    if len(updated_categories) == 1:
+        lines.append(f"Updated {updated_categories[0]}.")
+    elif len(updated_categories) == 2:
+        lines.append(f"Updated {updated_categories[0]} & {updated_categories[1]}.")
+    elif len(updated_categories) > 2:
+        lines.append(
+            f"Updated {', '.join(updated_categories[:-1])}, & {updated_categories[-1]}."
+        )
 
     if added_res_count > 0 and removed_res_count > 0:
         lines.append("Updated resource pack lineup.")
@@ -661,6 +675,13 @@ def generate_deterministic_update_overview(diff_payload, migration_mode=False) -
         lines.append("Added resource packs.")
     elif removed_res_count > 0:
         lines.append("Removed resource packs.")
+
+    if added_shader_count > 0 and removed_shader_count > 0:
+        lines.append("Updated shaderpack lineup.")
+    elif added_shader_count > 0:
+        lines.append("Added shaderpacks.")
+    elif removed_shader_count > 0:
+        lines.append("Removed shaderpacks.")
 
     if not lines:
         lines.append("Maintenance update.")
@@ -907,10 +928,12 @@ def download_missing_comparison_files():
         if settings.breakneck_fixes and is_version_in_range(input_version, "4.0.0-beta.3", "4.4.0-beta.1"):
             packwiz_mods_folder = f"Packwiz/{tag_mc_ver}/mods"
             packwiz_resourcepacks_folder = f"Packwiz/{tag_mc_ver}/resourcepacks"
+            packwiz_shaderpacks_folder = f"Packwiz/{tag_mc_ver}/shaderpacks"
             packwiz_config_folder = f"Packwiz/{tag_mc_ver}/config"
         else:
             packwiz_mods_folder = "Packwiz/mods"
             packwiz_resourcepacks_folder = "Packwiz/resourcepacks"
+            packwiz_shaderpacks_folder = "Packwiz/shaderpacks"
             packwiz_config_folder = "Packwiz/config"
 
         local_downloader = AsyncGitHubDownloader(
@@ -921,6 +944,7 @@ def download_missing_comparison_files():
         )
         await local_downloader.download_folder(packwiz_mods_folder, os.path.join(destination, "mods"))
         await local_downloader.download_folder(packwiz_resourcepacks_folder, os.path.join(destination, "resourcepacks"))
+        await local_downloader.download_folder(packwiz_shaderpacks_folder, os.path.join(destination, "shaderpacks"))
         await local_downloader.download_folder(packwiz_config_folder, os.path.join(destination, "config"))
 
     for changelog in reversed(os.listdir(changelog_dir_path)):
@@ -931,6 +955,7 @@ def download_missing_comparison_files():
             missing_compare_data = (
                 not os.path.isdir(os.path.join(version_path, "mods"))
                 or not os.path.isdir(os.path.join(version_path, "resourcepacks"))
+                or not os.path.isdir(os.path.join(version_path, "shaderpacks"))
                 or not os.path.isdir(os.path.join(version_path, "config"))
             )
             if version != pack_version and (not os.path.exists(version_path) or missing_compare_data):

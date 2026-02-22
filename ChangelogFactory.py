@@ -148,10 +148,12 @@ class ChangelogFactory:
         previous_version_path = os.path.join(tempgit_path, str(previous_version))
         previous_mods_path = os.path.join(previous_version_path, "mods")
         previous_resourcepacks_path = os.path.join(previous_version_path, "resourcepacks")
+        previous_shaderpacks_path = os.path.join(previous_version_path, "shaderpacks")
         previous_config_path = os.path.join(previous_version_path, "config")
 
         current_mods_path = os.path.join(packwiz_path, "mods")
         current_resourcepacks_path = os.path.join(packwiz_path, "resourcepacks")
+        current_shaderpacks_path = os.path.join(packwiz_path, "shaderpacks")
         current_config_path = os.path.join(packwiz_path, "config")
 
         if not os.path.isdir(previous_mods_path) or not os.path.isdir(previous_resourcepacks_path):
@@ -159,6 +161,10 @@ class ChangelogFactory:
 
         mod_differences = self.compare_toml_files(previous_mods_path, current_mods_path)
         resourcepack_differences = self.compare_toml_files(previous_resourcepacks_path, current_resourcepacks_path)
+        if os.path.isdir(previous_shaderpacks_path) and os.path.isdir(current_shaderpacks_path):
+            shaderpack_differences = self.compare_toml_files(previous_shaderpacks_path, current_shaderpacks_path)
+        else:
+            shaderpack_differences = {"added": [], "removed": [], "modified": []}
         mod_addition_breakdown = self.get_mod_addition_breakdown(previous_mods_path, current_mods_path)
         if os.path.isdir(previous_config_path) and os.path.isdir(current_config_path):
             config_differences = self.compare_directory_files(previous_config_path, current_config_path)
@@ -171,6 +177,7 @@ class ChangelogFactory:
             "mc_version": str(mc_version),
             "mod_differences": mod_differences,
             "resourcepack_differences": resourcepack_differences,
+            "shaderpack_differences": shaderpack_differences,
             "mod_addition_breakdown": mod_addition_breakdown,
             "config_differences": config_differences,
         }
