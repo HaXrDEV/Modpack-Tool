@@ -1539,6 +1539,46 @@ def _normalize_config_change_title_labels(text: str, diff_payload) -> str:
     return re.sub(r"\[([^\]]+)\]", _replace_label, str(text or ""))
 
 
+def _apply_yosbr_default_wording(text: str, diff_payload) -> str:
+    config_diff = diff_payload.get("config_differences") or {}
+    line_diffs = list(config_diff.get("modified_line_diffs", []))
+    yosbr_labels = set()
+    for entry in line_diffs:
+        file_path = str(entry.get("path", "")).strip()
+        if not file_path or not is_yosbr_config_path(file_path):
+            continue
+        yosbr_labels.add(derive_mod_display_label_from_config_path(file_path).strip().lower())
+
+    if not yosbr_labels:
+        return str(text or "")
+
+    normalized_lines = []
+    suffix_pattern = re.compile(r":\s*\[([^\[\]]+)\]\.?$")
+
+    for raw_line in str(text or "").splitlines():
+        line = str(raw_line).strip()
+        if not line:
+            continue
+
+        suffix_match = suffix_pattern.search(line)
+        label = str(suffix_match.group(1)).strip().lower() if suffix_match else ""
+        if label in yosbr_labels:
+            if re.search(r"^-\s*changed\s+(?!default\b)", line, flags=re.IGNORECASE):
+                line = re.sub(r"^-\s*changed\s+", "- Changed default ", line, count=1, flags=re.IGNORECASE)
+            elif re.search(r"^-\s*updated\s+config\s+values\b", line, flags=re.IGNORECASE):
+                line = re.sub(
+                    r"^-\s*updated\s+config\s+values\b",
+                    "- Updated default config values",
+                    line,
+                    count=1,
+                    flags=re.IGNORECASE,
+                )
+
+        normalized_lines.append(line)
+
+    return "\n".join(normalized_lines)
+
+
 def derive_mod_label_from_config_path(path: str) -> str:
     raw_path = str(path or "").replace("\\", "/").strip("/")
     if not raw_path:
@@ -1547,6 +1587,15 @@ def derive_mod_label_from_config_path(path: str) -> str:
     parts = [p for p in raw_path.split("/") if p]
     filename = parts[-1] if parts else raw_path
     return filename
+
+
+def is_yosbr_config_path(path: str) -> bool:
+    normalized = str(path or "").replace("\\", "/").strip("/").lower()
+    return normalized.startswith("yosbr/")
+
+
+def get_config_change_verb(path: str) -> str:
+    return "Changed default" if is_yosbr_config_path(path) else "Changed"
 
 
 def _strip_double_slash_comments(line: str) -> str:
@@ -1689,13 +1738,17 @@ def _format_added_or_removed_list_value_bullet(action: str, file_path: str, raw_
     if not value:
         return None
 
+    action_label = str(action or "").strip()
+    if is_yosbr_config_path(file_path):
+        action_label = f"{action_label} default"
+
     sections = _find_config_sections_for_line(file_path, raw_line, section_index_cache)
     display_value = value[5:] if value.startswith("file/") else value
     if sections:
         if len(sections) == 1:
-            return f"- {action} {display_value} to section {sections[0]}: [{mod_label}]."
-        return f"- {action} {display_value} to sections {', '.join(sections)}: [{mod_label}]."
-    return f"- {action} {display_value}: [{mod_label}]."
+            return f"- {action_label} {display_value} to section {sections[0]}: [{mod_label}]."
+        return f"- {action_label} {display_value} to sections {', '.join(sections)}: [{mod_label}]."
+    return f"- {action_label} {display_value}: [{mod_label}]."
 
 
 def build_config_label_title_prompt(text: str, diff_payload, max_items=20):
@@ -1728,6 +1781,7 @@ def build_config_label_title_prompt(text: str, diff_payload, max_items=20):
 def build_config_changes_prompt(diff_payload, max_items=12):
     config_diff = diff_payload.get("config_differences") or {}
     modified_line_diffs = list(config_diff.get("modified_line_diffs", []))
+    moved_to_yosbr = list(config_diff.get("moved_to_yosbr", []))
     section_index_cache = {}
 
     def _render_line_changes(items):
@@ -1764,11 +1818,30 @@ def build_config_changes_prompt(diff_payload, max_items=12):
             rendered.append(f"- {path} => {label}")
         return "\n".join(rendered)
 
+    def _render_yosbr_moves(items):
+        if not items:
+            return "none"
+        rendered = []
+        for entry in items[:max_items]:
+            from_path = str(entry.get("from", "")).strip()
+            to_path = str(entry.get("to", "")).strip()
+            if not from_path and not to_path:
+                continue
+            moved_label = f"{from_path} -> {to_path}".strip()
+            if entry.get("content_changed"):
+                rendered.append(f"- {moved_label} (moved to yosbr and content changed)")
+            else:
+                rendered.append(f"- {moved_label} (moved to yosbr)")
+        return "\n".join(rendered) if rendered else "none"
+
     return (
         "Write concise end-user facing config change bullets for a Minecraft modpack changelog.\n"
         "Output only bullet lines. Each line must start with '- '.\n"
         "Keep wording factual and short. No markdown headers and no counts.\n"
         "Summarize what values or options changed, based on the changed lines.\n"
+        "Files under 'yosbr/' are defaults applied only on first launch.\n"
+        "When summarizing those files, use 'Changed default ...' instead of 'Changed ...'.\n"
+        "Do not treat regular config -> yosbr moves as removals.\n"
         "For added/removed list entries, explicitly mention the section path when provided in '(section: ...)' context.\n"
         "Do not write generic lines like 'updated config files'.\n"
         "Do not write about added/removed config files.\n"
@@ -1779,11 +1852,15 @@ def build_config_changes_prompt(diff_payload, max_items=12):
         "- Changed adsEnabled to \"false\": [Resourcify]\n"
         "- Changed button URL to use the new wiki format: [Simple Discord RPC]\n"
         "- Changed \"coloredText\" to false: [Breakneck Menu]\n\n"
+        "YOSBR style example:\n"
+        "- Changed default \"coloredText\" to false: [Breakneck Menu]\n\n"
         f"Current version: {diff_payload.get('current_version')}\n"
         f"Compared from: {diff_payload.get('previous_version')}\n"
         f"Minecraft: {diff_payload.get('mc_version')}\n\n"
         "File-to-mod mapping:\n"
         f"{_render_path_to_label(modified_line_diffs)}\n\n"
+        "Regular config files moved to yosbr:\n"
+        f"{_render_yosbr_moves(moved_to_yosbr)}\n\n"
         "Modified config line changes (old/new):\n"
         f"{_render_line_changes(modified_line_diffs)}\n"
     )
@@ -1849,11 +1926,15 @@ def generate_config_changes_fallback_from_line_diffs(diff_payload, max_lines=8) 
         if len(bullets) > entry_started_with_bullet_count:
             continue
 
+        change_verb = get_config_change_verb(file_path)
         if keys:
             keys_str = ", ".join(keys)
-            bullets.append(f"- Changed {keys_str}: [{mod_label}].")
+            bullets.append(f"- {change_verb} {keys_str}: [{mod_label}].")
         else:
-            bullets.append(f"- Updated config values: [{mod_label}].")
+            if is_yosbr_config_path(file_path):
+                bullets.append(f"- Updated default config values: [{mod_label}].")
+            else:
+                bullets.append(f"- Updated config values: [{mod_label}].")
         if len(bullets) >= max_lines:
             break
 
@@ -1863,6 +1944,12 @@ def generate_config_changes_fallback_from_line_diffs(diff_payload, max_lines=8) 
 def generate_removed_config_file_bullets(diff_payload, max_lines=8) -> List[str]:
     config_diff = diff_payload.get("config_differences") or {}
     removed_paths = list(config_diff.get("removed", []))
+    moved_to_yosbr = list(config_diff.get("moved_to_yosbr", []))
+    moved_from_paths = {
+        str(entry.get("from", "")).replace("\\", "/").strip("/").lower()
+        for entry in moved_to_yosbr
+        if str(entry.get("from", "")).strip()
+    }
     bullets = []
     seen = set()
 
@@ -1874,11 +1961,39 @@ def generate_removed_config_file_bullets(diff_payload, max_lines=8) -> List[str]
         dedupe_key = relative_path.lower()
         if dedupe_key in seen:
             continue
+        if dedupe_key in moved_from_paths:
+            continue
         seen.add(dedupe_key)
 
-        filename = derive_mod_label_from_config_path(relative_path)
         mod_label = derive_mod_display_label_from_config_path(relative_path)
         bullets.append(f"- Removed config file {relative_path}: [{mod_label}].")
+        if len(bullets) >= max_lines:
+            break
+
+    return bullets
+
+
+def generate_yosbr_default_move_bullets(diff_payload, max_lines=8) -> List[str]:
+    config_diff = diff_payload.get("config_differences") or {}
+    moved_to_yosbr = list(config_diff.get("moved_to_yosbr", []))
+    bullets = []
+    seen = set()
+
+    for move in moved_to_yosbr:
+        from_path = str(move.get("from", "")).replace("\\", "/").strip("/")
+        to_path = str(move.get("to", "")).replace("\\", "/").strip("/")
+        if not from_path and not to_path:
+            continue
+
+        dedupe_key = f"{from_path.lower()}->{to_path.lower()}"
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+
+        mod_label = derive_mod_display_label_from_config_path(to_path or from_path)
+        bullets.append(
+            f"- Moved {from_path} to {to_path} so it is now applied as a default on first launch: [{mod_label}]."
+        )
         if len(bullets) >= max_lines:
             break
 
@@ -1971,8 +2086,14 @@ def generate_config_changes_with_llm(diff_payload, settings) -> Optional[str]:
                 normalized = _normalize_config_change_labels("\n".join(bullet_lines), diff_payload)
                 titled = format_config_change_labels_with_llm(normalized, diff_payload, settings)
                 if titled:
-                    return _normalize_config_change_title_labels(titled, diff_payload)
-                return _normalize_config_change_title_labels(normalized, diff_payload)
+                    return _apply_yosbr_default_wording(
+                        _normalize_config_change_title_labels(titled, diff_payload),
+                        diff_payload,
+                    )
+                return _apply_yosbr_default_wording(
+                    _normalize_config_change_title_labels(normalized, diff_payload),
+                    diff_payload,
+                )
 
             needs_retry = (
                 attempt + 1 < max_attempts
@@ -2018,9 +2139,14 @@ def maybe_generate_config_changes(changelog_path, diff_payload):
 
     config_diff = diff_payload.get("config_differences") or {}
     modified_line_diffs = list(config_diff.get("modified_line_diffs", []))
-    removed_config_file_bullets = generate_removed_config_file_bullets(
+    moved_to_yosbr_bullets = generate_yosbr_default_move_bullets(
         diff_payload,
         max_lines=settings.auto_config_max_lines,
+    )
+    remaining_after_yosbr = max(int(settings.auto_config_max_lines) - len(moved_to_yosbr_bullets), 0)
+    removed_config_file_bullets = generate_removed_config_file_bullets(
+        diff_payload,
+        max_lines=remaining_after_yosbr,
     )
 
     with open(changelog_path, "r", encoding="utf-8") as f:
@@ -2033,15 +2159,17 @@ def maybe_generate_config_changes(changelog_path, diff_payload):
         print("[Changelog] 'Config Changes' already exists. Skipping auto generation.")
         return
 
-    if not modified_line_diffs and not removed_config_file_bullets:
+    if not modified_line_diffs and not removed_config_file_bullets and not moved_to_yosbr_bullets:
         changelog_yml["Config Changes"] = ""
         with open(changelog_path, "w", encoding="utf-8") as f:
             yaml.dump(changelog_yml, f)
         print(f"[Changelog] Cleared 'Config Changes' (no config changes detected) in {os.path.basename(changelog_path)}.")
         return
 
-    final_bullets = list(removed_config_file_bullets)
+    final_bullets = list(moved_to_yosbr_bullets) + list(removed_config_file_bullets)
     source_parts = []
+    if moved_to_yosbr_bullets:
+        source_parts.append("yosbr-defaults")
     if removed_config_file_bullets:
         source_parts.append("removed-files")
 
@@ -2112,7 +2240,11 @@ def download_missing_comparison_files():
         await local_downloader.download_folder(packwiz_mods_folder, os.path.join(destination, "mods"))
         await local_downloader.download_folder(packwiz_resourcepacks_folder, os.path.join(destination, "resourcepacks"))
         await local_downloader.download_folder(packwiz_shaderpacks_folder, os.path.join(destination, "shaderpacks"))
-        await local_downloader.download_folder(packwiz_config_folder, os.path.join(destination, "config"))
+        await local_downloader.download_folder(
+            packwiz_config_folder,
+            os.path.join(destination, "config"),
+            recursive=True,
+        )
 
     for changelog in reversed(os.listdir(changelog_dir_path)):
         if changelog.endswith((".yml", ".yaml")):

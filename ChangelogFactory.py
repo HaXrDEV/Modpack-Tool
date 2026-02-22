@@ -192,7 +192,13 @@ class ChangelogFactory:
         if os.path.isdir(previous_config_path) and os.path.isdir(current_config_path):
             config_differences = self.compare_directory_files(previous_config_path, current_config_path)
         else:
-            config_differences = {"added": [], "removed": [], "modified": []}
+            config_differences = {
+                "added": [],
+                "removed": [],
+                "modified": [],
+                "modified_line_diffs": [],
+                "moved_to_yosbr": [],
+            }
 
         return {
             "previous_version": previous_version,
@@ -219,12 +225,19 @@ class ChangelogFactory:
             ".txt",
         }
 
+        def _is_yosbr_path(relative_path):
+            normalized = str(relative_path or "").replace("\\", "/").strip("/").lower()
+            return normalized.startswith("yosbr/")
+
         def _is_excluded_config_path(relative_path):
-            normalized = str(relative_path or "").replace("\\", "/").lower()
+            normalized = str(relative_path or "").replace("\\", "/").strip("/").lower()
+            wrapped = f"/{normalized}/"
             filename = os.path.basename(normalized)
             stem, _ = os.path.splitext(filename)
-            # Exclude Better Compatibility Checker config changes from changelog generation.
-            return stem == "bcc" or "/bcc/" in normalized
+            # Exclude noisy/generated config files from changelog generation.
+            is_bcc_config = stem == "bcc" or "/bcc/" in wrapped
+            is_crash_assistant_modlist = stem == "modlist" and "/crash_assistant/" in wrapped
+            return is_bcc_config or is_crash_assistant_modlist
 
         def _collect_state(base_dir):
             state = {}
@@ -242,13 +255,17 @@ class ChangelogFactory:
                         continue
             return state
 
-        def _collect_line_diff_for_file(relative_path):
-            _, ext = os.path.splitext(relative_path.lower())
+        def _collect_line_diff_for_paths(previous_relative_path, current_relative_path, output_relative_path=None):
+            previous_relative_path = str(previous_relative_path or "").replace("\\", "/").strip("/")
+            current_relative_path = str(current_relative_path or "").replace("\\", "/").strip("/")
+            output_relative_path = str(output_relative_path or current_relative_path).replace("\\", "/").strip("/")
+
+            _, ext = os.path.splitext(current_relative_path.lower() or previous_relative_path.lower())
             if ext not in line_diff_extensions:
                 return None
 
-            previous_abs = os.path.join(previous_dir, relative_path)
-            current_abs = os.path.join(current_dir, relative_path)
+            previous_abs = os.path.join(previous_dir, previous_relative_path)
+            current_abs = os.path.join(current_dir, current_relative_path)
             try:
                 with open(previous_abs, "r", encoding="utf-8", errors="replace") as f_prev:
                     old_lines = f_prev.read().splitlines()
@@ -271,7 +288,7 @@ class ChangelogFactory:
             if not removed_lines and not added_lines:
                 return None
             return {
-                "path": relative_path,
+                "path": output_relative_path,
                 "removed_lines": removed_lines,
                 "added_lines": added_lines,
             }
@@ -293,17 +310,83 @@ class ChangelogFactory:
             key=lambda x: x.lower(),
         )
 
+        moved_to_yosbr = []
+        if added and removed:
+            added_lookup = {str(path).lower(): path for path in added}
+            consumed_added_keys = set()
+            filtered_removed = []
+
+            for removed_path in removed:
+                normalized_removed = str(removed_path).replace("\\", "/").strip("/")
+                if _is_yosbr_path(normalized_removed):
+                    filtered_removed.append(removed_path)
+                    continue
+
+                candidate_counterparts = [
+                    f"yosbr/{normalized_removed}",
+                    f"yosbr/config/{normalized_removed}",
+                ]
+                matched_added_path = None
+                added_key = None
+                for candidate in candidate_counterparts:
+                    candidate_key = candidate.lower()
+                    if candidate_key in added_lookup:
+                        matched_added_path = added_lookup[candidate_key]
+                        added_key = candidate_key
+                        break
+                if not matched_added_path:
+                    filtered_removed.append(removed_path)
+                    continue
+
+                consumed_added_keys.add(added_key)
+                moved_to_yosbr.append(
+                    {
+                        "from": removed_path,
+                        "to": matched_added_path,
+                        "content_changed": previous_state.get(removed_path) != current_state.get(matched_added_path),
+                    }
+                )
+
+            if consumed_added_keys:
+                added = [path for path in added if str(path).lower() not in consumed_added_keys]
+            removed = filtered_removed
+
         modified_line_diffs = []
         for rel_path in modified:
-            line_diff = _collect_line_diff_for_file(rel_path)
+            line_diff = _collect_line_diff_for_paths(rel_path, rel_path)
             if line_diff:
                 modified_line_diffs.append(line_diff)
+
+        for move in moved_to_yosbr:
+            previous_path = str(move.get("from", "")).replace("\\", "/").strip("/")
+            current_path = str(move.get("to", "")).replace("\\", "/").strip("/")
+            content_changed = bool(move.get("content_changed"))
+            if content_changed and current_path:
+                if current_path not in modified:
+                    modified.append(current_path)
+                line_diff = _collect_line_diff_for_paths(previous_path, current_path, output_relative_path=current_path)
+                if line_diff:
+                    modified_line_diffs.append(line_diff)
+
+        modified = sorted(set(modified), key=lambda x: x.lower())
+        moved_to_yosbr = sorted(moved_to_yosbr, key=lambda x: str(x.get("to", "")).lower())
+        if modified_line_diffs:
+            deduped_line_diffs = {}
+            for entry in modified_line_diffs:
+                dedupe_key = str(entry.get("path", "")).lower()
+                if dedupe_key and dedupe_key not in deduped_line_diffs:
+                    deduped_line_diffs[dedupe_key] = entry
+            modified_line_diffs = sorted(
+                deduped_line_diffs.values(),
+                key=lambda x: str(x.get("path", "")).lower(),
+            )
 
         return {
             "added": added,
             "removed": removed,
             "modified": modified,
             "modified_line_diffs": modified_line_diffs,
+            "moved_to_yosbr": moved_to_yosbr,
         }
 
     def _load_toml_state(self, input_dir):

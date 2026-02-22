@@ -85,32 +85,65 @@ class AsyncGitHubDownloader:
         api_url = f"{self.GITHUB_API_URL}/{self.repo_owner}/{self.repo_name}/contents/{folder_path}?ref={self.branch}"
         return await self._fetch(session, api_url)
 
-    async def download_folder(self, folder_path: str, dest_folder: str):
+    async def _download_folder_recursive(self, session: aiohttp.ClientSession, folder_path: str, dest_folder: str):
+        try:
+            folder_contents = await self._get_folder_contents(session, folder_path)
+        except Exception as e:
+            print(f"Error: {str(e)}")
+            return
+
+        tasks = []
+        for item in folder_contents:
+            item_type = str(item.get("type", "")).lower()
+            if item_type == "file":
+                download_url = item.get("download_url")
+                filename = item.get("name")
+                if download_url and filename:
+                    tasks.append(self._download_file(session, download_url, dest_folder, filename))
+            elif item_type == "dir":
+                nested_path = item.get("path")
+                nested_name = item.get("name")
+                if not nested_path or not nested_name:
+                    continue
+                nested_dest = os.path.join(dest_folder, nested_name)
+                os.makedirs(nested_dest, exist_ok=True)
+                tasks.append(self._download_folder_recursive(session, nested_path, nested_dest))
+
+        if tasks:
+            await asyncio.gather(*tasks)
+
+    async def download_folder(self, folder_path: str, dest_folder: str, recursive: bool = False):
         """
         Asynchronously download all files from a specific folder in the repository.
         
         Parameters:
         - folder_path: str, the folder path inside the repository.
         - dest_folder: str, the local folder where files will be saved.
+        - recursive: bool, download files in nested directories recursively.
         """
         if not os.path.exists(dest_folder):
             os.makedirs(dest_folder)
 
         async with aiohttp.ClientSession() as session:
-            try:
-                folder_contents = await self._get_folder_contents(session, folder_path)
-            except Exception as e:
-                print(f"Error: {str(e)}")
-                return
+            if recursive:
+                await self._download_folder_recursive(session, folder_path, dest_folder)
+            else:
+                try:
+                    folder_contents = await self._get_folder_contents(session, folder_path)
+                except Exception as e:
+                    print(f"Error: {str(e)}")
+                    return
 
-            tasks = []
-            for item in folder_contents:
-                if item['type'] == 'file':
-                    download_url = item['download_url']
-                    filename = item['name']
-                    tasks.append(self._download_file(session, download_url, dest_folder, filename))
+                tasks = []
+                for item in folder_contents:
+                    if item.get("type") == "file":
+                        download_url = item.get("download_url")
+                        filename = item.get("name")
+                        if download_url and filename:
+                            tasks.append(self._download_file(session, download_url, dest_folder, filename))
 
-            await asyncio.gather(*tasks)
+                if tasks:
+                    await asyncio.gather(*tasks)
         print("All files downloaded successfully.")
 
 # Example usage:
