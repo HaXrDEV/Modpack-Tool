@@ -1647,14 +1647,13 @@ def _get_expected_yosbr_moves(diff_payload) -> List[str]:
 
     for move in moved_to_yosbr:
         from_path = str(move.get("from", "")).replace("\\", "/").strip("/")
-        to_path = str(move.get("to", "")).replace("\\", "/").strip("/")
-        if not from_path or not to_path:
+        if not from_path:
             continue
-        key = f"{from_path.lower()}->{to_path.lower()}"
+        key = from_path.lower()
         if key in seen:
             continue
         seen.add(key)
-        moves.append(f"{from_path} -> {to_path}")
+        moves.append(from_path)
     return moves
 
 
@@ -1665,13 +1664,64 @@ def _get_missing_yosbr_moves_from_bullets(bullets: List[str], diff_payload) -> L
 
     lowered_bullets = [str(line or "").strip().lower() for line in bullets if str(line or "").strip()]
     missing = []
-    for move in expected_moves:
-        from_path, to_path = move.split(" -> ", 1)
-        signature = f"moved {from_path.lower()} to {to_path.lower()}"
-        found = any(signature in bullet for bullet in lowered_bullets)
+    for from_path in expected_moves:
+        from_lower = from_path.lower()
+        found = any(
+            (f"moved {from_lower}" in bullet) and ("yosbr" in bullet)
+            for bullet in lowered_bullets
+        )
         if not found:
-            missing.append(move)
+            missing.append(from_path)
     return missing
+
+
+def _normalize_yosbr_move_bullet_wording(bullets: List[str], diff_payload) -> List[str]:
+    config_diff = diff_payload.get("config_differences") or {}
+    moved_to_yosbr = list(config_diff.get("moved_to_yosbr", []))
+    if not moved_to_yosbr:
+        return list(bullets)
+
+    move_map = {}
+    for move in moved_to_yosbr:
+        from_path = str(move.get("from", "")).replace("\\", "/").strip("/")
+        to_path = str(move.get("to", "")).replace("\\", "/").strip("/")
+        if not from_path:
+            continue
+        move_map[from_path.lower()] = {
+            "from": from_path,
+            "to": to_path,
+            "label": derive_mod_display_label_from_config_path(to_path or from_path),
+        }
+
+    normalized = []
+    suffix_pattern = re.compile(r"(:\s*\[[^\[\]]+\]\.?)$")
+    for raw_line in bullets:
+        line = str(raw_line or "").strip()
+        if not line:
+            continue
+        line_lower = line.lower()
+        replaced = False
+
+        for from_lower, meta in move_map.items():
+            moved_signature = f"moved {from_lower}"
+            to_signature = f"to {str(meta.get('to', '')).lower()}"
+            if moved_signature not in line_lower:
+                continue
+            if "yosbr" not in line_lower and str(meta.get("to", "")).strip() and to_signature not in line_lower:
+                continue
+
+            suffix_match = suffix_pattern.search(line)
+            if suffix_match:
+                label_suffix = suffix_match.group(1)
+            else:
+                label_suffix = f": [{meta.get('label', 'Unknown')}]"
+            line = f"- Moved {meta.get('from')} to be handled by YOSBR{label_suffix}"
+            replaced = True
+            break
+
+        normalized.append(line if replaced else line)
+
+    return normalized
 
 
 def derive_mod_label_from_config_path(path: str) -> str:
@@ -1951,14 +2001,12 @@ def build_config_changes_prompt(diff_payload, max_items=12):
         rendered = []
         for entry in items[:max_items]:
             from_path = str(entry.get("from", "")).strip()
-            to_path = str(entry.get("to", "")).strip()
-            if not from_path and not to_path:
+            if not from_path:
                 continue
-            moved_label = f"{from_path} -> {to_path}".strip()
             if entry.get("content_changed"):
-                rendered.append(f"- {moved_label} (moved to yosbr and content changed)")
+                rendered.append(f"- {from_path} (moved to yosbr, defaults also changed)")
             else:
-                rendered.append(f"- {moved_label} (moved to yosbr)")
+                rendered.append(f"- {from_path} (moved to yosbr)")
         return "\n".join(rendered) if rendered else "none"
 
     return (
@@ -1969,7 +2017,7 @@ def build_config_changes_prompt(diff_payload, max_items=12):
         "Files under 'yosbr/' are defaults applied only on first launch.\n"
         "When summarizing those files, use 'Changed default ...' instead of 'Changed ...'.\n"
         "Do not treat regular config -> yosbr moves as removals.\n"
-        "For each item listed under 'Regular config files moved to yosbr', include one explicit bullet that starts with 'Moved <from> to <to>' and explains it now applies as a default on first launch.\n"
+        "For each item listed under 'Regular config files moved to yosbr', include one explicit bullet using wording like 'Moved <from> to be handled by YOSBR'.\n"
         "For added/removed list entries, explicitly mention the section path when provided in '(section: ...)' context.\n"
         "Do not write generic lines like 'updated config files'.\n"
         "Do not write about added/removed config files.\n"
@@ -2234,7 +2282,7 @@ def _generate_config_change_item_with_llm(item_payload, settings, max_lines: int
                 missing_move_render = "\n".join(f"- {move}" for move in missing_moves_for_retry[:6])
                 coverage_hint_parts.append(
                     "Ensure one bullet for each missing yosbr move below.\n"
-                    "Start each move bullet with 'Moved <from> to <to>' using these exact paths:\n"
+                    "Start each move bullet with 'Moved <from> to be handled by YOSBR' using these exact source paths:\n"
                     f"{missing_move_render}\n"
                 )
             coverage_hint = (
@@ -2279,6 +2327,7 @@ def _generate_config_change_item_with_llm(item_payload, settings, max_lines: int
                     )
 
                 llm_bullets = _normalize_llm_text_to_bullets(llm_text, max_lines=max_lines)
+                llm_bullets = _normalize_yosbr_move_bullet_wording(llm_bullets, item_payload)
                 missing_labels = _get_missing_config_labels_from_bullets(llm_bullets, item_payload)
                 missing_moves = _get_missing_yosbr_moves_from_bullets(llm_bullets, item_payload)
                 missing_score = len(missing_labels) + len(missing_moves)
