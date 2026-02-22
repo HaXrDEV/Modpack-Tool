@@ -75,6 +75,7 @@ changelog_dir_path = os.path.join(git_path, "Changelogs")
 tempgit_path = os.path.join(git_path, "Modpack-CLI-Tool", "tempgit")
 mods_path = os.path.join(packwiz_path, "mods")
 crash_assistant_config_path = os.path.join(packwiz_path, "config", "crash_assistant", "modlist.json")
+crash_assistant_markdown_path = os.path.join(git_path, "modlist.md")
 modrinth_api_base = "https://api.modrinth.com/v2"
 
 ############################################################
@@ -274,6 +275,50 @@ def parse_filenames_as_json(input_path):
             print(f"Error processing file {mod_toml}: {ex}")
     filenames.sort(key=lambda x: x.lower())
     return json.dumps(filenames, indent=2)
+
+
+def build_combined_modlist_markdown(input_path, include_side_tags=True):
+    active_mods = []
+    inactive_mods = []
+
+    for mod_toml in sorted(os.listdir(input_path), key=lambda item: item.lower()):
+        mod_toml_path = os.path.join(input_path, mod_toml)
+        try:
+            if not os.path.isfile(mod_toml_path) or not mod_toml.endswith(".toml"):
+                continue
+
+            with open(mod_toml_path, "r", encoding="utf8") as f:
+                mod_data = toml.load(f)
+
+            mod_name = markdown.remove_bracketed_text(str(mod_data.get("name", mod_toml)))
+            side_value = str(mod_data.get("side", "both")).strip()
+            side_base = side_value.split("(", 1)[0].strip().lower() or "both"
+            side_label = "Both" if side_base == "both" else side_base.capitalize()
+
+            formatted_name = f"{mod_name} [{side_label}]" if include_side_tags else mod_name
+            if "disabled" in side_value.lower():
+                inactive_mods.append(formatted_name)
+            else:
+                active_mods.append(formatted_name)
+        except Exception as ex:
+            print(f"Error processing file {mod_toml}: {ex}")
+
+    lines = ["# Mod List", ""]
+    lines.append("## Active Mods")
+    if active_mods:
+        lines.extend([f"- {mod_name}" for mod_name in active_mods])
+    else:
+        lines.append("- None")
+
+    lines.append("")
+    lines.append("## Inactive Mods")
+    if inactive_mods:
+        lines.extend([f"- {mod_name}" for mod_name in inactive_mods])
+    else:
+        lines.append("- None")
+
+    lines.append("")
+    return "\n".join(lines)
 
 
 def list_disabled_mods():
@@ -1111,6 +1156,7 @@ class Settings:
     changelog_side_tag: bool = True
     changelog_updated_mods: bool = False
     changelog_updated_resoucepacks: bool = False
+    modlist_side_tag: bool = True
     update_mods_only: bool = False
     bump_version_only: bool = False
     clear_repo_data_only: bool = False
@@ -1338,6 +1384,12 @@ def main():
             mod_filenames_json = parse_filenames_as_json(mods_path)
             with open(crash_assistant_config_path, "w", encoding="utf8") as output_file:
                 output_file.write(mod_filenames_json)
+            combined_modlist_markdown = build_combined_modlist_markdown(
+                mods_path,
+                include_side_tags=settings.modlist_side_tag
+            )
+            with open(crash_assistant_markdown_path, "w", encoding="utf8") as output_file:
+                output_file.write(combined_modlist_markdown)
 
         #----------------------------------------
         # Export client pack. (CurseForge with Packwiz)

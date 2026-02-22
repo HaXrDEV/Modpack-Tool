@@ -14,6 +14,7 @@ generate_mods_changelog: True
 breakneck_fixes: False
 github_auth: False
 changelog_side_tag: True
+modlist_side_tag: True
 migrate_minecraft_version: False
 migration_target_minecraft: "" # Example: "1.21.12"
 migration_target_fabric: "" # Optional. Leave empty to keep current Fabric loader version.
