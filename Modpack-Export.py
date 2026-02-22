@@ -135,6 +135,7 @@ Choose action:
 9) Bump modpack version only
 10) Clear stored repository data
 11) Generate changelog summary only
+12) List disabled mods
 0) Exit
 """
     )
@@ -150,6 +151,7 @@ Choose action:
     settings.bump_version_only = False
     settings.clear_repo_data_only = False
     settings.generate_update_summary_only = False
+    settings.list_disabled_mods_only = False
     settings.migrate_minecraft_version = False
     settings.export_client = False
     settings.export_server = False
@@ -221,6 +223,11 @@ Choose action:
         prompt_changelog_autogen_overwrite(force_prompt=True)
         return True
 
+    if choice == "12":
+        settings.refresh_only = True
+        settings.list_disabled_mods_only = True
+        return True
+
     print(f"Unknown choice '{choice}'. Falling back to configured workflow.")
     with open(settings_path, "r", encoding="utf-8") as s_file:
         settings_yml_local = yaml.load(s_file) or {}
@@ -267,6 +274,31 @@ def parse_filenames_as_json(input_path):
             print(f"Error processing file {mod_toml}: {ex}")
     filenames.sort(key=lambda x: x.lower())
     return json.dumps(filenames, indent=2)
+
+
+def list_disabled_mods():
+    disabled_mods = []
+    os.chdir(mods_path)
+    for item in sorted(os.listdir()):
+        item_path = os.path.join(mods_path, item)
+        if not os.path.isfile(item_path) or not item.endswith(".toml"):
+            continue
+        try:
+            with open(item_path, "r", encoding="utf8") as f:
+                mod_toml = toml.load(f)
+            side_value = str(mod_toml.get("side", "both"))
+            if "disabled" in side_value.lower():
+                mod_name = mod_toml.get("name", item)
+                disabled_mods.append((mod_name, item, side_value))
+        except Exception as ex:
+            print(f"[Mods] Failed to inspect '{item}': {ex}")
+    os.chdir(packwiz_path)
+
+    print(f"[Mods] Disabled mods: {len(disabled_mods)}")
+    for mod_name, mod_file, side_value in disabled_mods:
+        print(f"- {mod_name} ({mod_file}, side={side_value})")
+
+    return disabled_mods
 
 
 def make_and_delete_dir(dir):
@@ -1083,6 +1115,7 @@ class Settings:
     bump_version_only: bool = False
     clear_repo_data_only: bool = False
     generate_update_summary_only: bool = False
+    list_disabled_mods_only: bool = False
     migrate_minecraft_version: bool = False
     migration_disable_incompatible_mods: bool = True
     migration_update_all_mods: bool = True
@@ -1498,6 +1531,8 @@ def main():
         elif settings.generate_update_summary_only:
             download_missing_comparison_files()
             run_changelog_auto_generation()
+        elif settings.list_disabled_mods_only:
+            list_disabled_mods()
         elif settings.update_mods_only:
             previous_snapshot = snapshot_mod_toml_content()
             subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
