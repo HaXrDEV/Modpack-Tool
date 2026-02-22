@@ -104,6 +104,18 @@ def ensure_migration_targets(settings):
         settings.migration_target_fabric = target_fabric
 
 
+def uses_llm_config_changes(settings) -> bool:
+    return str(settings.auto_config_provider).strip().lower() == "ollama"
+
+
+def get_config_changes_mode_label(settings) -> str:
+    if uses_llm_config_changes(settings):
+        model = str(settings.auto_config_model).strip() or "default-model"
+        return f"LLM ({model})"
+    provider = str(settings.auto_config_provider).strip() or "unknown"
+    return f"Fallback (deterministic, provider '{provider}' unsupported)"
+
+
 def configure_actions_via_menu(settings):
     def prompt_changelog_autogen_overwrite(force_prompt=False):
         should_prompt_overview = force_prompt or settings.auto_generate_update_overview or settings.generate_update_summary_only
@@ -122,8 +134,10 @@ def configure_actions_via_menu(settings):
             else:
                 settings.auto_config_overwrite_existing = True
 
+    config_mode_label = get_config_changes_mode_label(settings)
+
     print(
-        """
+        f"""
 Choose action:
 1) Run configured workflow (settings.yml)
 2) Migration only
@@ -139,6 +153,8 @@ Choose action:
 12) List disabled mods
 13) Add mod
 0) Exit
+
+Config Changes generator: {config_mode_label}
 """
     )
 
@@ -852,19 +868,50 @@ def _normalize_llm_text_to_bullets(raw_text: str, max_lines: int):
     return lines[:max_lines]
 
 
-def _normalize_config_change_labels(text: str, diff_payload) -> str:
+def format_config_filename_as_title(filename: str) -> str:
+    name = os.path.splitext(str(filename or "").strip())[0]
+    if not name:
+        return "Unknown"
+
+    name = re.sub(r"[_\-.]+", " ", name)
+    name = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", name)
+    tokens = [token for token in name.split() if token]
+    if not tokens:
+        return "Unknown"
+
+    return " ".join(token.capitalize() for token in tokens)
+
+
+def _build_config_label_maps(diff_payload):
     config_diff = diff_payload.get("config_differences") or {}
     line_diffs = list(config_diff.get("modified_line_diffs", []))
     stem_to_filename = {}
+    alias_to_title = {}
 
     for entry in line_diffs:
         file_path = str(entry.get("path", "")).strip()
         if not file_path:
             continue
+
         filename = derive_mod_label_from_config_path(file_path)
         stem = os.path.splitext(filename)[0].strip().lower()
+        title_label = format_config_filename_as_title(filename)
+
         if stem and filename:
             stem_to_filename[stem] = filename
+
+        if filename:
+            alias_to_title[filename.strip().lower()] = title_label
+        if stem:
+            alias_to_title[stem] = title_label
+        if title_label:
+            alias_to_title[title_label.strip().lower()] = title_label
+
+    return stem_to_filename, alias_to_title
+
+
+def _normalize_config_change_labels(text: str, diff_payload) -> str:
+    stem_to_filename, _ = _build_config_label_maps(diff_payload)
 
     if not stem_to_filename:
         return str(text or "")
@@ -879,6 +926,22 @@ def _normalize_config_change_labels(text: str, diff_payload) -> str:
     return re.sub(r"\[([^\]]+)\]", _replace_label, str(text or ""))
 
 
+def _normalize_config_change_title_labels(text: str, diff_payload) -> str:
+    _, alias_to_title = _build_config_label_maps(diff_payload)
+    if not alias_to_title:
+        return str(text or "")
+
+    def _replace_label(match):
+        label = str(match.group(1) or "").strip()
+        lowered = label.lower()
+        title_label = alias_to_title.get(lowered)
+        if title_label:
+            return f"[{title_label}]"
+        return match.group(0)
+
+    return re.sub(r"\[([^\]]+)\]", _replace_label, str(text or ""))
+
+
 def derive_mod_label_from_config_path(path: str) -> str:
     raw_path = str(path or "").replace("\\", "/").strip("/")
     if not raw_path:
@@ -887,6 +950,33 @@ def derive_mod_label_from_config_path(path: str) -> str:
     parts = [p for p in raw_path.split("/") if p]
     filename = parts[-1] if parts else raw_path
     return filename
+
+
+def build_config_label_title_prompt(text: str, diff_payload, max_items=20):
+    config_diff = diff_payload.get("config_differences") or {}
+    modified_line_diffs = list(config_diff.get("modified_line_diffs", []))
+
+    mapping_lines = []
+    for entry in modified_line_diffs[:max_items]:
+        path = str(entry.get("path", "")).strip()
+        if not path:
+            continue
+        filename = derive_mod_label_from_config_path(path)
+        title_label = format_config_filename_as_title(filename)
+        mapping_lines.append(f"- {filename} => {title_label}")
+
+    mapping = "\n".join(mapping_lines) if mapping_lines else "none"
+    return (
+        "Rewrite only bracket labels in these bullets.\n"
+        "Keep the bullets, wording, order, and punctuation unchanged.\n"
+        "Only update text inside square brackets to title-style labels using this mapping.\n"
+        "If a bracket label is already title-style and matches mapping intent, keep it.\n"
+        "Output only bullet lines.\n\n"
+        "Filename to title mapping:\n"
+        f"{mapping}\n\n"
+        "Bullets:\n"
+        f"{str(text or '').strip()}\n"
+    )
 
 
 def build_config_changes_prompt(diff_payload, max_items=12):
@@ -951,7 +1041,7 @@ def generate_config_changes_fallback_from_line_diffs(diff_payload, max_lines=8) 
 
     for entry in line_diffs:
         file_path = str(entry.get("path", "")).strip()
-        mod_label = derive_mod_label_from_config_path(file_path)
+        mod_label = format_config_filename_as_title(derive_mod_label_from_config_path(file_path))
         added_lines = entry.get("added_lines", [])
         removed_lines = entry.get("removed_lines", [])
         candidate_lines = list(added_lines) + list(removed_lines)
@@ -978,6 +1068,43 @@ def generate_config_changes_fallback_from_line_diffs(diff_payload, max_lines=8) 
             break
 
     return "\n".join(bullets)
+
+
+def format_config_change_labels_with_llm(text: str, diff_payload, settings) -> Optional[str]:
+    if str(settings.auto_config_provider).lower() != "ollama":
+        return None
+
+    prompt = build_config_label_title_prompt(
+        text,
+        diff_payload,
+        max_items=settings.auto_config_max_items,
+    )
+    try:
+        response = requests.post(
+            settings.auto_config_endpoint,
+            json={
+                "model": settings.auto_config_model,
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "temperature": 0,
+                    "num_predict": 200,
+                },
+            },
+            timeout=int(settings.auto_config_timeout_seconds),
+        )
+        response.raise_for_status()
+        response_json = response.json()
+        bullet_lines = _normalize_llm_text_to_bullets(
+            response_json.get("response", ""),
+            max_lines=settings.auto_config_max_lines,
+        )
+        if bullet_lines:
+            return "\n".join(bullet_lines)
+    except Exception as ex:
+        print(f"[Changelog] LLM label formatting pass failed: {ex}")
+
+    return None
 
 
 def generate_config_changes_with_llm(diff_payload, settings) -> Optional[str]:
@@ -1010,7 +1137,11 @@ def generate_config_changes_with_llm(diff_payload, settings) -> Optional[str]:
             max_lines=settings.auto_config_max_lines,
         )
         if bullet_lines:
-            return _normalize_config_change_labels("\n".join(bullet_lines), diff_payload)
+            normalized = _normalize_config_change_labels("\n".join(bullet_lines), diff_payload)
+            titled = format_config_change_labels_with_llm(normalized, diff_payload, settings)
+            if titled:
+                return _normalize_config_change_title_labels(titled, diff_payload)
+            return _normalize_config_change_title_labels(normalized, diff_payload)
     except Exception as ex:
         print(f"[Changelog] LLM config change generation failed: {ex}")
 
@@ -1066,16 +1197,33 @@ def maybe_generate_config_changes(changelog_path, diff_payload):
         print(f"[Changelog] Cleared 'Config Changes' (no config changes detected) in {os.path.basename(changelog_path)}.")
         return
 
-    llm_config_changes = generate_config_changes_with_llm(diff_payload, settings)
-    if not llm_config_changes:
-        print("[Changelog] Skipping 'Config Changes': LLM output was empty or failed.")
+    config_changes_text = None
+    source_label = ""
+
+    if uses_llm_config_changes(settings):
+        config_changes_text = generate_config_changes_with_llm(diff_payload, settings)
+        if config_changes_text:
+            source_label = "LLM"
+        else:
+            print("[Changelog] LLM output was empty or failed. Falling back to deterministic config summary.")
+
+    if not config_changes_text:
+        config_changes_text = generate_config_changes_fallback_from_line_diffs(
+            diff_payload,
+            max_lines=settings.auto_config_max_lines,
+        )
+        if config_changes_text:
+            source_label = "fallback"
+
+    if not str(config_changes_text or "").strip():
+        print("[Changelog] Skipping 'Config Changes': no usable output from LLM or fallback.")
         return
 
-    changelog_yml["Config Changes"] = LiteralScalarString(llm_config_changes)
+    changelog_yml["Config Changes"] = LiteralScalarString(config_changes_text)
     with open(changelog_path, "w", encoding="utf-8") as f:
         yaml.dump(changelog_yml, f)
 
-    print(f"[Changelog] Auto-generated 'Config Changes' in {os.path.basename(changelog_path)}.")
+    print(f"[Changelog] Auto-generated 'Config Changes' via {source_label} in {os.path.basename(changelog_path)}.")
 
 
 def download_missing_comparison_files():
