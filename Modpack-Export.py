@@ -137,6 +137,7 @@ Choose action:
 10) Clear stored repository data
 11) Generate changelog summary only
 12) List disabled mods
+13) Add mod
 0) Exit
 """
     )
@@ -153,6 +154,7 @@ Choose action:
     settings.clear_repo_data_only = False
     settings.generate_update_summary_only = False
     settings.list_disabled_mods_only = False
+    settings.add_mod_only = False
     settings.migrate_minecraft_version = False
     settings.export_client = False
     settings.export_server = False
@@ -227,6 +229,11 @@ Choose action:
     if choice == "12":
         settings.refresh_only = True
         settings.list_disabled_mods_only = True
+        return True
+
+    if choice == "13":
+        settings.refresh_only = True
+        settings.add_mod_only = True
         return True
 
     print(f"Unknown choice '{choice}'. Falling back to configured workflow.")
@@ -344,6 +351,42 @@ def list_disabled_mods():
         print(f"- {mod_name} ({mod_file}, side={side_value})")
 
     return disabled_mods
+
+
+def add_mod_via_prompt():
+    print("[PackWiz] Add mod")
+    source_input = input("Source [modrinth(mr)/curseforge(cf)/url] [modrinth]: ").strip().lower() or "modrinth"
+    source_aliases = {
+        "mr": "modrinth",
+        "modrinth": "modrinth",
+        "cf": "curseforge",
+        "curseforge": "curseforge",
+        "url": "url",
+    }
+    source = source_aliases.get(source_input)
+    if source is None:
+        print(f"[PackWiz] Invalid source '{source_input}'.")
+        return False
+
+    if source == "url":
+        add_value = input("Paste project/version URL: ").strip()
+    else:
+        add_value = input(f"Enter {source} project slug/id: ").strip()
+
+    if not add_value:
+        print("[PackWiz] No value provided. Skipping add.")
+        return False
+
+    os.chdir(packwiz_path)
+    cmd = f'{packwiz_exe_path} {source} add "{add_value}"'
+    result = subprocess.call(cmd, shell=True)
+    if result != 0:
+        print(f"[PackWiz] Add command failed with exit code {result}.")
+        return False
+
+    subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
+    print(f"[PackWiz] Added from {source}: {add_value}")
+    return True
 
 
 def make_and_delete_dir(dir):
@@ -1162,6 +1205,7 @@ class Settings:
     clear_repo_data_only: bool = False
     generate_update_summary_only: bool = False
     list_disabled_mods_only: bool = False
+    add_mod_only: bool = False
     migrate_minecraft_version: bool = False
     migration_disable_incompatible_mods: bool = True
     migration_update_all_mods: bool = True
@@ -1585,6 +1629,8 @@ def main():
             run_changelog_auto_generation()
         elif settings.list_disabled_mods_only:
             list_disabled_mods()
+        elif settings.add_mod_only:
+            add_mod_via_prompt()
         elif settings.update_mods_only:
             previous_snapshot = snapshot_mod_toml_content()
             subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
