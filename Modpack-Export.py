@@ -868,6 +868,24 @@ def _normalize_llm_text_to_bullets(raw_text: str, max_lines: int):
     return lines[:max_lines]
 
 
+def _normalize_config_llm_bullets(raw_text: str, max_lines: int):
+    normalized = _normalize_llm_text_to_bullets(raw_text, max_lines=max(max_lines * 2, max_lines))
+    valid = []
+    invalid_count = 0
+    required_suffix_pattern = re.compile(r":\s*\[[^\[\]]+\]\.?$")
+
+    for bullet in normalized:
+        line = str(bullet or "").strip()
+        if required_suffix_pattern.search(line):
+            valid.append(line)
+            if len(valid) >= max_lines:
+                break
+        else:
+            invalid_count += 1
+
+    return valid[:max_lines], invalid_count
+
+
 def format_config_filename_as_title(filename: str) -> str:
     name = os.path.splitext(str(filename or "").strip())[0]
     if not name:
@@ -882,38 +900,9 @@ def format_config_filename_as_title(filename: str) -> str:
     return " ".join(token.capitalize() for token in tokens)
 
 
-def _normalize_config_relative_path(path: str) -> str:
-    return str(path or "").replace("\\", "/").strip("/").lower()
-
-
-def _get_removed_config_paths_set(diff_payload) -> set:
-    config_diff = diff_payload.get("config_differences") or {}
-    removed_paths = list(config_diff.get("removed", []))
-    return {
-        _normalize_config_relative_path(path)
-        for path in removed_paths
-        if _normalize_config_relative_path(path)
-    }
-
-
-def _get_effective_modified_line_diffs(diff_payload):
+def _build_config_label_maps(diff_payload):
     config_diff = diff_payload.get("config_differences") or {}
     line_diffs = list(config_diff.get("modified_line_diffs", []))
-    removed_paths = _get_removed_config_paths_set(diff_payload)
-    if not removed_paths:
-        return line_diffs
-
-    filtered = []
-    for entry in line_diffs:
-        entry_path = _normalize_config_relative_path(entry.get("path", ""))
-        if entry_path in removed_paths:
-            continue
-        filtered.append(entry)
-    return filtered
-
-
-def _build_config_label_maps(diff_payload):
-    line_diffs = _get_effective_modified_line_diffs(diff_payload)
     stem_to_filename = {}
     alias_to_title = {}
 
@@ -1131,7 +1120,8 @@ def _format_added_or_removed_list_value_bullet(action: str, file_path: str, raw_
 
 
 def build_config_label_title_prompt(text: str, diff_payload, max_items=20):
-    modified_line_diffs = _get_effective_modified_line_diffs(diff_payload)
+    config_diff = diff_payload.get("config_differences") or {}
+    modified_line_diffs = list(config_diff.get("modified_line_diffs", []))
 
     mapping_lines = []
     for entry in modified_line_diffs[:max_items]:
@@ -1157,7 +1147,8 @@ def build_config_label_title_prompt(text: str, diff_payload, max_items=20):
 
 
 def build_config_changes_prompt(diff_payload, max_items=12):
-    modified_line_diffs = _get_effective_modified_line_diffs(diff_payload)
+    config_diff = diff_payload.get("config_differences") or {}
+    modified_line_diffs = list(config_diff.get("modified_line_diffs", []))
     section_index_cache = {}
 
     def _render_line_changes(items):
@@ -1220,7 +1211,8 @@ def build_config_changes_prompt(diff_payload, max_items=12):
 
 
 def generate_config_changes_fallback_from_line_diffs(diff_payload, max_lines=8) -> str:
-    line_diffs = _get_effective_modified_line_diffs(diff_payload)
+    config_diff = diff_payload.get("config_differences") or {}
+    line_diffs = list(config_diff.get("modified_line_diffs", []))
     bullets = []
     section_index_cache = {}
 
@@ -1323,30 +1315,42 @@ def format_config_change_labels_with_llm(text: str, diff_payload, settings) -> O
         diff_payload,
         max_items=settings.auto_config_max_items,
     )
-    try:
-        response = requests.post(
-            settings.auto_config_endpoint,
-            json={
-                "model": settings.auto_config_model,
-                "prompt": prompt,
-                "stream": False,
-                "options": {
-                    "temperature": 0,
-                    "num_predict": 200,
+    max_attempts = 3
+    for attempt in range(max_attempts):
+        num_predict = 200 + (attempt * 120)
+        try:
+            response = requests.post(
+                settings.auto_config_endpoint,
+                json={
+                    "model": settings.auto_config_model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {
+                        "temperature": 0,
+                        "num_predict": num_predict,
+                    },
                 },
-            },
-            timeout=int(settings.auto_config_timeout_seconds),
-        )
-        response.raise_for_status()
-        response_json = response.json()
-        bullet_lines = _normalize_llm_text_to_bullets(
-            response_json.get("response", ""),
-            max_lines=settings.auto_config_max_lines,
-        )
-        if bullet_lines:
-            return "\n".join(bullet_lines)
-    except Exception as ex:
-        print(f"[Changelog] LLM label formatting pass failed: {ex}")
+                timeout=int(settings.auto_config_timeout_seconds),
+            )
+            response.raise_for_status()
+            response_json = response.json()
+            bullet_lines, invalid_count = _normalize_config_llm_bullets(
+                response_json.get("response", ""),
+                max_lines=settings.auto_config_max_lines,
+            )
+            done_reason = str(response_json.get("done_reason", "") or "").strip().lower()
+            if bullet_lines and invalid_count == 0:
+                return "\n".join(bullet_lines)
+
+            needs_retry = (
+                attempt + 1 < max_attempts
+                and (invalid_count > 0 or done_reason in ("length", "max_tokens"))
+            )
+            if needs_retry:
+                print("[Changelog] LLM label formatting returned incomplete output. Retrying...")
+        except Exception as ex:
+            print(f"[Changelog] LLM label formatting pass failed: {ex}")
+            break
 
     return None
 
@@ -1360,34 +1364,46 @@ def generate_config_changes_with_llm(diff_payload, settings) -> Optional[str]:
         diff_payload,
         max_items=settings.auto_config_max_items,
     )
-    try:
-        response = requests.post(
-            settings.auto_config_endpoint,
-            json={
-                "model": settings.auto_config_model,
-                "prompt": prompt,
-                "stream": False,
-                "options": {
-                    "temperature": 0,
-                    "num_predict": 260,
+    max_attempts = 3
+    for attempt in range(max_attempts):
+        num_predict = 260 + (attempt * 180)
+        try:
+            response = requests.post(
+                settings.auto_config_endpoint,
+                json={
+                    "model": settings.auto_config_model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {
+                        "temperature": 0,
+                        "num_predict": num_predict,
+                    },
                 },
-            },
-            timeout=int(settings.auto_config_timeout_seconds),
-        )
-        response.raise_for_status()
-        response_json = response.json()
-        bullet_lines = _normalize_llm_text_to_bullets(
-            response_json.get("response", ""),
-            max_lines=settings.auto_config_max_lines,
-        )
-        if bullet_lines:
-            normalized = _normalize_config_change_labels("\n".join(bullet_lines), diff_payload)
-            titled = format_config_change_labels_with_llm(normalized, diff_payload, settings)
-            if titled:
-                return _normalize_config_change_title_labels(titled, diff_payload)
-            return _normalize_config_change_title_labels(normalized, diff_payload)
-    except Exception as ex:
-        print(f"[Changelog] LLM config change generation failed: {ex}")
+                timeout=int(settings.auto_config_timeout_seconds),
+            )
+            response.raise_for_status()
+            response_json = response.json()
+            bullet_lines, invalid_count = _normalize_config_llm_bullets(
+                response_json.get("response", ""),
+                max_lines=settings.auto_config_max_lines,
+            )
+            done_reason = str(response_json.get("done_reason", "") or "").strip().lower()
+            if bullet_lines and invalid_count == 0:
+                normalized = _normalize_config_change_labels("\n".join(bullet_lines), diff_payload)
+                titled = format_config_change_labels_with_llm(normalized, diff_payload, settings)
+                if titled:
+                    return _normalize_config_change_title_labels(titled, diff_payload)
+                return _normalize_config_change_title_labels(normalized, diff_payload)
+
+            needs_retry = (
+                attempt + 1 < max_attempts
+                and (invalid_count > 0 or done_reason in ("length", "max_tokens"))
+            )
+            if needs_retry:
+                print("[Changelog] LLM config generation returned incomplete output. Retrying...")
+        except Exception as ex:
+            print(f"[Changelog] LLM config change generation failed: {ex}")
+            break
 
     return None
 
@@ -1421,7 +1437,8 @@ def maybe_generate_config_changes(changelog_path, diff_payload):
         print("[Changelog] No diff payload available. Skipping config change generation.")
         return
 
-    modified_line_diffs = _get_effective_modified_line_diffs(diff_payload)
+    config_diff = diff_payload.get("config_differences") or {}
+    modified_line_diffs = list(config_diff.get("modified_line_diffs", []))
     removed_config_file_bullets = generate_removed_config_file_bullets(
         diff_payload,
         max_lines=settings.auto_config_max_lines,
@@ -1642,8 +1659,8 @@ class Settings:
     auto_summary_timeout_seconds: int = 45
     auto_summary_max_items: int = 8
     auto_config_timeout_seconds: int = 45
-    auto_config_max_items: int = 12
-    auto_config_max_lines: int = 8
+    auto_config_max_items: int = 20
+    auto_config_max_lines: int = 18
 
 
 def update_settings_from_dict(settings: Settings, settings_dict: dict):
