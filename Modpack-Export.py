@@ -1579,6 +1579,44 @@ def _apply_yosbr_default_wording(text: str, diff_payload) -> str:
     return "\n".join(normalized_lines)
 
 
+def _extract_config_bullet_labels(bullets: List[str]) -> set:
+    labels = set()
+    suffix_pattern = re.compile(r":\s*\[([^\[\]]+)\]\.?$")
+    for raw_line in bullets:
+        line = str(raw_line or "").strip()
+        if not line:
+            continue
+        match = suffix_pattern.search(line)
+        if match:
+            labels.add(str(match.group(1)).strip().lower())
+    return labels
+
+
+def _get_expected_config_labels(diff_payload) -> set:
+    config_diff = diff_payload.get("config_differences") or {}
+    modified_line_diffs = list(config_diff.get("modified_line_diffs", []))
+    labels = set()
+    if not modified_line_diffs:
+        return labels
+
+    for entry in modified_line_diffs:
+        file_path = str(entry.get("path", "")).strip()
+        if not file_path:
+            continue
+        mod_label = derive_mod_display_label_from_config_path(file_path).strip().lower()
+        if mod_label:
+            labels.add(mod_label)
+    return labels
+
+
+def _get_missing_config_labels_from_bullets(bullets: List[str], diff_payload) -> List[str]:
+    expected_labels = _get_expected_config_labels(diff_payload)
+    if not expected_labels:
+        return []
+    existing_labels = _extract_config_bullet_labels(bullets)
+    return sorted(expected_labels - existing_labels)
+
+
 def derive_mod_label_from_config_path(path: str) -> str:
     raw_path = str(path or "").replace("\\", "/").strip("/")
     if not raw_path:
@@ -2054,13 +2092,28 @@ def generate_config_changes_with_llm(diff_payload, settings) -> Optional[str]:
         print(f"[Changelog] Unsupported auto_config_provider '{settings.auto_config_provider}'.")
         return None
 
-    prompt = build_config_changes_prompt(
+    base_prompt = build_config_changes_prompt(
         diff_payload,
         max_items=settings.auto_config_max_items,
     )
-    max_attempts = 3
+    max_attempts = 5
+    best_text = None
+    best_missing_labels = None
+    missing_labels_for_retry = []
+
     for attempt in range(max_attempts):
         num_predict = 260 + (attempt * 180)
+        coverage_hint = ""
+        if missing_labels_for_retry:
+            missing_render = "\n".join(f"- {label}" for label in missing_labels_for_retry[:12])
+            coverage_hint = (
+                "\nCoverage retry requirement:\n"
+                "Ensure at least one bullet for each missing label below.\n"
+                "Keep exact label spelling inside [] for these:\n"
+                f"{missing_render}\n"
+            )
+
+        prompt = f"{base_prompt}{coverage_hint}"
         try:
             response = requests.post(
                 settings.auto_config_endpoint,
@@ -2086,14 +2139,32 @@ def generate_config_changes_with_llm(diff_payload, settings) -> Optional[str]:
                 normalized = _normalize_config_change_labels("\n".join(bullet_lines), diff_payload)
                 titled = format_config_change_labels_with_llm(normalized, diff_payload, settings)
                 if titled:
-                    return _apply_yosbr_default_wording(
+                    llm_text = _apply_yosbr_default_wording(
                         _normalize_config_change_title_labels(titled, diff_payload),
                         diff_payload,
                     )
-                return _apply_yosbr_default_wording(
-                    _normalize_config_change_title_labels(normalized, diff_payload),
-                    diff_payload,
-                )
+                else:
+                    llm_text = _apply_yosbr_default_wording(
+                        _normalize_config_change_title_labels(normalized, diff_payload),
+                        diff_payload,
+                    )
+
+                max_lines = int(settings.auto_config_max_lines)
+                llm_bullets = _normalize_llm_text_to_bullets(llm_text, max_lines=max_lines)
+                missing_labels = _get_missing_config_labels_from_bullets(llm_bullets, diff_payload)
+                if best_text is None or (best_missing_labels is not None and len(missing_labels) < len(best_missing_labels)):
+                    best_text = "\n".join(llm_bullets)
+                    best_missing_labels = list(missing_labels)
+
+                if not missing_labels:
+                    return "\n".join(llm_bullets)
+
+                if attempt + 1 < max_attempts:
+                    print("[Changelog] LLM config output missed some config labels. Retrying...")
+                    missing_labels_for_retry = list(missing_labels)
+                    continue
+
+                return best_text
 
             needs_retry = (
                 attempt + 1 < max_attempts
@@ -2105,7 +2176,7 @@ def generate_config_changes_with_llm(diff_payload, settings) -> Optional[str]:
             print(f"[Changelog] LLM config change generation failed: {ex}")
             break
 
-    return None
+    return best_text
 
 
 def maybe_generate_update_overview(changelog_path, diff_payload):
@@ -2182,9 +2253,9 @@ def maybe_generate_config_changes(changelog_path, diff_payload):
             if line_change_text:
                 source_parts.append("LLM")
             else:
-                print("[Changelog] LLM output was empty or failed. Falling back to deterministic config summary.")
+                print("[Changelog] LLM output was empty or failed after retries. Skipping deterministic fallback.")
 
-        if not line_change_text:
+        if not line_change_text and not uses_llm_config_changes(settings):
             line_change_text = generate_config_changes_fallback_from_line_diffs(
                 diff_payload,
                 max_lines=remaining_line_budget,
