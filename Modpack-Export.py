@@ -892,10 +892,7 @@ def generate_config_changes_with_llm(diff_payload, settings) -> Optional[str]:
     except Exception as ex:
         print(f"[Changelog] LLM config change generation failed: {ex}")
 
-    return generate_config_changes_fallback_from_line_diffs(
-        diff_payload,
-        max_lines=settings.auto_config_max_lines,
-    )
+    return None
 
 
 def maybe_generate_update_overview(changelog_path, diff_payload):
