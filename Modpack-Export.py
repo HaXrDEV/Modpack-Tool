@@ -882,9 +882,38 @@ def format_config_filename_as_title(filename: str) -> str:
     return " ".join(token.capitalize() for token in tokens)
 
 
-def _build_config_label_maps(diff_payload):
+def _normalize_config_relative_path(path: str) -> str:
+    return str(path or "").replace("\\", "/").strip("/").lower()
+
+
+def _get_removed_config_paths_set(diff_payload) -> set:
+    config_diff = diff_payload.get("config_differences") or {}
+    removed_paths = list(config_diff.get("removed", []))
+    return {
+        _normalize_config_relative_path(path)
+        for path in removed_paths
+        if _normalize_config_relative_path(path)
+    }
+
+
+def _get_effective_modified_line_diffs(diff_payload):
     config_diff = diff_payload.get("config_differences") or {}
     line_diffs = list(config_diff.get("modified_line_diffs", []))
+    removed_paths = _get_removed_config_paths_set(diff_payload)
+    if not removed_paths:
+        return line_diffs
+
+    filtered = []
+    for entry in line_diffs:
+        entry_path = _normalize_config_relative_path(entry.get("path", ""))
+        if entry_path in removed_paths:
+            continue
+        filtered.append(entry)
+    return filtered
+
+
+def _build_config_label_maps(diff_payload):
+    line_diffs = _get_effective_modified_line_diffs(diff_payload)
     stem_to_filename = {}
     alias_to_title = {}
 
@@ -952,9 +981,157 @@ def derive_mod_label_from_config_path(path: str) -> str:
     return filename
 
 
+def _strip_double_slash_comments(line: str) -> str:
+    text = str(line or "")
+    output = []
+    in_string = False
+    escaped = False
+
+    for i, ch in enumerate(text):
+        if escaped:
+            output.append(ch)
+            escaped = False
+            continue
+
+        if ch == "\\" and in_string:
+            output.append(ch)
+            escaped = True
+            continue
+
+        if ch == '"':
+            output.append(ch)
+            in_string = not in_string
+            continue
+
+        if not in_string and ch == "/" and i + 1 < len(text) and text[i + 1] == "/":
+            break
+
+        output.append(ch)
+
+    return "".join(output)
+
+
+def _extract_array_item_string_value(raw_line: str) -> Optional[str]:
+    line = str(raw_line or "").strip()
+    match = re.match(r'^\s*"((?:[^"\\]|\\.)*)"\s*,?\s*$', line)
+    if not match:
+        return None
+    raw_value = match.group(1)
+    try:
+        return bytes(raw_value, "utf-8").decode("unicode_escape")
+    except Exception:
+        return raw_value
+
+
+def _build_json_array_value_section_index(relative_config_path: str):
+    normalized_rel = str(relative_config_path or "").replace("\\", "/").strip("/")
+    if not normalized_rel:
+        return {}
+
+    _, ext = os.path.splitext(normalized_rel.lower())
+    if ext not in (".json", ".json5"):
+        return {}
+
+    config_file_path = os.path.join(packwiz_path, "config", *normalized_rel.split("/"))
+    if not os.path.isfile(config_file_path):
+        return {}
+
+    try:
+        with open(config_file_path, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return {}
+
+    section_index = {}
+    container_stack = []
+
+    def _pop_matching_container(container_type: str):
+        for stack_idx in range(len(container_stack) - 1, -1, -1):
+            if container_stack[stack_idx]["type"] == container_type:
+                container_stack.pop(stack_idx)
+                return
+        if container_stack:
+            container_stack.pop()
+
+    for raw_line in lines:
+        line = _strip_double_slash_comments(raw_line).strip()
+        if not line:
+            continue
+
+        string_value = _extract_array_item_string_value(line)
+        if string_value is not None:
+            section_names = [item["name"] for item in container_stack if item.get("name")]
+            if section_names:
+                section_path = ".".join(section_names)
+                lowered = string_value.lower()
+                section_list = section_index.setdefault(lowered, [])
+                if section_path not in section_list:
+                    section_list.append(section_path)
+
+        key_open_match = re.match(r'^"([^"]+)"\s*:\s*([\[{])', line)
+        if key_open_match:
+            key_name = key_open_match.group(1)
+            opener = key_open_match.group(2)
+            container_stack.append(
+                {
+                    "type": "array" if opener == "[" else "object",
+                    "name": key_name,
+                }
+            )
+
+        line_no_strings = re.sub(r'"(?:[^"\\]|\\.)*"', '""', line)
+        for ch in line_no_strings:
+            if ch == "]":
+                _pop_matching_container("array")
+            elif ch == "}":
+                _pop_matching_container("object")
+
+    return section_index
+
+
+def _find_config_sections_for_line(file_path: str, raw_line: str, section_index_cache) -> List[str]:
+    value = _extract_array_item_string_value(raw_line)
+    if not value:
+        return []
+
+    relative_config_path = str(file_path or "").replace("\\", "/").strip("/")
+    if relative_config_path not in section_index_cache:
+        section_index_cache[relative_config_path] = _build_json_array_value_section_index(relative_config_path)
+
+    section_index = section_index_cache.get(relative_config_path) or {}
+    return list(section_index.get(value.lower(), []))
+
+
+def _format_line_with_section_context(file_path: str, raw_line: str, section_index_cache) -> str:
+    base_line = str(raw_line or "").strip()
+    if not base_line:
+        return base_line
+
+    sections = _find_config_sections_for_line(file_path, base_line, section_index_cache)
+    if not sections:
+        return base_line
+
+    if len(sections) == 1:
+        return f"{base_line} (section: {sections[0]})"
+    return f"{base_line} (sections: {', '.join(sections)})"
+
+
+def _format_added_or_removed_list_value_bullet(action: str, file_path: str, raw_line: str, mod_label: str, section_index_cache) -> Optional[str]:
+    value = _extract_array_item_string_value(raw_line)
+    if not value:
+        return None
+
+    sections = _find_config_sections_for_line(file_path, raw_line, section_index_cache)
+    display_value = value[5:] if value.startswith("file/") else value
+    if sections:
+        if len(sections) == 1:
+            return f"- {action} {display_value} to section {sections[0]}: [{mod_label}]."
+        return f"- {action} {display_value} to sections {', '.join(sections)}: [{mod_label}]."
+    return f"- {action} {display_value}: [{mod_label}]."
+
+
 def build_config_label_title_prompt(text: str, diff_payload, max_items=20):
-    config_diff = diff_payload.get("config_differences") or {}
-    modified_line_diffs = list(config_diff.get("modified_line_diffs", []))
+    modified_line_diffs = _get_effective_modified_line_diffs(diff_payload)
 
     mapping_lines = []
     for entry in modified_line_diffs[:max_items]:
@@ -980,23 +1157,30 @@ def build_config_label_title_prompt(text: str, diff_payload, max_items=20):
 
 
 def build_config_changes_prompt(diff_payload, max_items=12):
-    config_diff = diff_payload.get("config_differences") or {}
-    modified_line_diffs = list(config_diff.get("modified_line_diffs", []))
+    modified_line_diffs = _get_effective_modified_line_diffs(diff_payload)
+    section_index_cache = {}
 
     def _render_line_changes(items):
         if not items:
             return "none"
         rendered = []
         for entry in items[:max_items]:
-            rendered.append(f"File: {entry.get('path')}")
+            file_path = str(entry.get("path", "")).strip()
+            rendered.append(f"File: {file_path}")
             removed_lines = entry.get("removed_lines", [])[:8]
             added_lines = entry.get("added_lines", [])[:8]
             if removed_lines:
                 rendered.append("Removed lines:")
-                rendered.extend(f"- {line}" for line in removed_lines)
+                rendered.extend(
+                    f"- {_format_line_with_section_context(file_path, line, section_index_cache)}"
+                    for line in removed_lines
+                )
             if added_lines:
                 rendered.append("Added lines:")
-                rendered.extend(f"- {line}" for line in added_lines)
+                rendered.extend(
+                    f"- {_format_line_with_section_context(file_path, line, section_index_cache)}"
+                    for line in added_lines
+                )
             rendered.append("")
         return "\n".join(rendered).strip()
 
@@ -1015,6 +1199,7 @@ def build_config_changes_prompt(diff_payload, max_items=12):
         "Output only bullet lines. Each line must start with '- '.\n"
         "Keep wording factual and short. No markdown headers and no counts.\n"
         "Summarize what values or options changed, based on the changed lines.\n"
+        "For added/removed list entries, explicitly mention the section path when provided in '(section: ...)' context.\n"
         "Do not write generic lines like 'updated config files'.\n"
         "Do not write about added/removed config files.\n"
         "Only summarize in-file setting/value changes from modified files.\n"
@@ -1035,9 +1220,9 @@ def build_config_changes_prompt(diff_payload, max_items=12):
 
 
 def generate_config_changes_fallback_from_line_diffs(diff_payload, max_lines=8) -> str:
-    config_diff = diff_payload.get("config_differences") or {}
-    line_diffs = list(config_diff.get("modified_line_diffs", []))
+    line_diffs = _get_effective_modified_line_diffs(diff_payload)
     bullets = []
+    section_index_cache = {}
 
     for entry in line_diffs:
         file_path = str(entry.get("path", "")).strip()
@@ -1045,6 +1230,37 @@ def generate_config_changes_fallback_from_line_diffs(diff_payload, max_lines=8) 
         added_lines = entry.get("added_lines", [])
         removed_lines = entry.get("removed_lines", [])
         candidate_lines = list(added_lines) + list(removed_lines)
+        entry_started_with_bullet_count = len(bullets)
+
+        for raw_line in added_lines:
+            bullet = _format_added_or_removed_list_value_bullet(
+                action="Added",
+                file_path=file_path,
+                raw_line=raw_line,
+                mod_label=mod_label,
+                section_index_cache=section_index_cache,
+            )
+            if bullet:
+                bullets.append(bullet)
+            if len(bullets) >= max_lines:
+                break
+        if len(bullets) >= max_lines:
+            break
+
+        for raw_line in removed_lines:
+            bullet = _format_added_or_removed_list_value_bullet(
+                action="Removed",
+                file_path=file_path,
+                raw_line=raw_line,
+                mod_label=mod_label,
+                section_index_cache=section_index_cache,
+            )
+            if bullet:
+                bullets.append(bullet)
+            if len(bullets) >= max_lines:
+                break
+        if len(bullets) >= max_lines:
+            break
 
         keys = []
         for raw_line in candidate_lines:
@@ -1059,6 +1275,9 @@ def generate_config_changes_fallback_from_line_diffs(diff_payload, max_lines=8) 
             if len(keys) >= 4:
                 break
 
+        if len(bullets) > entry_started_with_bullet_count:
+            continue
+
         if keys:
             keys_str = ", ".join(keys)
             bullets.append(f"- Changed {keys_str}: [{mod_label}].")
@@ -1068,6 +1287,31 @@ def generate_config_changes_fallback_from_line_diffs(diff_payload, max_lines=8) 
             break
 
     return "\n".join(bullets)
+
+
+def generate_removed_config_file_bullets(diff_payload, max_lines=8) -> List[str]:
+    config_diff = diff_payload.get("config_differences") or {}
+    removed_paths = list(config_diff.get("removed", []))
+    bullets = []
+    seen = set()
+
+    for raw_path in removed_paths:
+        relative_path = str(raw_path or "").replace("\\", "/").strip("/")
+        if not relative_path:
+            continue
+
+        dedupe_key = relative_path.lower()
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+
+        filename = derive_mod_label_from_config_path(relative_path)
+        mod_label = format_config_filename_as_title(filename)
+        bullets.append(f"- Removed config file {relative_path}: [{mod_label}].")
+        if len(bullets) >= max_lines:
+            break
+
+    return bullets
 
 
 def format_config_change_labels_with_llm(text: str, diff_payload, settings) -> Optional[str]:
@@ -1177,8 +1421,11 @@ def maybe_generate_config_changes(changelog_path, diff_payload):
         print("[Changelog] No diff payload available. Skipping config change generation.")
         return
 
-    config_diff = diff_payload.get("config_differences") or {}
-    modified_line_diffs = list(config_diff.get("modified_line_diffs", []))
+    modified_line_diffs = _get_effective_modified_line_diffs(diff_payload)
+    removed_config_file_bullets = generate_removed_config_file_bullets(
+        diff_payload,
+        max_lines=settings.auto_config_max_lines,
+    )
 
     with open(changelog_path, "r", encoding="utf-8") as f:
         changelog_yml = yaml.load(f) or {}
@@ -1190,39 +1437,51 @@ def maybe_generate_config_changes(changelog_path, diff_payload):
         print("[Changelog] 'Config Changes' already exists. Skipping auto generation.")
         return
 
-    if not modified_line_diffs:
+    if not modified_line_diffs and not removed_config_file_bullets:
         changelog_yml["Config Changes"] = ""
         with open(changelog_path, "w", encoding="utf-8") as f:
             yaml.dump(changelog_yml, f)
         print(f"[Changelog] Cleared 'Config Changes' (no config changes detected) in {os.path.basename(changelog_path)}.")
         return
 
-    config_changes_text = None
-    source_label = ""
+    final_bullets = list(removed_config_file_bullets)
+    source_parts = []
+    if removed_config_file_bullets:
+        source_parts.append("removed-files")
 
-    if uses_llm_config_changes(settings):
-        config_changes_text = generate_config_changes_with_llm(diff_payload, settings)
-        if config_changes_text:
-            source_label = "LLM"
-        else:
-            print("[Changelog] LLM output was empty or failed. Falling back to deterministic config summary.")
+    remaining_line_budget = max(int(settings.auto_config_max_lines) - len(final_bullets), 0)
+    line_change_text = None
 
-    if not config_changes_text:
-        config_changes_text = generate_config_changes_fallback_from_line_diffs(
-            diff_payload,
-            max_lines=settings.auto_config_max_lines,
+    if modified_line_diffs and remaining_line_budget > 0:
+        if uses_llm_config_changes(settings):
+            line_change_text = generate_config_changes_with_llm(diff_payload, settings)
+            if line_change_text:
+                source_parts.append("LLM")
+            else:
+                print("[Changelog] LLM output was empty or failed. Falling back to deterministic config summary.")
+
+        if not line_change_text:
+            line_change_text = generate_config_changes_fallback_from_line_diffs(
+                diff_payload,
+                max_lines=remaining_line_budget,
+            )
+            if line_change_text:
+                source_parts.append("fallback")
+
+    if line_change_text and remaining_line_budget > 0:
+        final_bullets.extend(
+            _normalize_llm_text_to_bullets(line_change_text, max_lines=remaining_line_budget)
         )
-        if config_changes_text:
-            source_label = "fallback"
 
-    if not str(config_changes_text or "").strip():
+    if not final_bullets:
         print("[Changelog] Skipping 'Config Changes': no usable output from LLM or fallback.")
         return
 
-    changelog_yml["Config Changes"] = LiteralScalarString(config_changes_text)
+    changelog_yml["Config Changes"] = LiteralScalarString("\n".join(final_bullets))
     with open(changelog_path, "w", encoding="utf-8") as f:
         yaml.dump(changelog_yml, f)
 
+    source_label = " + ".join(source_parts) if source_parts else "unknown"
     print(f"[Changelog] Auto-generated 'Config Changes' via {source_label} in {os.path.basename(changelog_path)}.")
 
 
