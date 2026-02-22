@@ -4,7 +4,17 @@ Requires Python 3.11
 
 > [!WARNING]  
 > This tool is made for the sole purpose of automating stuff when i develop my modpacks. It is therefore not made to be user friendly or flexible in any way as it requires a very specific workflow to function.
-> Long story short, i do not recommend that anyone else uses this tool due to the reasons above.
+> Long story short, i do not recommend that anyone else uses this tool due to those reasons.
+
+## Current behavior
+
+The script (`Modpack-Export.py`) assumes this repo layout:
+
+- `../settings.yml` (next to `Packwiz`, `Changelogs`, `Export`, `Server Pack`)
+- `../Packwiz/pack.toml`
+- `packwiz.exe` at `%USERPROFILE%\go\bin\packwiz.exe`
+
+If these paths do not match your setup, the workflow will fail.
 
 ## Action menu
 
@@ -17,8 +27,12 @@ At startup, the tool now shows an action menu so you can choose what to run for 
 - migration + client export
 - migration + client + server export
 - refresh only
+- update mods only
 - bump modpack version only
 - clear stored repository data
+- generate changelog summary only
+
+`generate changelog summary only` only regenerates changelog text (`Update overview` and/or `Config Changes`) without exporting packs.
 
 ## Breakneck specific stuff
 
@@ -48,7 +62,7 @@ When enabled, the tool will:
 
 The export flow can auto-populate changelog fields in `Changelogs/<version>+<mc_version>.yml`:
 
-- `Update overview` is now fully deterministic and generated from local diff data.
+- `Update overview` is deterministic and generated from local diff data.
 - `Config Changes` can be generated with an LLM from config file diffs.
 
 ### Settings
@@ -68,10 +82,16 @@ The export flow can auto-populate changelog fields in `Changelogs/<version>+<mc_
 
 ### Requirements
 
-Run Ollama locally and pull a small model, for example:
+For `Config Changes`, run Ollama locally and pull a model, for example:
 
 ```powershell
 ollama pull qwen3:4b-instruct
 ```
 
 If the model call fails or no model is available, the tool does not write `Config Changes` and prints a notice instead.
+
+## Notable runtime prompts
+
+- Migration actions can prompt for target Minecraft/Fabric versions if not set in `settings.yml`.
+- When summary generation is active, the script prompts whether to overwrite existing `Update overview` / `Config Changes` for the current run.
+- Server export currently includes a manual step where you provide a dragged `mods` folder path from a created CurseForge instance.
