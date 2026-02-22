@@ -603,14 +603,23 @@ def _extract_modified_names(modified_items):
     return [str(item[0]) for item in modified_items if isinstance(item, (list, tuple)) and item]
 
 
+def _format_quoted_names(names):
+    cleaned = [str(name).strip() for name in names if str(name).strip()]
+    return ", ".join(f"'{name}'" for name in cleaned)
+
+
 def generate_deterministic_update_overview(diff_payload, migration_mode=False) -> List[str]:
     mod_diff = diff_payload.get("mod_differences") or {}
     res_diff = diff_payload.get("resourcepack_differences") or {}
     mod_addition_breakdown = diff_payload.get("mod_addition_breakdown") or {}
 
-    new_mod_count = len(mod_addition_breakdown.get("newly_added", []))
-    reenabled_mod_count = len(mod_addition_breakdown.get("reenabled_from_disabled", []))
-    removed_mod_count = len(mod_diff.get("removed", []))
+    new_mod_names = list(mod_addition_breakdown.get("newly_added", []))
+    reenabled_mod_names = list(mod_addition_breakdown.get("reenabled_from_disabled", []))
+    removed_mod_names = list(mod_diff.get("removed", []))
+
+    new_mod_count = len(new_mod_names)
+    reenabled_mod_count = len(reenabled_mod_names)
+    removed_mod_count = len(removed_mod_names)
     updated_mod_count = len(_extract_modified_names(mod_diff.get("modified", [])))
 
     added_res_count = len(res_diff.get("added", []))
@@ -621,22 +630,30 @@ def generate_deterministic_update_overview(diff_payload, migration_mode=False) -
     if migration_mode:
         lines.append(f"Updated to Minecraft {diff_payload.get('mc_version')}.")
 
+    current_version = str(diff_payload.get("current_version") or "")
+    is_alpha_or_beta = bool(re.search(r"\b(alpha|beta)\b", current_version, re.IGNORECASE))
+
+    if new_mod_count > 0:
+        lines.append(f"Added {_format_quoted_names(new_mod_names)}.")
+    if reenabled_mod_count > 0:
+        if is_alpha_or_beta:
+            lines.append(f"Re-added some mods that have become available for {diff_payload.get('mc_version')}.")
+        else:
+            lines.append("Re-added some mods.")
+
+
+    if removed_mod_count > 0:
+        if migration_mode:
+            lines.append(f"Temporarily removed incompatible mods: {_format_quoted_names(removed_mod_names)}.")
+        else:
+            lines.append(f"Removed {_format_quoted_names(removed_mod_names)}.")
+
     if updated_mod_count > 0 and updated_res_count > 0:
         lines.append("Updated mods & resource packs.")
     elif updated_mod_count > 0:
         lines.append("Updated mods.")
     elif updated_res_count > 0:
         lines.append("Updated resource packs.")
-
-    if new_mod_count > 0:
-        lines.append("Added new mods.")
-    if reenabled_mod_count > 0:
-        lines.append("Re-added some mods that have become available for this version.")
-    if removed_mod_count > 0:
-        if migration_mode:
-            lines.append("Temporarily removed incompatible mods.")
-        else:
-            lines.append("Removed mods.")
 
     if added_res_count > 0 and removed_res_count > 0:
         lines.append("Updated resource pack lineup.")
