@@ -725,8 +725,8 @@ def _normalize_llm_text_to_bullets(raw_text: str, max_lines: int):
         line = re.sub(r"^[\-\*\u2022]\s*", "", line)
         line = re.sub(r"^\d+[.)]\s*", "", line)
         if line:
-            normalized = line.rstrip(".")
-            lines.append(f"- {normalized}.")
+            normalized = line.rstrip(".").strip()
+            lines.append(f"- {normalized}")
     return lines[:max_lines]
 
 
