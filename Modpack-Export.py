@@ -2539,15 +2539,9 @@ def download_missing_comparison_files():
     async def download_compare_files_async(input_version, destination, tag_mc_ver):
         print(f"Downloading {input_version} comparison files.")
         if settings.breakneck_fixes and is_version_in_range(input_version, "4.0.0-beta.3", "4.4.0-beta.1"):
-            packwiz_mods_folder = f"Packwiz/{tag_mc_ver}/mods"
-            packwiz_resourcepacks_folder = f"Packwiz/{tag_mc_ver}/resourcepacks"
-            packwiz_shaderpacks_folder = f"Packwiz/{tag_mc_ver}/shaderpacks"
-            packwiz_config_folder = f"Packwiz/{tag_mc_ver}/config"
+            packwiz_root = f"Packwiz/{tag_mc_ver}"
         else:
-            packwiz_mods_folder = "Packwiz/mods"
-            packwiz_resourcepacks_folder = "Packwiz/resourcepacks"
-            packwiz_shaderpacks_folder = "Packwiz/shaderpacks"
-            packwiz_config_folder = "Packwiz/config"
+            packwiz_root = "Packwiz"
 
         local_downloader = AsyncGitHubDownloader(
             settings.repo_owner,
@@ -2555,13 +2549,14 @@ def download_missing_comparison_files():
             token=github_token,
             branch=input_version,
         )
-        await local_downloader.download_folder(packwiz_mods_folder, os.path.join(destination, "mods"))
-        await local_downloader.download_folder(packwiz_resourcepacks_folder, os.path.join(destination, "resourcepacks"))
-        await local_downloader.download_folder(packwiz_shaderpacks_folder, os.path.join(destination, "shaderpacks"))
-        await local_downloader.download_folder(
-            packwiz_config_folder,
-            os.path.join(destination, "config"),
-            recursive=True,
+        await local_downloader.download_repo_snapshot(
+            destination=destination,
+            folder_mappings={
+                f"{packwiz_root}/mods": "mods",
+                f"{packwiz_root}/resourcepacks": "resourcepacks",
+                f"{packwiz_root}/shaderpacks": "shaderpacks",
+                f"{packwiz_root}/config": "config",
+            },
         )
 
     for changelog in reversed(os.listdir(changelog_dir_path)):

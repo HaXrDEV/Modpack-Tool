@@ -1,7 +1,9 @@
 import os
 import aiohttp
-import asyncio
-from typing import Optional
+import shutil
+import tempfile
+import zipfile
+from typing import Optional, Dict
 
 
 class AsyncGitHubDownloader:
@@ -27,134 +29,86 @@ class AsyncGitHubDownloader:
         if token:
             self.headers['Authorization'] = f'token {token}'
 
-    async def _fetch(self, session: aiohttp.ClientSession, url: str):
+    async def _download_archive(self, session: aiohttp.ClientSession, archive_path: str):
         """
-        Asynchronously fetch data from the given URL.
-        
-        Parameters:
-        - session: aiohttp.ClientSession, the session to use for making requests.
-        - url: str, the URL to fetch.
-
-        Returns:
-        - JSON response data.
+        Download repository archive (zipball) for the configured branch/tag.
         """
-        async with session.get(url, headers=self.headers) as response:
+        archive_url = f"{self.GITHUB_API_URL}/{self.repo_owner}/{self.repo_name}/zipball/{self.branch}"
+        async with session.get(archive_url, headers=self.headers, allow_redirects=True) as response:
             if response.status == 200:
-                return await response.json()
+                with open(archive_path, 'wb') as archive_file:
+                    async for chunk in response.content.iter_chunked(self.CHUNK_SIZE):
+                        archive_file.write(chunk)
+                return
             elif response.status == 401:
                 raise RuntimeError("Authentication failed. Please check your GitHub token.")
             elif response.status == 403:
                 raise RuntimeError("Rate limit exceeded or repository access denied.")
             elif response.status == 404:
-                raise RuntimeError("Repository or path not found.")
+                raise RuntimeError("Repository or branch/tag not found.")
             else:
-                raise RuntimeError(f"Failed to fetch data: {response.status}")
+                raise RuntimeError(f"Failed to download repository archive: {response.status}")
 
-    async def _download_file(self, session: aiohttp.ClientSession, url: str, dest_folder: str, filename: str):
+    @staticmethod
+    def _normalize_repo_path(path: str) -> str:
+        return str(path).strip().strip("/\\").replace("\\", "/")
+
+    @staticmethod
+    def _find_extracted_repo_root(extract_dir: str) -> str:
+        entries = [os.path.join(extract_dir, item) for item in os.listdir(extract_dir)]
+        dir_entries = [entry for entry in entries if os.path.isdir(entry)]
+        if len(dir_entries) == 1:
+            return dir_entries[0]
+        raise RuntimeError("Unable to determine extracted repository root directory.")
+
+    async def download_repo_snapshot(self, destination: str, folder_mappings: Dict[str, str]):
         """
-        Asynchronously download a single file and save it to the destination folder.
-        
+        Download the full repository snapshot once, then move selected folders into destination.
+
         Parameters:
-        - session: aiohttp.ClientSession, the session to use for downloading.
-        - url: str, the file download URL.
-        - dest_folder: str, the local folder where the file will be saved.
-        - filename: str, the name of the file.
+        - destination: str, local destination root.
+        - folder_mappings: Dict[str, str], mapping of repo-relative folder path -> destination-relative folder path.
         """
-        file_path = os.path.join(dest_folder, filename)
-        os.makedirs(dest_folder, exist_ok=True)
-        async with session.get(url, headers=self.headers) as response:
-            if response.status == 200:
-                with open(file_path, 'wb') as f:
-                    async for chunk in response.content.iter_chunked(self.CHUNK_SIZE):
-                        f.write(chunk)
-                print(f"Downloaded {filename}")
-            else:
-                print(f"Failed to download {filename}: {response.status}")
+        os.makedirs(destination, exist_ok=True)
 
-    async def _get_folder_contents(self, session: aiohttp.ClientSession, folder_path: str):
-        """
-        Asynchronously fetch the contents of a folder in the repository.
-        
-        Parameters:
-        - session: aiohttp.ClientSession, the session to use for making requests.
-        - folder_path: str, the folder path inside the repository.
+        temp_root = tempfile.mkdtemp(prefix=f"{self.repo_name}-{self.branch}-")
+        archive_path = os.path.join(temp_root, "repo_snapshot.zip")
+        extract_dir = os.path.join(temp_root, "extracted")
+        os.makedirs(extract_dir, exist_ok=True)
 
-        Returns:
-        - List of files and folders in the given path.
-        """
-        api_url = f"{self.GITHUB_API_URL}/{self.repo_owner}/{self.repo_name}/contents/{folder_path}?ref={self.branch}"
-        return await self._fetch(session, api_url)
-
-    async def _download_folder_recursive(self, session: aiohttp.ClientSession, folder_path: str, dest_folder: str):
         try:
-            folder_contents = await self._get_folder_contents(session, folder_path)
-        except Exception as e:
-            print(f"Error: {str(e)}")
-            return
+            timeout = aiohttp.ClientTimeout(total=300)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                await self._download_archive(session, archive_path)
 
-        tasks = []
-        for item in folder_contents:
-            item_type = str(item.get("type", "")).lower()
-            if item_type == "file":
-                download_url = item.get("download_url")
-                filename = item.get("name")
-                if download_url and filename:
-                    tasks.append(self._download_file(session, download_url, dest_folder, filename))
-            elif item_type == "dir":
-                nested_path = item.get("path")
-                nested_name = item.get("name")
-                if not nested_path or not nested_name:
-                    continue
-                nested_dest = os.path.join(dest_folder, nested_name)
-                os.makedirs(nested_dest, exist_ok=True)
-                tasks.append(self._download_folder_recursive(session, nested_path, nested_dest))
+            with zipfile.ZipFile(archive_path, 'r') as archive:
+                archive.extractall(extract_dir)
 
-        if tasks:
-            await asyncio.gather(*tasks)
+            repo_root = self._find_extracted_repo_root(extract_dir)
 
-    async def download_folder(self, folder_path: str, dest_folder: str, recursive: bool = False):
-        """
-        Asynchronously download all files from a specific folder in the repository.
-        
-        Parameters:
-        - folder_path: str, the folder path inside the repository.
-        - dest_folder: str, the local folder where files will be saved.
-        - recursive: bool, download files in nested directories recursively.
-        """
-        os.makedirs(dest_folder, exist_ok=True)
+            for source_folder, destination_folder in folder_mappings.items():
+                source_normalized = self._normalize_repo_path(source_folder)
+                destination_normalized = self._normalize_repo_path(destination_folder)
 
-        timeout = aiohttp.ClientTimeout(total=120)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            if recursive:
-                await self._download_folder_recursive(session, folder_path, dest_folder)
-            else:
-                try:
-                    folder_contents = await self._get_folder_contents(session, folder_path)
-                except Exception as e:
-                    print(f"Error: {str(e)}")
-                    return
+                source_parts = [part for part in source_normalized.split("/") if part]
+                source_path = os.path.join(repo_root, *source_parts)
+                target_path = os.path.join(destination, destination_normalized)
 
-                tasks = []
-                for item in folder_contents:
-                    if item.get("type") == "file":
-                        download_url = item.get("download_url")
-                        filename = item.get("name")
-                        if download_url and filename:
-                            tasks.append(self._download_file(session, download_url, dest_folder, filename))
+                if os.path.isdir(target_path):
+                    shutil.rmtree(target_path)
+                elif os.path.isfile(target_path):
+                    os.remove(target_path)
 
-                if tasks:
-                    await asyncio.gather(*tasks)
-        print("All files downloaded successfully.")
+                if os.path.isdir(source_path):
+                    os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                    shutil.move(source_path, target_path)
+                    print(f"Moved '{source_folder}' -> '{destination_folder}'")
+                else:
+                    # Keep expected folder layout stable even when source folder does not exist for a tag.
+                    os.makedirs(target_path, exist_ok=True)
+                    print(f"Missing '{source_folder}' in snapshot. Created empty '{destination_folder}'.")
 
-# Example usage:
-# async def main():
-#     # Without authentication (for public repositories)
-#     downloader = AsyncGitHubDownloader('octocat', 'Hello-World')
-#     await downloader.download_folder('path/to/folder', './local_folder')
-#
-#     # With authentication (for private repositories or to avoid rate limiting)
-#     token = "your_github_personal_access_token"
-#     authenticated_downloader = AsyncGitHubDownloader('octocat', 'Hello-World', token=token)
-#     await authenticated_downloader.download_folder('path/to/folder', './local_folder')
-#
-# asyncio.run(main())
+            print("Repository snapshot downloaded and processed successfully.")
+        finally:
+            # Remove full downloaded snapshot + all files that are not needed after moving selected folders.
+            shutil.rmtree(temp_root, ignore_errors=True)
