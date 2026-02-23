@@ -221,35 +221,29 @@ Config Changes generator: {config_mode_label}
         return True
 
     if choice == "8":
-        settings.refresh_only = True
         settings.update_mods_only = True
         return True
 
     if choice == "9":
-        settings.refresh_only = True
         settings.bump_version_only = True
         target_version = input(f"New modpack version [{pack_version}]: ").strip()
         settings.bump_target_version = target_version if target_version else pack_version
         return True
 
     if choice == "10":
-        settings.refresh_only = True
         settings.clear_repo_data_only = True
         return True
 
     if choice == "11":
-        settings.refresh_only = True
         settings.generate_update_summary_only = True
         prompt_changelog_autogen_overwrite(force_prompt=True)
         return True
 
     if choice == "12":
-        settings.refresh_only = True
         settings.list_disabled_mods_only = True
         return True
 
     if choice == "13":
-        settings.refresh_only = True
         settings.add_mod_only = True
         return True
 
@@ -2726,7 +2720,19 @@ changelog_factory = ChangelogFactory(changelog_dir_path, modpack_name, pack_vers
 def main():
     global minecraft_version, fabric_version
 
-    if not settings.refresh_only:
+    special_menu_action_selected = any(
+        [
+            settings.refresh_only,
+            settings.update_mods_only,
+            settings.bump_version_only,
+            settings.clear_repo_data_only,
+            settings.generate_update_summary_only,
+            settings.list_disabled_mods_only,
+            settings.add_mod_only,
+        ]
+    )
+
+    if not special_menu_action_selected:
         if settings.breakneck_fixes and (settings.export_client or settings.export_server):
             input("Using fixes for Breakneck. Press Enter to continue...")
 
@@ -3068,7 +3074,7 @@ def main():
         os.chdir(packwiz_path)
         subprocess.call(f"{packwiz_exe_path} refresh", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    elif settings.refresh_only:
+    else:
         if settings.clear_repo_data_only:
             clear_stored_repository_data()
         elif settings.bump_version_only:
@@ -3120,7 +3126,7 @@ def main():
                     enabled_mods = enable_mods_by_files([mod_file for mod_file, _ in updated_disabled_mods])
                     subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
                     print(f"[PackWiz] Re-enabled {len(enabled_mods)} updated disabled mods.")
-        else:
+        elif settings.refresh_only:
             subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
 
 
