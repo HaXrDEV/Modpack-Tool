@@ -41,18 +41,20 @@ class ChangelogFactory:
         toml_data_1 = {}
         toml_data_2 = {}
         
-        def local_load_toml_files_from_dir(dir, dict):
-            try:
-                for filename in os.listdir(dir):
-                    if filename.endswith('.toml'):
-                        filepath = os.path.join(dir, filename)
-                        with open(filepath, "r", encoding="utf8") as f:
-                            mod_toml = toml.load(f)
-                            side = str(mod_toml['side'])
-                            if side in ("both", "client", "server"):
-                                dict[filename] = toml.load(filepath)
-            except Exception as ex:
-                print(ex)
+        def local_load_toml_files_from_dir(input_dir, output_dict):
+            for filename in os.listdir(input_dir):
+                if not filename.endswith(".toml"):
+                    continue
+
+                filepath = os.path.join(input_dir, filename)
+                try:
+                    with open(filepath, "r", encoding="utf8") as f:
+                        mod_toml = toml.load(f)
+                    side = str(mod_toml.get("side", "both"))
+                    if side in ("both", "client", "server"):
+                        output_dict[filename] = mod_toml
+                except (OSError, toml.TomlDecodeError) as ex:
+                    print(ex)
 
         local_load_toml_files_from_dir(dir1, toml_data_1)
         local_load_toml_files_from_dir(dir2, toml_data_2)
@@ -536,7 +538,7 @@ class ChangelogFactory:
             "changelog": latest_version["changelog"]
         }
 
-    def build_markdown_changelog(self, repo_owner, repo_name, tempgit_path, packwiz_path, file_name="CHANGELOG", repo_branch = "main", mc_version=None):
+    def build_markdown_changelog(self, repo_owner, repo_name, tempgit_path, packwiz_path, file_name="CHANGELOG", repo_branch="main", mc_version=None):
         mdFile = MdUtils(file_name)
 
         changelog_files = os.listdir(self.changelog_dir)
@@ -580,11 +582,17 @@ class ChangelogFactory:
 
             added_mods = None
             removed_mods = None
+            added_resourcepacks = None
+            removed_resourcepacks = None
+            modified_mods = []
+            modified_resourcepacks = []
+            next_version = None
+            next_mc_version = None
 
             if changelog.endswith(('.yml', '.yaml')) and mc_version == self.get_changelog_value(changelog, 'mc_version'): # Only takes yaml files and those with the correct mc version.
                 version = self.get_changelog_value(changelog, "version")
                 if next_changelog:
-                    next_version = self.get_changelog_value(next_changelog , "version")
+                    next_version = self.get_changelog_value(next_changelog, "version")
                     next_mc_version = self.get_changelog_value(next_changelog, "mc_version")
 
                 fabric_loader = self.get_changelog_value(changelog, "Fabric version")
@@ -594,10 +602,6 @@ class ChangelogFactory:
                 config_changes = self.get_changelog_value(changelog, "Config Changes")
                 script_changes = self.get_changelog_value(changelog, "Script/Datapack changes")
 
-                next_version_path = os.path.join(tempgit_path, str(next_version))
-                next_version_mods_path = os.path.join(next_version_path, "mods")
-                next_version_resourcepacks_path = os.path.join(next_version_path, "resourcepacks")
-
                 version_path = os.path.join(tempgit_path, str(version))
                 version_mods_path = os.path.join(version_path, "mods")
                 version_resourcepacks_path = os.path.join(version_path, "resourcepacks")
@@ -605,7 +609,11 @@ class ChangelogFactory:
                 packwiz_mods_path = os.path.join(packwiz_path, "mods")
                 packwiz_resourcepacks_path = os.path.join(packwiz_path, "resourcepacks")
 
-                print(f"[DEBUG] {next_version_path} + {version_path}")
+                if next_version:
+                    next_version_path = os.path.join(tempgit_path, str(next_version))
+                    next_version_mods_path = os.path.join(next_version_path, "mods")
+                    next_version_resourcepacks_path = os.path.join(next_version_path, "resourcepacks")
+                    print(f"[DEBUG] {next_version_path} + {version_path}")
 
                 if str(version) != str(self.modpack_version) and next_version:
                     mod_differences = self.compare_toml_files(next_version_mods_path, version_mods_path)
@@ -644,10 +652,10 @@ class ChangelogFactory:
                     print(e)
                     continue
 
-                if version == self.modpack_version and not version == latest_modrinth_version_number:
+                if version == self.modpack_version and version != latest_modrinth_version_number:
                         mdFile.new_paragraph(f"## v{version} <Badge type='warning' text='Work in progress'/> <a href='#v{version}' id='v{version}'></a>")
                 else: 
-                    if not "v" in version:
+                    if "v" not in version:
                         mdFile.new_paragraph(f"## v{version} <a href='#v{version}' id='v{version}'></a>")
                     else:
                         mdFile.new_paragraph(f"## {version} <a href='#{version}' id='{version}'></a>")
@@ -707,7 +715,7 @@ class ChangelogFactory:
                     mdFile.new_paragraph(markdown.codify_bracketed_text(config_changes))
 
 
-                if next_version != version:
+                if next_version and next_version != version and mod_differences:
                     markdown.write_differences_to_markdown(
                         mod_differences,
                         self.modpack_name,

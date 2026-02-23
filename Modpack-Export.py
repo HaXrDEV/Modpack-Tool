@@ -429,7 +429,7 @@ def get_latest_release_version(owner, repo):
         return f"Error occurred: {err}"
 
 
-def download_versioning_helper(local_version = str):
+def download_versioning_helper(local_version: str):
     if "alpha" in local_version or "beta" in local_version:
         return local_version.replace("-", "_")
     else:
@@ -459,11 +459,11 @@ def clear_mmc_cache(path):
         if item not in retain:
             try:
                 os.remove(item)
-            except:
+            except OSError:
                 pass
             try:
                 rmtree(item)
-            except:
+            except OSError:
                 pass
 
 
@@ -2893,7 +2893,7 @@ def main():
         subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
 
         client_zip_name = f'{modpack_name}-{pack_version}.zip'
-        if settings.export_client and settings.breakneck_fixes == False:
+        if settings.export_client and not settings.breakneck_fixes:
             subprocess.call(f"{packwiz_exe_path} cf export", shell=True)
             move(client_zip_name, os.path.join(export_path, client_zip_name))
             print("[PackWiz] Client exported.")
@@ -2928,7 +2928,6 @@ def main():
                         with open(item, "r") as f:
                             mod_toml = toml.load(f)
                             if "disabled" in mod_toml["side"]:
-                                f.close()
                                 move(item, disabled_mods_path)
                     except OSError as e:
                         print(f"move_disabled_mods: {e}")
@@ -2938,7 +2937,7 @@ def main():
             # Ensure mmc-cache exists and is clean
             try:
                 os.mkdir(mmc_cache_path)
-            except:
+            except FileExistsError:
                 pass
             clear_mmc_cache(mmc_cache_path)
 
@@ -2960,7 +2959,7 @@ def main():
             # Ensure .minecraft exists
             try:
                 os.mkdir(mmc_dotminecraft_path)
-            except:
+            except FileExistsError:
                 pass
 
             # Move override folders into .minecraft

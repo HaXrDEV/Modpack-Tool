@@ -3,8 +3,10 @@ import aiohttp
 import asyncio
 from typing import Optional
 
+
 class AsyncGitHubDownloader:
     GITHUB_API_URL = "https://api.github.com/repos"
+    CHUNK_SIZE = 8192
 
     def __init__(self, repo_owner: str, repo_name: str, token: Optional[str] = None, branch: str = 'main'):
         """
@@ -40,13 +42,13 @@ class AsyncGitHubDownloader:
             if response.status == 200:
                 return await response.json()
             elif response.status == 401:
-                raise Exception("Authentication failed. Please check your GitHub token.")
+                raise RuntimeError("Authentication failed. Please check your GitHub token.")
             elif response.status == 403:
-                raise Exception("Rate limit exceeded or repository access denied.")
+                raise RuntimeError("Rate limit exceeded or repository access denied.")
             elif response.status == 404:
-                raise Exception("Repository or path not found.")
+                raise RuntimeError("Repository or path not found.")
             else:
-                raise Exception(f"Failed to fetch data: {response.status}")
+                raise RuntimeError(f"Failed to fetch data: {response.status}")
 
     async def _download_file(self, session: aiohttp.ClientSession, url: str, dest_folder: str, filename: str):
         """
@@ -59,13 +61,11 @@ class AsyncGitHubDownloader:
         - filename: str, the name of the file.
         """
         file_path = os.path.join(dest_folder, filename)
+        os.makedirs(dest_folder, exist_ok=True)
         async with session.get(url, headers=self.headers) as response:
             if response.status == 200:
                 with open(file_path, 'wb') as f:
-                    while True:
-                        chunk = await response.content.read(1024)
-                        if not chunk:
-                            break
+                    async for chunk in response.content.iter_chunked(self.CHUNK_SIZE):
                         f.write(chunk)
                 print(f"Downloaded {filename}")
             else:
@@ -121,10 +121,10 @@ class AsyncGitHubDownloader:
         - dest_folder: str, the local folder where files will be saved.
         - recursive: bool, download files in nested directories recursively.
         """
-        if not os.path.exists(dest_folder):
-            os.makedirs(dest_folder)
+        os.makedirs(dest_folder, exist_ok=True)
 
-        async with aiohttp.ClientSession() as session:
+        timeout = aiohttp.ClientTimeout(total=120)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             if recursive:
                 await self._download_folder_recursive(session, folder_path, dest_folder)
             else:
