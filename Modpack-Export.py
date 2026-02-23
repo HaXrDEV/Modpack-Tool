@@ -3120,10 +3120,34 @@ def main():
         # ----------------------------------------
         if settings.export_server:
             # Export CF modpack using Packwiz (server side)
-            subprocess.call(f"{packwiz_exe_path} cf export -s server", shell=True)
-            server_zip_name = f'{modpack_name}-Server-{pack_version}.zip'
+            existing_server_archives = {
+                archive.name: archive.stat().st_mtime
+                for archive in Path(packwiz_path).glob("*.zip")
+            }
+            server_export_code = subprocess.call(f"{packwiz_exe_path} cf export -s server", shell=True)
+            if server_export_code != 0:
+                raise RuntimeError(f"Packwiz server export failed with exit code {server_export_code}.")
+
+            expected_server_zip_name = f"{modpack_name}-Server-{pack_version}.zip"
+            expected_server_zip_path = Path(packwiz_path) / expected_server_zip_name
+            changed_archives = [
+                archive for archive in Path(packwiz_path).glob("*.zip")
+                if archive.name not in existing_server_archives
+                or archive.stat().st_mtime > existing_server_archives[archive.name]
+            ]
+
+            if expected_server_zip_path.exists():
+                server_zip_name = expected_server_zip_name
+            elif changed_archives:
+                server_zip_name = max(changed_archives, key=lambda archive: archive.stat().st_mtime).name
+            else:
+                raise FileNotFoundError(
+                    "Could not find the server export zip produced by Packwiz. "
+                    "Check Packwiz output for the generated filename."
+                )
+
             move(server_zip_name, os.path.join(export_path, server_zip_name))
-            print("[PackWiz] Server exported.")
+            print(f"[PackWiz] Server exported as {server_zip_name}.")
 
             os.chdir(git_path)
             if os.path.isdir(tempfolder_path):
