@@ -18,7 +18,9 @@ modlist_side_tag: True
 migrate_minecraft_version: False
 migration_target_minecraft: "" # Example: "1.21.12"
 migration_target_fabric: "" # Optional. Leave empty to keep current Fabric loader version.
-migration_mod_loader: "fabric"
+migration_target_mod_loader: "" # Optional. Defaults to current loader. Supported: fabric/quilt/forge/neoforge.
+migration_target_mod_loader_version: "" # Required when switching loaders.
+migration_mod_loader: "fabric" # Compatibility-check loader. Leave as-is unless you need an override.
 alpha_update_policy: "prompt" # "prompt" or "always_skip"
 migration_update_all_mods: True
 migration_disable_incompatible_mods: True

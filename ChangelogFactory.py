@@ -597,7 +597,14 @@ class ChangelogFactory:
                     next_version = self.get_changelog_value(next_changelog, "version")
                     next_mc_version = self.get_changelog_value(next_changelog, "mc_version")
 
-                fabric_loader = self.get_changelog_value(changelog, "Fabric version")
+                legacy_fabric_loader = self.get_changelog_value(changelog, "Fabric version")
+                mod_loader_name = self.get_changelog_value(changelog, "Mod loader")
+                mod_loader_version = self.get_changelog_value(changelog, "Mod loader version")
+                if not mod_loader_name:
+                    mod_loader_name = "Fabric" if legacy_fabric_loader else "Unknown Loader"
+                mod_loader_label = str(mod_loader_name).strip() or "Unknown Loader"
+                mod_loader_version_label = str(mod_loader_version or legacy_fabric_loader or "").strip()
+                loader_badge_text = f"{mod_loader_label} {mod_loader_version_label}".strip()
                 improvements = self.get_changelog_value(changelog, "Changes/Improvements")
                 overview_legacy = self.get_changelog_value(changelog, "Update overview")
                 bug_fixes = self.get_changelog_value(changelog, "Bug Fixes")
@@ -664,9 +671,9 @@ class ChangelogFactory:
 
                 
                 if date_only:
-                    mdFile.new_paragraph(f"<a href='https://github.com/{repo_owner}/{repo_name}/blob/{repo_branch}/Changelogs/changelog_mods_{version}.md'><Badge type='tip' text='Mod Updates'/></a><Badge type='info' text='Fabric Loader {fabric_loader}'/><Badge type='info' text='{date_only}'/>")
+                    mdFile.new_paragraph(f"<a href='https://github.com/{repo_owner}/{repo_name}/blob/{repo_branch}/Changelogs/changelog_mods_{version}.md'><Badge type='tip' text='Mod Updates'/></a><Badge type='info' text='{loader_badge_text}'/><Badge type='info' text='{date_only}'/>")
                 else:
-                    mdFile.new_paragraph(f"<a href='https://github.com/{repo_owner}/{repo_name}/blob/{repo_branch}/Changelogs/changelog_mods_{version}.md'><Badge type='tip' text='Mod Updates'/></a><Badge type='info' text='Fabric Loader {fabric_loader}'/>")
+                    mdFile.new_paragraph(f"<a href='https://github.com/{repo_owner}/{repo_name}/blob/{repo_branch}/Changelogs/changelog_mods_{version}.md'><Badge type='tip' text='Mod Updates'/></a><Badge type='info' text='{loader_badge_text}'/>")
                 # mdFile.new_paragraph(f"*{date_only}* | *Fabric Loader {fabric_loader}* | *[Mod Updates](https://github.com/{repo_owner}/{repo_name}/blob/{repo_branch}/Changelogs/changelog_mods_{version}.md)*")
 
                 # (Breakneck) Check if it's the second last iteration and prints info box for comparison point.

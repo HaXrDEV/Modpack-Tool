@@ -48,14 +48,16 @@ You can enable automated migration in `settings.yml`:
 
 - `migrate_minecraft_version`: Enables the migration flow.
 - `migration_target_minecraft`: Target Minecraft version.
-- `migration_target_fabric`: Optional target Fabric loader version.
-- `migration_mod_loader`: Loader used for compatibility checks (default: `fabric`).
+- `migration_target_mod_loader`: Optional target loader (`fabric`, `quilt`, `forge`, `neoforge`). Defaults to current loader.
+- `migration_target_mod_loader_version`: Target version for the selected loader. Required when switching loaders.
+- `migration_target_fabric`: Legacy alias for Fabric loader version (still supported).
+- `migration_mod_loader`: Loader used for compatibility checks (normally auto-aligned to target loader).
 - `alpha_update_policy`: `prompt` asks before allowing non-alpha mods to move to alpha; `always_skip` always blocks that move.
 - `migration_update_all_mods`: Runs `packwiz update --all -y` after changing MC version.
 - `migration_disable_incompatible_mods`: Disables mods that do not have a target-compatible update.
 
 When enabled, the tool will:
-1. Update `Packwiz/pack.toml` to the target Minecraft/Fabric versions.
+1. Update `Packwiz/pack.toml` to the target Minecraft version and selected modloader/version.
 2. Refresh and update mods with Packwiz.
 3. Disable incompatible mods by setting `side = "...(disabled)"` in their `.toml` entries.
 
@@ -95,6 +97,6 @@ If the model call fails or no model is available, the tool does not write `Confi
 
 ## Notable runtime prompts
 
-- Migration actions can prompt for target Minecraft/Fabric versions if not set in `settings.yml`.
+- Migration actions can prompt for target Minecraft version, modloader, and modloader version if not set in `settings.yml`.
 - When summary generation is active, the script prompts whether to overwrite existing `Update overview` / `Config Changes` for the current run.
 - Server export currently includes a manual step where you provide a dragged `mods` folder path from a created CurseForge instance.

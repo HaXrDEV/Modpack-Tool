@@ -77,10 +77,54 @@ mods_path = os.path.join(packwiz_path, "mods")
 crash_assistant_config_path = os.path.join(packwiz_path, "config", "crash_assistant", "modlist.json")
 crash_assistant_markdown_path = os.path.join(git_path, "modlist.md")
 modrinth_api_base = "https://api.modrinth.com/v2"
+curseforge_api_base = "https://www.curseforge.com/api/v1"
 _mod_label_index_cache = None
+SUPPORTED_MOD_LOADERS = ("fabric", "quilt", "forge", "neoforge")
+MOD_LOADER_LABELS = {
+    "fabric": "Fabric",
+    "quilt": "Quilt",
+    "forge": "Forge",
+    "neoforge": "NeoForge",
+}
 
 ############################################################
 # Functions
+
+def is_supported_mod_loader(loader_name):
+    return str(loader_name or "").strip().lower() in SUPPORTED_MOD_LOADERS
+
+
+def normalize_mod_loader_name(loader_name, default="fabric"):
+    normalized = str(loader_name or "").strip().lower()
+    if normalized in SUPPORTED_MOD_LOADERS:
+        return normalized
+    fallback = str(default or "fabric").strip().lower()
+    return fallback if fallback in SUPPORTED_MOD_LOADERS else "fabric"
+
+
+def get_mod_loader_label(loader_name):
+    raw_value = str(loader_name or "").strip()
+    normalized = raw_value.lower()
+    if normalized in MOD_LOADER_LABELS:
+        return MOD_LOADER_LABELS[normalized]
+    if raw_value:
+        return raw_value
+    return MOD_LOADER_LABELS["fabric"]
+
+
+def detect_active_mod_loader(versions_dict):
+    versions = versions_dict or {}
+    for loader_name in SUPPORTED_MOD_LOADERS:
+        if str(versions.get(loader_name, "")).strip():
+            return loader_name
+    return "fabric"
+
+
+def get_pack_mod_loader_details(pack_toml):
+    versions = (pack_toml or {}).get("versions", {}) or {}
+    active_loader = detect_active_mod_loader(versions)
+    active_loader_version = str(versions.get(active_loader, "")).strip()
+    return active_loader, active_loader_version
 
 def determine_server_export():
     """Determine whether the server pack should be exported or not and return a boolean."""
@@ -108,10 +152,69 @@ def ensure_migration_targets(settings):
     if not settings.migration_target_minecraft:
         raise ValueError("Migration selected but no target Minecraft version was provided.")
 
-    prompt = f"Target Fabric version [{settings.migration_target_fabric}]: "
-    target_fabric = input(prompt).strip()
-    if target_fabric:
-        settings.migration_target_fabric = target_fabric
+    pack_manifest_path = os.path.join(packwiz_path, packwiz_manifest)
+    current_loader = "fabric"
+    current_loader_version = ""
+    try:
+        with open(pack_manifest_path, "r", encoding="utf8") as f:
+            local_pack_toml = toml.load(f)
+        current_loader, current_loader_version = get_pack_mod_loader_details(local_pack_toml)
+    except Exception as ex:
+        print(f"[Migration] Failed reading current loader from pack.toml: {ex}")
+
+    default_target_loader = normalize_mod_loader_name(
+        settings.migration_target_mod_loader or current_loader
+    )
+    loader_prompt = (
+        f"Target modloader [fabric/quilt/forge/neoforge] [{default_target_loader}]: "
+    )
+    target_loader_input = input(loader_prompt).strip().lower()
+    if target_loader_input:
+        if not is_supported_mod_loader(target_loader_input):
+            raise ValueError(
+                f"Unsupported target modloader '{target_loader_input}'. "
+                "Use fabric/quilt/forge/neoforge."
+            )
+        settings.migration_target_mod_loader = target_loader_input
+    else:
+        settings.migration_target_mod_loader = default_target_loader
+
+    target_loader = normalize_mod_loader_name(settings.migration_target_mod_loader, default=current_loader)
+    default_loader_version = str(settings.migration_target_mod_loader_version or "").strip()
+    if not default_loader_version and target_loader == "fabric":
+        default_loader_version = str(settings.migration_target_fabric or "").strip()
+    if not default_loader_version and target_loader == current_loader:
+        default_loader_version = current_loader_version
+
+    loader_version_prompt = f"Target {get_mod_loader_label(target_loader)} version [{default_loader_version}]: "
+    target_loader_version = input(loader_version_prompt).strip()
+    if target_loader_version:
+        settings.migration_target_mod_loader_version = target_loader_version
+    elif not settings.migration_target_mod_loader_version:
+        settings.migration_target_mod_loader_version = default_loader_version
+
+    # Backward compatibility: keep existing Fabric-specific setting populated when needed.
+    if target_loader == "fabric":
+        if settings.migration_target_mod_loader_version:
+            settings.migration_target_fabric = settings.migration_target_mod_loader_version
+        elif settings.migration_target_fabric:
+            settings.migration_target_mod_loader_version = settings.migration_target_fabric
+
+    if target_loader != current_loader and not str(settings.migration_target_mod_loader_version).strip():
+        raise ValueError(
+            f"Switching loaders requires a target {get_mod_loader_label(target_loader)} version."
+        )
+
+    # Keep compatibility check loader aligned with the target loader unless explicitly overridden.
+    configured_compat_loader = str(settings.migration_mod_loader or "").strip().lower()
+    if (
+        not configured_compat_loader
+        or configured_compat_loader == current_loader
+        or (configured_compat_loader == "fabric" and target_loader != "fabric")
+    ):
+        settings.migration_mod_loader = target_loader
+    elif not is_supported_mod_loader(configured_compat_loader):
+        settings.migration_mod_loader = target_loader
 
 
 def uses_llm_config_changes(settings) -> bool:
@@ -557,7 +660,8 @@ def get_pack_update_constraints():
             local_pack_toml = toml.load(f)
     except Exception as ex:
         print(f"[Update] Failed to read pack manifest for update constraints: {ex}")
-        return [str(minecraft_version)], ["fabric"]
+        fallback_loader = normalize_mod_loader_name(globals().get("active_mod_loader", "fabric"))
+        return [str(minecraft_version)], [fallback_loader]
 
     versions = local_pack_toml.get("versions", {})
     game_version = str(versions.get("minecraft", minecraft_version))
@@ -963,47 +1067,550 @@ def set_pin_state_for_mod_files(mod_files, should_pin):
     return updated_files
 
 
-def infer_compatibility_from_metadata(mod_toml, target_minecraft_version):
-    target_minor = ".".join(target_minecraft_version.split(".", 2)[:2])
-    metadata = " ".join([
-        str(mod_toml.get("filename", "")),
-        str(mod_toml.get("download", {}).get("url", "")),
-    ]).lower()
-    if target_minecraft_version.lower() in metadata:
-        return True
-    explicit_mc_versions = re.findall(r"(?:mc|minecraft)[-_ +]?(\d+\.\d+(?:\.\d+)?)", metadata)
-    if explicit_mc_versions:
-        if target_minecraft_version in explicit_mc_versions:
+def extract_loader_hints_from_metadata(metadata):
+    text = str(metadata or "").lower()
+    hints = set()
+    if re.search(r"(?<![a-z0-9])fabric(?![a-z0-9])", text):
+        hints.add("fabric")
+    if re.search(r"(?<![a-z0-9])quilt(?![a-z0-9])", text):
+        hints.add("quilt")
+    if re.search(r"(?<![a-z0-9])neoforge(?![a-z0-9])", text):
+        hints.add("neoforge")
+    if re.search(r"(?<![a-z0-9])forge(?![a-z0-9])", text) and "neoforge" not in hints:
+        hints.add("forge")
+    return hints
+
+
+def extract_minecraft_version_hints_from_metadata(metadata):
+    text = str(metadata or "").lower()
+    version_hints = set()
+
+    # Explicit Minecraft tokens (e.g. mc1.20.1, minecraft-1.21.1)
+    for version in re.findall(r"(?:mc|minecraft)[-_ +]?(1\.\d{1,2}(?:\.\d{1,2})?)", text):
+        version_hints.add(str(version))
+
+    # Common filename suffixes/prefixes (e.g. +1.20.1, -1.21.1, _1.21)
+    for version in re.findall(r"(?<!\d)(1\.(?:1[6-9]|2\d)(?:\.\d{1,2})?)(?!\d)", text):
+        version_hints.add(str(version))
+
+    return version_hints
+
+
+def is_target_minecraft_compatible_with_hints(target_minecraft_version, version_hints):
+    hints = set(version_hints or [])
+    if not hints:
+        return None
+
+    target_version = str(target_minecraft_version or "").strip()
+    target_minor = ".".join(target_version.split(".", 2)[:2])
+    for hint in hints:
+        hint_text = str(hint).strip()
+        hint_minor = ".".join(hint_text.split(".", 2)[:2])
+        if hint_text == target_version or hint_text == target_minor or hint_minor == target_minor:
             return True
-        if target_minor in explicit_mc_versions:
-            return True
+    return False
+
+
+def is_target_loader_compatible_with_hints(target_loader, loader_hints):
+    hints = set(loader_hints or [])
+    if not hints:
+        return None
+
+    normalized_target = normalize_mod_loader_name(target_loader, default="fabric")
+    compatible_loader_hints = {
+        "fabric": {"fabric"},
+        "quilt": {"quilt", "fabric"},
+        "forge": {"forge"},
+        "neoforge": {"neoforge"},
+    }.get(normalized_target, {normalized_target})
+    return len(hints.intersection(compatible_loader_hints)) > 0
+
+
+def resolve_target_compatibility(loader_compatible, minecraft_compatible):
+    if loader_compatible is False or minecraft_compatible is False:
         return False
-    return True
+    if loader_compatible is True and minecraft_compatible is True:
+        return True
+    if loader_compatible is True and minecraft_compatible is None:
+        return True
+    if loader_compatible is None and minecraft_compatible is True:
+        return True
+    return None
 
 
-def has_modrinth_version_for_target(mod_toml, target_minecraft_version, mod_loader):
+def infer_compatibility_from_metadata(mod_toml, target_minecraft_version, mod_loader):
+    metadata = " ".join(
+        [
+            str(mod_toml.get("filename", "")),
+            str(mod_toml.get("download", {}).get("url", "")),
+        ]
+    ).lower()
+
+    loader_hints = extract_loader_hints_from_metadata(metadata)
+    version_hints = extract_minecraft_version_hints_from_metadata(metadata)
+    loader_compatible = is_target_loader_compatible_with_hints(mod_loader, loader_hints)
+    minecraft_compatible = is_target_minecraft_compatible_with_hints(target_minecraft_version, version_hints)
+    return resolve_target_compatibility(loader_compatible, minecraft_compatible)
+
+
+def is_installed_modrinth_version_compatible(mod_toml, target_minecraft_version, mod_loader, version_cache):
+    try:
+        modrinth_meta = mod_toml.get("update", {}).get("modrinth", {})
+        version_id = str(modrinth_meta.get("version", "")).strip()
+        if not version_id:
+            return None
+
+        version_payload = fetch_modrinth_version_by_id(version_id, version_cache)
+        if not version_payload:
+            return None
+
+        target_loader = normalize_mod_loader_name(mod_loader, default="fabric")
+        target_version = str(target_minecraft_version or "").strip()
+        target_minor = ".".join(target_version.split(".", 2)[:2])
+
+        payload_loaders = {str(loader).strip().lower() for loader in version_payload.get("loaders", []) if str(loader).strip()}
+        payload_game_versions = {
+            str(game_version).strip()
+            for game_version in version_payload.get("game_versions", [])
+            if str(game_version).strip()
+        }
+
+        loader_compatible = target_loader in payload_loaders if payload_loaders else None
+        mc_compatible = None
+        if payload_game_versions:
+            mc_compatible = False
+            for game_version in payload_game_versions:
+                gv_minor = ".".join(game_version.split(".", 2)[:2])
+                if game_version == target_version or game_version == target_minor or gv_minor == target_minor:
+                    mc_compatible = True
+                    break
+
+        return resolve_target_compatibility(loader_compatible, mc_compatible)
+    except Exception as ex:
+        mod_name = mod_toml.get("name", "unknown mod")
+        print(f"[Migration] Installed Modrinth version compatibility check failed for '{mod_name}': {ex}")
+        return None
+
+
+def has_modrinth_project_version_for_target(mod_toml, target_minecraft_version, mod_loader, project_versions_cache):
     try:
         project_id = mod_toml.get("update", {}).get("modrinth", {}).get("mod-id")
         if not project_id:
             return None
-        response = requests.get(
-            f"{modrinth_api_base}/project/{project_id}/version",
-            params={
-                "loaders": json.dumps([mod_loader]),
-                "game_versions": json.dumps([target_minecraft_version]),
-            },
-            timeout=20,
+        versions = fetch_modrinth_project_versions(
+            project_id=project_id,
+            game_versions=[str(target_minecraft_version)],
+            loaders=[normalize_mod_loader_name(mod_loader, default="fabric")],
+            project_versions_cache=project_versions_cache,
         )
-        response.raise_for_status()
-        return len(response.json()) > 0
+        return len(versions) > 0
     except Exception as ex:
         mod_name = mod_toml.get("name", "unknown mod")
         print(f"[Migration] Modrinth compatibility check failed for '{mod_name}': {ex}")
         return None
 
 
+def _get_curseforge_file_payload(file_id, project_id, file_cache):
+    normalized_project_id = str(project_id or "").strip()
+    normalized_file_id = str(file_id or "").strip()
+    if not normalized_project_id or not normalized_file_id:
+        return None
+
+    cache_key = (normalized_project_id, normalized_file_id)
+    if cache_key in file_cache:
+        return file_cache[cache_key]
+
+    payload = None
+    try:
+        response = requests.get(
+            f"{curseforge_api_base}/mods/{normalized_project_id}/files/{normalized_file_id}",
+            timeout=20,
+        )
+        if response.status_code == 404:
+            file_cache[cache_key] = None
+            return None
+        response.raise_for_status()
+        payload = (response.json() or {}).get("data")
+    except Exception as ex:
+        print(
+            f"[Migration] Failed fetching CurseForge file metadata "
+            f"(project {normalized_project_id}, file {normalized_file_id}): {ex}"
+        )
+
+    file_cache[cache_key] = payload
+    return payload
+
+
+def _get_curseforge_project_files(project_id, target_minecraft_version, project_files_cache):
+    normalized_project_id = str(project_id or "").strip()
+    target_version = str(target_minecraft_version or "").strip()
+    if not normalized_project_id:
+        return []
+
+    cache_key = (normalized_project_id, target_version)
+    if cache_key in project_files_cache:
+        return project_files_cache[cache_key]
+
+    files = []
+    try:
+        page_size = 50
+        index = 0
+        max_pages = 4
+        for _ in range(max_pages):
+            response = requests.get(
+                f"{curseforge_api_base}/mods/{normalized_project_id}/files",
+                params={
+                    "index": index,
+                    "pageSize": page_size,
+                    "gameVersion": target_version,
+                },
+                timeout=20,
+            )
+            response.raise_for_status()
+            payload = response.json() or {}
+            page_files = list(payload.get("data", []) or [])
+            files.extend(page_files)
+
+            pagination = payload.get("pagination", {}) or {}
+            returned_page_size = int(pagination.get("pageSize", page_size) or page_size)
+            total_count = int(pagination.get("totalCount", 0) or 0)
+            index += returned_page_size if returned_page_size > 0 else page_size
+
+            if not page_files:
+                break
+            if total_count and index >= total_count:
+                break
+            if len(page_files) < page_size and not total_count:
+                break
+    except Exception as ex:
+        print(f"[Migration] Failed fetching CurseForge files for project '{normalized_project_id}': {ex}")
+
+    project_files_cache[cache_key] = files
+    return files
+
+
+def _evaluate_curseforge_file_compatibility(file_payload, target_minecraft_version, mod_loader):
+    if not file_payload:
+        return None
+
+    game_versions = [str(entry).strip() for entry in (file_payload.get("gameVersions", []) or []) if str(entry).strip()]
+    metadata = " ".join(
+        [
+            str(file_payload.get("fileName", "")),
+            str(file_payload.get("displayName", "")),
+            " ".join(game_versions),
+        ]
+    ).lower()
+
+    loader_hints = extract_loader_hints_from_metadata(metadata)
+    version_hints = set(extract_minecraft_version_hints_from_metadata(metadata))
+    for game_version in game_versions:
+        lower_version = game_version.lower()
+        if re.fullmatch(r"1\.(?:1[6-9]|2\d)(?:\.\d{1,2})?", lower_version):
+            version_hints.add(game_version)
+
+    loader_compatible = is_target_loader_compatible_with_hints(mod_loader, loader_hints)
+    minecraft_compatible = is_target_minecraft_compatible_with_hints(target_minecraft_version, version_hints)
+    return resolve_target_compatibility(loader_compatible, minecraft_compatible)
+
+
+def is_installed_curseforge_file_compatible(
+    mod_toml,
+    target_minecraft_version,
+    mod_loader,
+    curseforge_file_cache,
+):
+    try:
+        curseforge_meta = mod_toml.get("update", {}).get("curseforge", {})
+        project_id = curseforge_meta.get("project-id")
+        file_id = curseforge_meta.get("file-id")
+        if not project_id or not file_id:
+            return None
+
+        file_payload = _get_curseforge_file_payload(file_id, project_id, curseforge_file_cache)
+        return _evaluate_curseforge_file_compatibility(file_payload, target_minecraft_version, mod_loader)
+    except Exception as ex:
+        mod_name = mod_toml.get("name", "unknown mod")
+        print(f"[Migration] Installed CurseForge file compatibility check failed for '{mod_name}': {ex}")
+        return None
+
+
+def has_curseforge_project_version_for_target(
+    mod_toml,
+    target_minecraft_version,
+    mod_loader,
+    curseforge_project_files_cache,
+):
+    try:
+        curseforge_meta = mod_toml.get("update", {}).get("curseforge", {})
+        project_id = curseforge_meta.get("project-id")
+        if not project_id:
+            return None
+
+        project_files = _get_curseforge_project_files(
+            project_id=project_id,
+            target_minecraft_version=target_minecraft_version,
+            project_files_cache=curseforge_project_files_cache,
+        )
+        if not project_files:
+            return False
+
+        saw_explicit_false = False
+        saw_explicit_true = False
+        for file_payload in project_files:
+            file_compatibility = _evaluate_curseforge_file_compatibility(
+                file_payload,
+                target_minecraft_version,
+                mod_loader,
+            )
+            if file_compatibility is True:
+                saw_explicit_true = True
+                break
+            if file_compatibility is False:
+                saw_explicit_false = True
+
+        if saw_explicit_true:
+            return True
+        if saw_explicit_false:
+            return False
+        return None
+    except Exception as ex:
+        mod_name = mod_toml.get("name", "unknown mod")
+        print(f"[Migration] CurseForge project compatibility check failed for '{mod_name}': {ex}")
+        return None
+
+
+def determine_mod_target_compatibility(
+    mod_toml,
+    target_minecraft_version,
+    mod_loader,
+    version_cache,
+    project_versions_cache,
+    curseforge_file_cache,
+    curseforge_project_files_cache,
+):
+    compatibility = is_installed_modrinth_version_compatible(
+        mod_toml,
+        target_minecraft_version,
+        mod_loader,
+        version_cache,
+    )
+    if compatibility is not None:
+        return compatibility, "installed_modrinth_version"
+
+    compatibility = has_modrinth_project_version_for_target(
+        mod_toml,
+        target_minecraft_version,
+        mod_loader,
+        project_versions_cache,
+    )
+    if compatibility is not None:
+        return compatibility, "project_modrinth_versions"
+
+    compatibility = is_installed_curseforge_file_compatible(
+        mod_toml,
+        target_minecraft_version,
+        mod_loader,
+        curseforge_file_cache,
+    )
+    if compatibility is not None:
+        return compatibility, "installed_curseforge_file"
+
+    compatibility = has_curseforge_project_version_for_target(
+        mod_toml,
+        target_minecraft_version,
+        mod_loader,
+        curseforge_project_files_cache,
+    )
+    if compatibility is not None:
+        return compatibility, "project_curseforge_versions"
+
+    compatibility = infer_compatibility_from_metadata(
+        mod_toml,
+        target_minecraft_version,
+        mod_loader,
+    )
+    if compatibility is not None:
+        return compatibility, "metadata_inference"
+
+    return None, "unknown"
+
+
+def select_modrinth_replacement_version_for_target(
+    project_id,
+    mod_name,
+    current_channel,
+    target_minecraft_version,
+    mod_loader,
+    project_versions_cache,
+):
+    target_game_versions = [str(target_minecraft_version)]
+    target_loaders = [normalize_mod_loader_name(mod_loader, default="fabric")]
+
+    replacement_version = select_latest_allowed_modrinth_version(
+        project_id=project_id,
+        current_channel=current_channel,
+        game_versions=target_game_versions,
+        loaders=target_loaders,
+        project_versions_cache=project_versions_cache,
+    )
+    if replacement_version:
+        return replacement_version
+
+    project_versions = fetch_modrinth_project_versions(
+        project_id=project_id,
+        game_versions=target_game_versions,
+        loaders=target_loaders,
+        project_versions_cache=project_versions_cache,
+    )
+    if not project_versions:
+        return None
+
+    latest_any = project_versions[0]
+    latest_any_type = str(latest_any.get("version_type", "")).strip().lower()
+    if latest_any_type == "alpha" and str(current_channel).lower() != "alpha":
+        if not should_keep_alpha_update(mod_name, current_channel, log_prefix="[Migration]"):
+            return None
+    return latest_any
+
+
+def try_retarget_modrinth_mod_to_target(
+    item_path,
+    mod_toml,
+    target_minecraft_version,
+    mod_loader,
+    version_cache,
+    project_versions_cache,
+):
+    modrinth_meta = mod_toml.get("update", {}).get("modrinth", {})
+    project_id = str(modrinth_meta.get("mod-id", "")).strip()
+    current_version_id = str(modrinth_meta.get("version", "")).strip()
+    if not project_id:
+        return False, ""
+
+    mod_name = str(mod_toml.get("name", os.path.basename(item_path)))
+    current_channel = get_modrinth_version_type(mod_toml, version_cache)
+    replacement_version = select_modrinth_replacement_version_for_target(
+        project_id=project_id,
+        mod_name=mod_name,
+        current_channel=current_channel,
+        target_minecraft_version=target_minecraft_version,
+        mod_loader=mod_loader,
+        project_versions_cache=project_versions_cache,
+    )
+    replacement_version_id = str((replacement_version or {}).get("id", "")).strip()
+    if not replacement_version or not replacement_version_id:
+        return False, ""
+    if current_version_id and replacement_version_id == current_version_id:
+        return False, ""
+
+    if not apply_modrinth_version_to_mod_toml(mod_toml, replacement_version):
+        return False, ""
+
+    with open(item_path, "w", encoding="utf8") as f:
+        toml.dump(mod_toml, f)
+
+    replacement_label = str(
+        replacement_version.get("version_number")
+        or replacement_version.get("name")
+        or replacement_version_id
+    )
+    return True, replacement_label
+
+
+def attempt_packwiz_targeted_mod_update(item, mod_toml):
+    candidate_identifiers = []
+    mod_name = str(mod_toml.get("name", "")).strip()
+    if mod_name:
+        candidate_identifiers.append(mod_name)
+
+    item_base = re.sub(r"\.pw\.toml$", "", str(item), flags=re.IGNORECASE).strip()
+    if item_base:
+        candidate_identifiers.append(item_base)
+
+    candidate_identifiers.append(f"mods/{item}")
+
+    seen = set()
+    ordered_identifiers = []
+    for identifier in candidate_identifiers:
+        key = str(identifier).strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        ordered_identifiers.append(str(identifier).strip())
+
+    for identifier in ordered_identifiers:
+        command = f'{packwiz_exe_path} update "{identifier}" -y'
+        exit_code = subprocess.call(
+            command,
+            shell=True,
+            cwd=packwiz_path,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if exit_code == 0:
+            return True, identifier
+
+    return False, ""
+
+
+def try_find_replacement_for_incompatible_mod(
+    item,
+    item_path,
+    mod_toml,
+    target_minecraft_version,
+    mod_loader,
+    version_cache,
+    project_versions_cache,
+    curseforge_file_cache,
+    curseforge_project_files_cache,
+):
+    try:
+        replaced_with_modrinth, modrinth_target = try_retarget_modrinth_mod_to_target(
+            item_path=item_path,
+            mod_toml=mod_toml,
+            target_minecraft_version=target_minecraft_version,
+            mod_loader=mod_loader,
+            version_cache=version_cache,
+            project_versions_cache=project_versions_cache,
+        )
+        if replaced_with_modrinth:
+            return True, f"Modrinth {modrinth_target}"
+    except Exception as ex:
+        mod_name = mod_toml.get("name", item)
+        print(f"[Migration] Failed Modrinth retarget for '{mod_name}': {ex}")
+
+    updated_by_packwiz, packwiz_identifier = attempt_packwiz_targeted_mod_update(item, mod_toml)
+    if not updated_by_packwiz:
+        return False, ""
+
+    try:
+        with open(item_path, "r", encoding="utf8") as f:
+            reloaded_toml = toml.load(f)
+    except Exception:
+        reloaded_toml = mod_toml
+
+    compatibility, _ = determine_mod_target_compatibility(
+        reloaded_toml,
+        target_minecraft_version,
+        mod_loader,
+        version_cache,
+        project_versions_cache,
+        curseforge_file_cache,
+        curseforge_project_files_cache,
+    )
+    if compatibility is False:
+        return False, ""
+    return True, f"Packwiz update ({packwiz_identifier})"
+
+
 def disable_incompatible_mods(target_minecraft_version, mod_loader):
     disabled_mods = []
+    replaced_mods = []
+    version_cache = {}
+    project_versions_cache = {}
+    curseforge_file_cache = {}
+    curseforge_project_files_cache = {}
     os.chdir(mods_path)
     for item in sorted(os.listdir()):
         item_path = os.path.join(mods_path, item)
@@ -1016,19 +1623,48 @@ def disable_incompatible_mods(target_minecraft_version, mod_loader):
             if "disabled" in side_value:
                 continue
 
-            compatible = has_modrinth_version_for_target(mod_toml, target_minecraft_version, mod_loader)
+            compatibility, compatibility_source = determine_mod_target_compatibility(
+                mod_toml,
+                target_minecraft_version,
+                mod_loader,
+                version_cache,
+                project_versions_cache,
+                curseforge_file_cache,
+                curseforge_project_files_cache,
+            )
+            compatible = compatibility
             if compatible is None:
-                compatible = infer_compatibility_from_metadata(mod_toml, target_minecraft_version)
+                # Preserve existing conservative behavior for genuinely unknown metadata.
+                compatible = True
 
             if compatible:
+                continue
+
+            replacement_applied, replacement_details = try_find_replacement_for_incompatible_mod(
+                item=item,
+                item_path=item_path,
+                mod_toml=mod_toml,
+                target_minecraft_version=target_minecraft_version,
+                mod_loader=mod_loader,
+                version_cache=version_cache,
+                project_versions_cache=project_versions_cache,
+                curseforge_file_cache=curseforge_file_cache,
+                curseforge_project_files_cache=curseforge_project_files_cache,
+            )
+            if replacement_applied:
+                replaced_mods.append(f"{mod_toml.get('name', item)} -> {replacement_details}")
                 continue
 
             mod_toml["side"] = normalize_disabled_side(side_value)
             with open(item_path, "w", encoding="utf8") as f:
                 toml.dump(mod_toml, f)
-            disabled_mods.append(mod_toml.get("name", item))
+            disabled_mods.append(f"{mod_toml.get('name', item)} ({compatibility_source})")
         except Exception as ex:
             print(f"[Migration] Failed to process '{item}': {ex}")
+
+    if replaced_mods:
+        print(f"[Migration] Retargeted {len(replaced_mods)} incompatible mods to target-compatible versions.")
+        print("[Migration] Retargeted mods: " + ", ".join(replaced_mods))
 
     return disabled_mods
 
@@ -1036,24 +1672,51 @@ def disable_incompatible_mods(target_minecraft_version, mod_loader):
 def migrate_minecraft_version(
     target_minecraft_version,
     target_fabric_version=None,
+    target_mod_loader=None,
+    target_mod_loader_version=None,
     update_all_mods=True,
     disable_outdated_mods=True,
-    mod_loader="fabric",
+    mod_loader=None,
 ):
     os.chdir(packwiz_path)
     with open(packwiz_manifest, "r", encoding="utf8") as f:
         local_pack_toml = toml.load(f)
 
-    current_minecraft = str(local_pack_toml["versions"]["minecraft"])
-    current_fabric = str(local_pack_toml["versions"].get("fabric", ""))
+    versions = local_pack_toml.setdefault("versions", {})
+    current_minecraft = str(versions.get("minecraft", minecraft_version))
+    current_loader, current_loader_version = get_pack_mod_loader_details(local_pack_toml)
 
     if not target_minecraft_version:
         print("[Migration] migration_target_minecraft is empty. Skipping migration.")
-        return current_minecraft, current_fabric
+        return current_minecraft, current_loader, current_loader_version
 
-    local_pack_toml["versions"]["minecraft"] = target_minecraft_version
-    if target_fabric_version:
-        local_pack_toml["versions"]["fabric"] = target_fabric_version
+    resolved_target_loader = normalize_mod_loader_name(target_mod_loader or current_loader, default=current_loader)
+    resolved_target_loader_version = str(target_mod_loader_version or "").strip()
+
+    # Backward compatibility for existing Fabric-only setting.
+    if not resolved_target_loader_version and resolved_target_loader == "fabric":
+        resolved_target_loader_version = str(target_fabric_version or "").strip()
+
+    if not resolved_target_loader_version:
+        if resolved_target_loader == current_loader:
+            resolved_target_loader_version = current_loader_version
+        else:
+            resolved_target_loader_version = str(versions.get(resolved_target_loader, "")).strip()
+
+    if resolved_target_loader != current_loader and not resolved_target_loader_version:
+        print(
+            f"[Migration] Switching from {get_mod_loader_label(current_loader)} "
+            f"to {get_mod_loader_label(resolved_target_loader)} requires a target loader version. Skipping migration."
+        )
+        return current_minecraft, current_loader, current_loader_version
+
+    versions["minecraft"] = target_minecraft_version
+
+    # Keep only one active loader entry to avoid ambiguous pack constraints.
+    for loader_name in SUPPORTED_MOD_LOADERS:
+        if loader_name != resolved_target_loader and loader_name in versions:
+            versions.pop(loader_name, None)
+    versions[resolved_target_loader] = resolved_target_loader_version
 
     with open(packwiz_manifest, "w", encoding="utf8") as f:
         toml.dump(local_pack_toml, f)
@@ -1067,12 +1730,33 @@ def migrate_minecraft_version(
 
     disabled_mods = []
     if disable_outdated_mods:
-        disabled_mods = disable_incompatible_mods(target_minecraft_version, mod_loader)
+        configured_compat_loader = str(mod_loader or "").strip().lower()
+        if configured_compat_loader == "fabric" and resolved_target_loader != "fabric":
+            compatibility_loader = resolved_target_loader
+        elif (
+            configured_compat_loader
+            and configured_compat_loader == current_loader
+            and resolved_target_loader != current_loader
+        ):
+            compatibility_loader = resolved_target_loader
+        elif is_supported_mod_loader(configured_compat_loader):
+            compatibility_loader = normalize_mod_loader_name(
+                configured_compat_loader,
+                default=resolved_target_loader,
+            )
+        else:
+            compatibility_loader = resolved_target_loader
+        disabled_mods = disable_incompatible_mods(target_minecraft_version, compatibility_loader)
         subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
 
     print(
         f"[Migration] Minecraft {current_minecraft} -> {target_minecraft_version}"
-        + (f", Fabric -> {target_fabric_version}" if target_fabric_version else "")
+        + (
+            f", {get_mod_loader_label(current_loader)} -> {get_mod_loader_label(resolved_target_loader)} "
+            f"({resolved_target_loader_version})"
+            if resolved_target_loader_version
+            else ""
+        )
     )
     print(f"[Migration] Disabled {len(disabled_mods)} incompatible mods.")
     if disabled_mods:
@@ -1080,7 +1764,8 @@ def migrate_minecraft_version(
 
     return (
         target_minecraft_version,
-        target_fabric_version if target_fabric_version else current_fabric,
+        resolved_target_loader,
+        resolved_target_loader_version,
     )
 
 
@@ -1112,31 +1797,61 @@ def bump_modpack_version(new_pack_version):
             print(f"[Version] Failed updating {bcc_path}: {ex}")
 
     pack_version = new_pack_version
-    ensure_changelog_yml(pack_version, minecraft_version, fabric_version)
+    ensure_changelog_yml(pack_version, minecraft_version, active_mod_loader, mod_loader_version)
     changelog_factory = ChangelogFactory(changelog_dir_path, modpack_name, pack_version, settings, yaml)
     print(f"[Version] Modpack version bumped: {old_pack_version} -> {new_pack_version}")
 
 
-def ensure_changelog_yml(target_pack_version, target_minecraft_version, target_fabric_version):
+def apply_loader_metadata_to_changelog(changelog_yml, target_mod_loader, target_mod_loader_version):
+    changed = False
+    normalized_loader = normalize_mod_loader_name(target_mod_loader)
+    loader_label = get_mod_loader_label(normalized_loader)
+    loader_version = str(target_mod_loader_version or "").strip()
+
+    if changelog_yml.get("Mod loader") != loader_label:
+        changelog_yml["Mod loader"] = loader_label
+        changed = True
+    if changelog_yml.get("Mod loader version") != loader_version:
+        changelog_yml["Mod loader version"] = loader_version
+        changed = True
+
+    # Keep legacy key in sync for Fabric-based packs.
+    if normalized_loader == "fabric" and changelog_yml.get("Fabric version") != loader_version:
+        changelog_yml["Fabric version"] = loader_version
+        changed = True
+
+    return changed
+
+
+def ensure_changelog_yml(target_pack_version, target_minecraft_version, target_mod_loader, target_mod_loader_version):
     os.makedirs(changelog_dir_path, exist_ok=True)
     changelog_path = os.path.join(changelog_dir_path, f"{target_pack_version}+{target_minecraft_version}.yml")
+    loader_label = get_mod_loader_label(target_mod_loader)
+    loader_version = str(target_mod_loader_version or "").strip()
+    normalized_loader = normalize_mod_loader_name(target_mod_loader)
 
     if not os.path.isfile(changelog_path):
         if settings.breakneck_fixes:
+            legacy_fabric_line = f"Fabric version: {loader_version}\n" if normalized_loader == "fabric" else ""
             breakneck_template = (
                 f"version: {target_pack_version}\n"
                 f"mc_version: {target_minecraft_version}\n"
                 "\n"
-                f"Fabric version: {target_fabric_version}\n"
-                "Update overview:\n"
-                "Config Changes: |\n"
+                f"Mod loader: {loader_label}\n"
+                f"Mod loader version: {loader_version}\n"
+                + legacy_fabric_line
+                + "Update overview:\n"
+                + "Config Changes: |\n"
             )
             with open(changelog_path, "w", encoding="utf-8") as f:
                 f.write(breakneck_template)
         else:
             data = CommentedMap()
             data["version"] = target_pack_version
-            data["Fabric version"] = target_fabric_version
+            data["Mod loader"] = loader_label
+            data["Mod loader version"] = loader_version
+            if normalized_loader == "fabric":
+                data["Fabric version"] = loader_version
             data["Changes/Improvements"] = None
             data["Bug Fixes"] = None
             data["Config Changes"] = LiteralScalarString("- : [mod], [Client]")
@@ -1147,11 +1862,10 @@ def ensure_changelog_yml(target_pack_version, target_minecraft_version, target_f
 
     with open(changelog_path, "r", encoding="utf-8") as f:
         changelog_yml = yaml.load(f) or {}
-    if changelog_yml.get("Fabric version") != target_fabric_version:
-        changelog_yml["Fabric version"] = target_fabric_version
+    if apply_loader_metadata_to_changelog(changelog_yml, target_mod_loader, target_mod_loader_version):
         with open(changelog_path, "w", encoding="utf-8") as f:
             yaml.dump(changelog_yml, f)
-        print(f"[Version] Updated Fabric version in changelog: {changelog_path}")
+        print(f"[Version] Updated mod loader metadata in changelog: {changelog_path}")
     return changelog_path
 
 
@@ -2770,7 +3484,7 @@ def run_changelog_auto_generation():
     os.chdir(git_path)
     changelog_path = os.path.join(changelog_dir_path, f"{pack_version}+{minecraft_version}.yml")
     if not os.path.isfile(changelog_path):
-        ensure_changelog_yml(pack_version, minecraft_version, fabric_version)
+        ensure_changelog_yml(pack_version, minecraft_version, active_mod_loader, mod_loader_version)
 
     diff_payload = changelog_factory.get_current_pack_diff_payload(
         target_version=pack_version,
@@ -2802,12 +3516,13 @@ with open(packwiz_manifest, "r") as f:
 pack_version = pack_toml["version"]
 modpack_name = pack_toml["name"]
 minecraft_version = pack_toml["versions"]["minecraft"]
-fabric_version = pack_toml["versions"]["fabric"]
+active_mod_loader, mod_loader_version = get_pack_mod_loader_details(pack_toml)
 
 input(f"""{launch_message}
 Modpack: {modpack_name}
 Version: {pack_version}
 Minecraft: {minecraft_version}
+Modloader: {get_mod_loader_label(active_mod_loader)} {mod_loader_version}
 
 Press Enter to continue...""")
 
@@ -2857,6 +3572,8 @@ class Settings:
     repo_main_branch: str = ""
     migration_target_minecraft: str = ""
     migration_target_fabric: str = ""
+    migration_target_mod_loader: str = ""
+    migration_target_mod_loader_version: str = ""
     migration_mod_loader: str = "fabric"
     alpha_update_policy: str = "prompt"
     bump_target_version: str = ""
@@ -3000,7 +3717,10 @@ def run_release_notes_generation(settings):
 
         data = CommentedMap()
         data["version"] = pack_version
-        data["Fabric version"] = fabric_version
+        data["Mod loader"] = get_mod_loader_label(active_mod_loader)
+        data["Mod loader version"] = mod_loader_version
+        if normalize_mod_loader_name(active_mod_loader) == "fabric":
+            data["Fabric version"] = mod_loader_version
         data["Changes/Improvements"] = None
         data["Bug Fixes"] = None
         data["Config Changes"] = LiteralScalarString("- : [mod], [Client]")
@@ -3011,10 +3731,7 @@ def run_release_notes_generation(settings):
     with open(changelog_path, "r", encoding="utf-8") as f:
         changelog_yml = yaml.load(f) or {}
 
-    # Update Fabric version in changelog if needed.
-    if changelog_yml.get("Fabric version") != fabric_version:
-        changelog_yml["Fabric version"] = fabric_version
-
+    if apply_loader_metadata_to_changelog(changelog_yml, active_mod_loader, mod_loader_version):
         with open(changelog_path, "w", encoding="utf-8") as f:
             yaml.dump(changelog_yml, f)
 
@@ -3098,7 +3815,7 @@ def update_crash_assistant_modlist(settings):
 
 
 def main():
-    global minecraft_version, fabric_version
+    global minecraft_version, active_mod_loader, mod_loader_version
 
     special_menu_action_selected = has_special_menu_action_selected(settings)
 
@@ -3107,9 +3824,11 @@ def main():
             input("Using fixes for Breakneck. Press Enter to continue...")
 
         if settings.migrate_minecraft_version:
-            minecraft_version, fabric_version = migrate_minecraft_version(
+            minecraft_version, active_mod_loader, mod_loader_version = migrate_minecraft_version(
                 target_minecraft_version=settings.migration_target_minecraft,
                 target_fabric_version=settings.migration_target_fabric,
+                target_mod_loader=settings.migration_target_mod_loader,
+                target_mod_loader_version=settings.migration_target_mod_loader_version,
                 update_all_mods=settings.migration_update_all_mods,
                 disable_outdated_mods=settings.migration_disable_incompatible_mods,
                 mod_loader=settings.migration_mod_loader,
