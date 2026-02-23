@@ -2717,10 +2717,8 @@ changelog_factory = ChangelogFactory(changelog_dir_path, modpack_name, pack_vers
 ############################################################
 # Main Program
 
-def main():
-    global minecraft_version, fabric_version
-
-    special_menu_action_selected = any(
+def has_special_menu_action_selected(settings):
+    return any(
         [
             settings.refresh_only,
             settings.update_mods_only,
@@ -2731,6 +2729,185 @@ def main():
             settings.add_mod_only,
         ]
     )
+
+
+def run_special_menu_action(settings):
+    if settings.clear_repo_data_only:
+        clear_stored_repository_data()
+    elif settings.bump_version_only:
+        bump_modpack_version(settings.bump_target_version)
+        subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
+    elif settings.generate_update_summary_only:
+        download_missing_comparison_files()
+        run_changelog_auto_generation()
+    elif settings.list_disabled_mods_only:
+        list_disabled_mods()
+    elif settings.add_mod_only:
+        add_mod_via_prompt()
+    elif settings.update_mods_only:
+        previous_snapshot = snapshot_mod_toml_content()
+        subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
+
+        pinned_updates = find_pinned_mods_with_available_updates()
+        temp_unpinned_mod_files = []
+        allowed_alpha_mod_files = []
+        if pinned_updates:
+            selected_pinned_mod_files, allowed_alpha_mod_files = prompt_for_pinned_mod_updates(pinned_updates)
+            if selected_pinned_mod_files:
+                temp_unpinned_mod_files = set_pin_state_for_mod_files(selected_pinned_mod_files, should_pin=False)
+                if temp_unpinned_mod_files:
+                    subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
+
+        try:
+            subprocess.call(f"{packwiz_exe_path} update --all -y", shell=True)
+        finally:
+            if temp_unpinned_mod_files:
+                repinned_mod_files = set_pin_state_for_mod_files(temp_unpinned_mod_files, should_pin=True)
+                if repinned_mod_files:
+                    subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
+                    print(f"[PackWiz] Re-pinned {len(repinned_mod_files)} pinned mods after update.")
+
+        enforce_release_channel_policy(
+            previous_snapshot,
+            log_prefix="[Update]",
+            allowed_alpha_mod_files=allowed_alpha_mod_files,
+        )
+        subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
+        print("[PackWiz] Mods updated.")
+
+        updated_disabled_mods = find_updated_disabled_mods(previous_snapshot)
+        if updated_disabled_mods:
+            updated_disabled_names = [mod_name for _, mod_name in updated_disabled_mods]
+            print("[PackWiz] Updated mods that are still disabled: " + ", ".join(updated_disabled_names))
+            if input("Enable these updated disabled mods? [N]: ") in ("y", "Y", "yes", "Yes"):
+                enabled_mods = enable_mods_by_files([mod_file for mod_file, _ in updated_disabled_mods])
+                subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
+                print(f"[PackWiz] Re-enabled {len(enabled_mods)} updated disabled mods.")
+    elif settings.refresh_only:
+        subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
+
+
+def run_release_notes_generation(settings):
+    os.chdir(git_path)
+    changelog_path = os.path.join(git_path, "Changelogs", f"{pack_version}+{minecraft_version}.yml")
+    major_minecraft_version = '.'.join(minecraft_version.split('.', 2)[:2])
+    md_element_full_changelog = f"**[[Full Changelog]](https://crismpack.net/{modpack_name.lower().split(' ', 1)[0]}/changelogs/{major_minecraft_version}/{minecraft_version}#v{pack_version})**"
+    md_element_pre_release = '**This is a pre-release. Here be dragons!**'
+    md_element_bh_banner = f"[![BisectHosting Banner]({settings.bh_banner})](https://bisecthosting.com/CRISM)"
+    mdFile_CF = MdUtils(file_name='CurseForge-Release')
+    mdFile_MR = MdUtils(file_name='Modrinth-Release')
+
+    if "beta" in pack_version or "alpha" in pack_version:
+        print("pack_version = " + pack_version)
+        mdFile_CF.new_paragraph(md_element_pre_release)
+        mdFile_MR.new_paragraph(md_element_pre_release)
+
+    if not os.path.isfile(changelog_path):
+        print(f"No changelog found for {pack_version}, creating a template...")
+
+        data = CommentedMap()
+        data["version"] = pack_version
+        data["Fabric version"] = fabric_version
+        data["Changes/Improvements"] = None
+        data["Bug Fixes"] = None
+        data["Config Changes"] = LiteralScalarString("- : [mod], [Client]")
+
+        with open(changelog_path, "w", encoding="utf-8") as f:
+            yaml.dump(data, f)
+
+    with open(changelog_path, "r", encoding="utf-8") as f:
+        changelog_yml = yaml.load(f) or {}
+
+    # Update Fabric version in changelog if needed.
+    if changelog_yml.get("Fabric version") != fabric_version:
+        changelog_yml["Fabric version"] = fabric_version
+
+        with open(changelog_path, "w", encoding="utf-8") as f:
+            yaml.dump(changelog_yml, f)
+
+    try:
+        update_overview = changelog_yml['Update overview']
+        mdFile_CF.new_paragraph(markdown.markdown_list_maker(update_overview))
+        mdFile_MR.new_paragraph(markdown.markdown_list_maker(update_overview))
+    except Exception:
+        try:
+            improvements = changelog_yml.get('Changes/Improvements')
+            bug_fixes = changelog_yml.get('Bug Fixes')
+
+            if improvements:
+                mdFile_CF.new_paragraph("### Changes/Improvements ⭐")
+                mdFile_CF.new_paragraph(markdown.markdown_list_maker(improvements))
+                mdFile_MR.new_paragraph(markdown.markdown_list_maker(improvements))
+            if bug_fixes:
+                mdFile_CF.new_paragraph("### Bug Fixes 🪲")
+                mdFile_CF.new_paragraph(markdown.markdown_list_maker(bug_fixes))
+                mdFile_MR.new_paragraph(markdown.markdown_list_maker(bug_fixes))
+        except Exception:
+            print(f"No 'Update overview' or 'Changes/Improvements' found for {pack_version}...")
+
+    mdFile_CF.new_paragraph("#### " + md_element_full_changelog)
+    mdFile_CF.new_paragraph("<br>")
+    mdFile_CF.new_paragraph(md_element_bh_banner)
+    mdFile_CF.create_md_file()
+    mdFile_MR.new_paragraph(md_element_full_changelog)
+    mdFile_MR.create_md_file()
+
+
+def update_publish_workflow(settings):
+    os.chdir(git_path)
+    publish_workflow_path = os.path.join(git_path, ".github", "workflows", "publish.yml")
+
+    with open(publish_workflow_path, "r", encoding="utf-8") as pw_file:
+        publish_workflow_yml = yaml.load(pw_file) or {}
+
+    publish_workflow_yml['env']['MC_VERSION'] = minecraft_version
+
+    if "beta" in pack_version:
+        pw_release_type = "beta"; pw_prerelease = True
+    elif "alpha" in pack_version:
+        pw_release_type = "alpha"; pw_prerelease = True
+    else:
+        pw_release_type = "release"; pw_prerelease = False
+
+    publish_workflow_yml['env']['RELEASE_TYPE'] = pw_release_type
+    publish_workflow_yml['env']['PRE_RELEASE'] = pw_prerelease
+
+    with open(publish_workflow_path, "w", encoding="utf-8") as pw_file:
+        yaml.dump(publish_workflow_yml, pw_file)
+
+
+def update_bcc_versions(settings):
+    if settings.export_client:
+        os.chdir(packwiz_path)
+        with open(bcc_client_config_path, "r") as f:
+            bcc_json = json.load(f)
+        bcc_json["modpackVersion"] = pack_version
+        with open(bcc_client_config_path, "w") as f:
+            json.dump(bcc_json, f)
+    if settings.export_server:
+        with open(bcc_server_config_path, "r") as f:
+            bcc_json = json.load(f)
+        bcc_json["modpackVersion"] = pack_version
+        with open(bcc_server_config_path, "w") as f:
+            json.dump(bcc_json, f)
+
+
+def update_crash_assistant_modlist(settings):
+    mod_filenames_json = parse_filenames_as_json(mods_path)
+    with open(crash_assistant_config_path, "w", encoding="utf8") as output_file:
+        output_file.write(mod_filenames_json)
+    combined_modlist_markdown = build_combined_modlist_markdown(
+        mods_path,
+        include_side_tags=settings.modlist_side_tag
+    )
+    with open(crash_assistant_markdown_path, "w", encoding="utf8") as output_file:
+        output_file.write(combined_modlist_markdown)
+
+
+def main():
+    global minecraft_version, fabric_version
+
+    special_menu_action_selected = has_special_menu_action_selected(settings)
 
     if not special_menu_action_selected:
         if settings.breakneck_fixes and (settings.export_client or settings.export_server):
@@ -2770,127 +2947,26 @@ def main():
         # Update publish workflow values.
         #----------------------------------------
         if settings.update_publish_workflow:
-            os.chdir(git_path)
-            publish_workflow_path = os.path.join(git_path, ".github", "workflows", "publish.yml")
-
-            with open(publish_workflow_path, "r", encoding="utf-8") as pw_file:
-                publish_workflow_yml = yaml.load(pw_file) or {}
-
-            publish_workflow_yml['env']['MC_VERSION'] = minecraft_version
-
-            if "beta" in pack_version:
-                pw_release_type = "beta"; pw_prerelease = True
-            elif "alpha" in pack_version:
-                pw_release_type = "alpha"; pw_prerelease = True
-            else:
-                pw_release_type = "release"; pw_prerelease = False
-
-            publish_workflow_yml['env']['RELEASE_TYPE'] = pw_release_type
-            publish_workflow_yml['env']['PRE_RELEASE'] = pw_prerelease
-
-            with open(publish_workflow_path, "w", encoding="utf-8") as pw_file:
-                yaml.dump(publish_workflow_yml, pw_file)
+            update_publish_workflow(settings)
 
         #----------------------------------------
         # Create release notes.
         #----------------------------------------
         if settings.create_release_notes:
-            os.chdir(git_path)
-            changelog_path = os.path.join(git_path, "Changelogs", f"{pack_version}+{minecraft_version}.yml")
-            major_minecraft_version = '.'.join(minecraft_version.split('.', 2)[:2])
-            md_element_full_changelog = f"**[[Full Changelog]](https://crismpack.net/{modpack_name.lower().split(' ', 1)[0]}/changelogs/{major_minecraft_version}/{minecraft_version}#v{pack_version})**"
-            md_element_pre_release = '**This is a pre-release. Here be dragons!**'
-            md_element_bh_banner = f"[![BisectHosting Banner]({settings.bh_banner})](https://bisecthosting.com/CRISM)"
-            mdFile_CF = MdUtils(file_name='CurseForge-Release')
-            mdFile_MR = MdUtils(file_name='Modrinth-Release')
-
-            if "beta" in pack_version or "alpha" in pack_version:
-                print("pack_version = " + pack_version)
-                mdFile_CF.new_paragraph(md_element_pre_release)
-                mdFile_MR.new_paragraph(md_element_pre_release)
-
-            if not os.path.isfile(changelog_path):
-                print(f"No changelog found for {pack_version}, creating a template...")
-
-                data = CommentedMap()
-                data["version"] = pack_version
-                data["Fabric version"] = fabric_version
-                data["Changes/Improvements"] = None
-                data["Bug Fixes"] = None
-                data["Config Changes"] = LiteralScalarString("- : [mod], [Client]")
-
-                with open(changelog_path, "w", encoding="utf-8") as f:
-                    yaml.dump(data, f)
-
-            with open(changelog_path, "r", encoding="utf-8") as f:
-                changelog_yml = yaml.load(f) or {}
-
-            # Update Fabric version in changelog if needed.
-            if changelog_yml.get("Fabric version") != fabric_version:
-                changelog_yml["Fabric version"] = fabric_version
-                
-                with open(changelog_path, "w", encoding="utf-8") as f:
-                    yaml.dump(changelog_yml, f)
-
-            try:
-                update_overview = changelog_yml['Update overview']
-                mdFile_CF.new_paragraph(markdown.markdown_list_maker(update_overview))
-                mdFile_MR.new_paragraph(markdown.markdown_list_maker(update_overview))
-            except Exception:
-                try:
-                    improvements = changelog_yml.get('Changes/Improvements')
-                    bug_fixes = changelog_yml.get('Bug Fixes')
-
-                    if improvements:
-                        mdFile_CF.new_paragraph("### Changes/Improvements ⭐")
-                        mdFile_CF.new_paragraph(markdown.markdown_list_maker(improvements))
-                        mdFile_MR.new_paragraph(markdown.markdown_list_maker(improvements))
-                    if bug_fixes:
-                        mdFile_CF.new_paragraph("### Bug Fixes 🪲")
-                        mdFile_CF.new_paragraph(markdown.markdown_list_maker(bug_fixes))
-                        mdFile_MR.new_paragraph(markdown.markdown_list_maker(bug_fixes))
-                except Exception:
-                    print(f"No 'Update overview' or 'Changes/Improvements' found for {pack_version}...")
-
-            mdFile_CF.new_paragraph("#### " + md_element_full_changelog)
-            mdFile_CF.new_paragraph("<br>")
-            mdFile_CF.new_paragraph(md_element_bh_banner)
-            mdFile_CF.create_md_file()
-            mdFile_MR.new_paragraph(md_element_full_changelog)
-            mdFile_MR.create_md_file()
+            run_release_notes_generation(settings)
 
 
         #----------------------------------------
         # Update BCC version number.
         #----------------------------------------
         if settings.update_bcc_version:
-            if settings.export_client:
-                os.chdir(packwiz_path)
-                with open(bcc_client_config_path, "r") as f:
-                    bcc_json = json.load(f)
-                bcc_json["modpackVersion"] = pack_version
-                with open(bcc_client_config_path, "w") as f:
-                    json.dump(bcc_json, f)
-            if settings.export_server:
-                with open(bcc_server_config_path, "r") as f:
-                    bcc_json = json.load(f)
-                bcc_json["modpackVersion"] = pack_version
-                with open(bcc_server_config_path, "w") as f:
-                    json.dump(bcc_json, f)
+            update_bcc_versions(settings)
 
         #----------------------------------------
         # Update 'Crash Assistant' modlist.
         #----------------------------------------
         if settings.update_crash_assistant_modlist:
-            mod_filenames_json = parse_filenames_as_json(mods_path)
-            with open(crash_assistant_config_path, "w", encoding="utf8") as output_file:
-                output_file.write(mod_filenames_json)
-            combined_modlist_markdown = build_combined_modlist_markdown(
-                mods_path,
-                include_side_tags=settings.modlist_side_tag
-            )
-            with open(crash_assistant_markdown_path, "w", encoding="utf8") as output_file:
-                output_file.write(combined_modlist_markdown)
+            update_crash_assistant_modlist(settings)
 
         #----------------------------------------
         # Export client pack. (CurseForge with Packwiz)
@@ -2926,15 +3002,18 @@ def main():
 
             if move_disabled_mods:
                 disabled_mods_path = os.path.join(mods_path, "disabled")
+                os.makedirs(disabled_mods_path, exist_ok=True)
                 os.chdir(mods_path)
                 for item in os.listdir():
                     if os.path.isdir(item) and item == "disabled":
                         continue
+                    if not item.endswith(".toml"):
+                        continue
                     try:
                         with open(item, "r") as f:
                             mod_toml = toml.load(f)
-                            if "disabled" in mod_toml["side"]:
-                                move(item, disabled_mods_path)
+                        if "disabled" in str(mod_toml.get("side", "")).lower():
+                            move(item, disabled_mods_path)
                     except OSError as e:
                         print(f"move_disabled_mods: {e}")
                 os.chdir(packwiz_path)
@@ -3075,59 +3154,7 @@ def main():
         subprocess.call(f"{packwiz_exe_path} refresh", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     else:
-        if settings.clear_repo_data_only:
-            clear_stored_repository_data()
-        elif settings.bump_version_only:
-            bump_modpack_version(settings.bump_target_version)
-            subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
-        elif settings.generate_update_summary_only:
-            download_missing_comparison_files()
-            run_changelog_auto_generation()
-        elif settings.list_disabled_mods_only:
-            list_disabled_mods()
-        elif settings.add_mod_only:
-            add_mod_via_prompt()
-        elif settings.update_mods_only:
-            previous_snapshot = snapshot_mod_toml_content()
-            subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
-
-            pinned_updates = find_pinned_mods_with_available_updates()
-            temp_unpinned_mod_files = []
-            allowed_alpha_mod_files = []
-            if pinned_updates:
-                selected_pinned_mod_files, allowed_alpha_mod_files = prompt_for_pinned_mod_updates(pinned_updates)
-                if selected_pinned_mod_files:
-                    temp_unpinned_mod_files = set_pin_state_for_mod_files(selected_pinned_mod_files, should_pin=False)
-                    if temp_unpinned_mod_files:
-                        subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
-
-            try:
-                subprocess.call(f"{packwiz_exe_path} update --all -y", shell=True)
-            finally:
-                if temp_unpinned_mod_files:
-                    repinned_mod_files = set_pin_state_for_mod_files(temp_unpinned_mod_files, should_pin=True)
-                    if repinned_mod_files:
-                        subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
-                        print(f"[PackWiz] Re-pinned {len(repinned_mod_files)} pinned mods after update.")
-
-            enforce_release_channel_policy(
-                previous_snapshot,
-                log_prefix="[Update]",
-                allowed_alpha_mod_files=allowed_alpha_mod_files,
-            )
-            subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
-            print("[PackWiz] Mods updated.")
-
-            updated_disabled_mods = find_updated_disabled_mods(previous_snapshot)
-            if updated_disabled_mods:
-                updated_disabled_names = [mod_name for _, mod_name in updated_disabled_mods]
-                print("[PackWiz] Updated mods that are still disabled: " + ", ".join(updated_disabled_names))
-                if input("Enable these updated disabled mods? [N]: ") in ("y", "Y", "yes", "Yes"):
-                    enabled_mods = enable_mods_by_files([mod_file for mod_file, _ in updated_disabled_mods])
-                    subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
-                    print(f"[PackWiz] Re-enabled {len(enabled_mods)} updated disabled mods.")
-        elif settings.refresh_only:
-            subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
+        run_special_menu_action(settings)
 
 
 if __name__ == "__main__":
