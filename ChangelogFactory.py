@@ -293,6 +293,8 @@ class ChangelogFactory:
                 "path": output_relative_path,
                 "removed_lines": removed_lines,
                 "added_lines": added_lines,
+                "previous_content": "\n".join(old_lines),
+                "current_content": "\n".join(new_lines),
             }
 
         previous_state = _collect_state(previous_dir)

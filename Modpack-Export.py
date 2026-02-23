@@ -1369,7 +1369,7 @@ def _normalize_llm_text_to_bullets(raw_text: str, max_lines: int):
         line = re.sub(r"^[\-\*\u2022]\s*", "", line)
         line = re.sub(r"^\d+[.)]\s*", "", line)
         if line:
-            normalized = line.rstrip(".").strip()
+            normalized = line.strip()
             lines.append(f"- {normalized}")
     return lines[:max_lines]
 
@@ -1378,7 +1378,7 @@ def _normalize_config_llm_bullets(raw_text: str, max_lines: int):
     normalized = _normalize_llm_text_to_bullets(raw_text, max_lines=max(max_lines * 2, max_lines))
     valid = []
     invalid_count = 0
-    required_suffix_pattern = re.compile(r":\s*\[[^\[\]]+\]\.?$")
+    required_suffix_pattern = re.compile(r"\[[^\[\]]+\]\.?$")
 
     for bullet in normalized:
         line = str(bullet or "").strip()
@@ -1390,6 +1390,34 @@ def _normalize_config_llm_bullets(raw_text: str, max_lines: int):
             invalid_count += 1
 
     return valid[:max_lines], invalid_count
+
+
+def _normalize_redundant_config_context_tail(bullets: List[str]) -> List[str]:
+    normalized = []
+    label_suffix_pattern = re.compile(r"(\s*[:,-]?\s*\[[^\[\]]+\]\.?)$", flags=re.IGNORECASE)
+    tail_pattern = re.compile(
+        r"\s+(?:in|within|inside)\s+(?:the\s+)?"
+        r"(?:[a-z0-9][a-z0-9\s_\-./&']{0,80}\s+)?"
+        r"(?:mod\s+)?(?:config(?:uration)?s?|settings?|options?|overrides?)(?:\s+file)?\s*$",
+        flags=re.IGNORECASE,
+    )
+    for raw_line in bullets:
+        line = str(raw_line or "").strip()
+        if not line:
+            continue
+        suffix_match = label_suffix_pattern.search(line)
+        if not suffix_match:
+            normalized.append(line)
+            continue
+
+        suffix = suffix_match.group(1)
+        body = line[:suffix_match.start()]
+        body = tail_pattern.sub("", body).rstrip()
+        if not body:
+            body = line[:suffix_match.start()].rstrip()
+        line = f"{body}{suffix}"
+        normalized.append(line)
+    return normalized
 
 
 def format_config_filename_as_title(filename: str) -> str:
@@ -1437,18 +1465,34 @@ def _load_modlist_label_index():
     return _mod_label_index_cache
 
 
-def derive_mod_display_label_from_config_path(path: str) -> str:
+def _get_normalized_config_path_parts(path: str) -> List[str]:
     raw_path = str(path or "").replace("\\", "/").strip("/")
-    filename = derive_mod_label_from_config_path(raw_path)
-    stem = os.path.splitext(filename)[0].strip()
     parts = [p for p in raw_path.split("/") if p]
-    parent = parts[-2] if len(parts) > 1 else ""
+    if not parts:
+        return []
+
+    # Treat yosbr/config as the config root for label inference.
+    if parts[0].lower() == "yosbr":
+        if len(parts) > 1 and parts[1].lower() == "config":
+            return parts[2:]
+        return parts[1:]
+
+    return parts
+
+
+def derive_mod_display_label_from_config_path(path: str) -> str:
+    normalized_parts = _get_normalized_config_path_parts(path)
+    filename = normalized_parts[-1] if normalized_parts else derive_mod_label_from_config_path(path)
+    stem = os.path.splitext(filename)[0].strip()
+    parent = normalized_parts[-2] if len(normalized_parts) > 1 else ""
+    top_folder = normalized_parts[0] if len(normalized_parts) > 1 else ""
 
     label_index = _load_modlist_label_index()
     index = label_index.get("index", {})
     entries = label_index.get("entries", [])
 
     candidate_keys = [
+        _normalize_lookup_key(top_folder),
         _normalize_lookup_key(stem),
         _normalize_lookup_key(filename),
         _normalize_lookup_key(parent),
@@ -1458,23 +1502,33 @@ def derive_mod_display_label_from_config_path(path: str) -> str:
             return index[key]
 
     # Loose fallback: match by containment on normalized keys.
+    loose_keys = []
+    top_folder_key = _normalize_lookup_key(top_folder)
+    if top_folder_key:
+        loose_keys.append(top_folder_key)
     stem_key = _normalize_lookup_key(stem)
-    if stem_key:
+    if stem_key and stem_key not in loose_keys:
+        loose_keys.append(stem_key)
+
+    for lookup_key in loose_keys:
         best_name = None
         best_score = 0
         for mod_name in entries:
             alias_key = _normalize_lookup_key(mod_name)
             if not alias_key:
                 continue
-            if stem_key == alias_key:
+            if lookup_key == alias_key:
                 return mod_name
-            if stem_key in alias_key or alias_key in stem_key:
-                score = min(len(stem_key), len(alias_key))
+            if lookup_key in alias_key or alias_key in lookup_key:
+                score = min(len(lookup_key), len(alias_key))
                 if score > best_score:
                     best_score = score
                     best_name = mod_name
         if best_name and best_score >= 6:
             return best_name
+
+    if top_folder:
+        return format_config_filename_as_title(top_folder)
 
     return format_config_filename_as_title(filename)
 
@@ -1578,7 +1632,7 @@ def _apply_yosbr_default_wording(text: str, diff_payload) -> str:
         return str(text or "")
 
     normalized_lines = []
-    suffix_pattern = re.compile(r":\s*\[([^\[\]]+)\]\.?$")
+    suffix_pattern = re.compile(r"(?::\s*)?\[([^\[\]]+)\]\.?$")
 
     for raw_line in str(text or "").splitlines():
         line = str(raw_line).strip()
@@ -1606,7 +1660,7 @@ def _apply_yosbr_default_wording(text: str, diff_payload) -> str:
 
 def _extract_config_bullet_labels(bullets: List[str]) -> set:
     labels = set()
-    suffix_pattern = re.compile(r":\s*\[([^\[\]]+)\]\.?$")
+    suffix_pattern = re.compile(r"(?::\s*)?\[([^\[\]]+)\]\.?$")
     for raw_line in bullets:
         line = str(raw_line or "").strip()
         if not line:
@@ -1670,7 +1724,7 @@ def _get_missing_yosbr_moves_from_bullets(bullets: List[str], diff_payload) -> L
     for from_path in expected_moves:
         from_lower = from_path.lower()
         found = any(
-            (f"moved {from_lower}" in bullet) and ("yosbr" in bullet)
+            (from_lower in bullet) and ("yosbr" in bullet)
             for bullet in lowered_bullets
         )
         if not found:
@@ -1697,7 +1751,7 @@ def _normalize_yosbr_move_bullet_wording(bullets: List[str], diff_payload) -> Li
         }
 
     normalized = []
-    suffix_pattern = re.compile(r"(:\s*\[[^\[\]]+\]\.?)$")
+    suffix_pattern = re.compile(r"((?::\s*)?\[[^\[\]]+\]\.?)$")
     for raw_line in bullets:
         line = str(raw_line or "").strip()
         if not line:
@@ -1706,25 +1760,48 @@ def _normalize_yosbr_move_bullet_wording(bullets: List[str], diff_payload) -> Li
         replaced = False
 
         for from_lower, meta in move_map.items():
-            moved_signature = f"moved {from_lower}"
-            to_signature = f"to {str(meta.get('to', '')).lower()}"
-            if moved_signature not in line_lower:
-                continue
-            if "yosbr" not in line_lower and str(meta.get("to", "")).strip() and to_signature not in line_lower:
+            if from_lower not in line_lower:
                 continue
 
             suffix_match = suffix_pattern.search(line)
             if suffix_match:
                 label_suffix = suffix_match.group(1)
+                line_body = line[:suffix_match.start()].rstrip()
             else:
                 label_suffix = f": [{meta.get('label', 'Unknown')}]"
-            line = f"- Moved {meta.get('from')} to be handled by YOSBR{label_suffix}"
+                line_body = line
+
+            if "yosbr" not in line_body.lower():
+                line_body = f"{line_body} (YOSBR)"
+
+            line = f"{line_body}{label_suffix}"
             replaced = True
             break
 
         normalized.append(line if replaced else line)
 
     return normalized
+
+
+def _filter_unexpected_yosbr_move_bullets(bullets: List[str], diff_payload) -> List[str]:
+    expected_moves = [str(path).lower() for path in _get_expected_yosbr_moves(diff_payload)]
+    filtered = []
+    for raw_line in bullets:
+        line = str(raw_line or "").strip()
+        if not line:
+            continue
+        lowered = line.lower()
+        is_move_bullet = ("moved " in lowered) and ("yosbr" in lowered)
+        if not is_move_bullet:
+            filtered.append(line)
+            continue
+
+        if not expected_moves:
+            continue
+        if any(expected_move in lowered for expected_move in expected_moves):
+            filtered.append(line)
+
+    return filtered
 
 
 def derive_mod_label_from_config_path(path: str) -> str:
@@ -1899,6 +1976,14 @@ def _format_added_or_removed_list_value_bullet(action: str, file_path: str, raw_
     return f"- {action_label} {display_value}: [{mod_label}]."
 
 
+def _is_fancymenu_customization_path(path: str) -> bool:
+    normalized = str(path or "").replace("\\", "/").strip("/").lower()
+    if not normalized:
+        return False
+    wrapped = f"/{normalized}/"
+    return "/fancymenu/customization/" in wrapped
+
+
 def build_config_label_title_prompt(text: str, diff_payload, max_items=20):
     config_diff = diff_payload.get("config_differences") or {}
     modified_line_diffs = list(config_diff.get("modified_line_diffs", []))
@@ -1949,20 +2034,38 @@ def build_config_changes_prompt(diff_payload, max_items=12):
         for entry in items[:max_items]:
             file_path = str(entry.get("path", "")).strip()
             rendered.append(f"File: {file_path}")
-            removed_lines = entry.get("removed_lines", [])[:8]
-            added_lines = entry.get("added_lines", [])[:8]
-            if removed_lines:
-                rendered.append("Removed lines:")
-                rendered.extend(
-                    f"- {_format_line_with_section_context(file_path, line, section_index_cache)}"
-                    for line in removed_lines
-                )
-            if added_lines:
-                rendered.append("Added lines:")
-                rendered.extend(
-                    f"- {_format_line_with_section_context(file_path, line, section_index_cache)}"
-                    for line in added_lines
-                )
+            if _is_fancymenu_customization_path(file_path):
+                rendered.append("Detail policy: Do not list specific option names or exact values for this file.")
+                rendered.append("Use a generic summary only (example: 'Adjusted FancyMenu customizations').")
+                rendered.append("")
+                continue
+            previous_content = str(entry.get("previous_content", ""))
+            current_content = str(entry.get("current_content", ""))
+            if previous_content or current_content:
+                rendered.append("Previous file content (full):")
+                rendered.append("```")
+                rendered.append(previous_content if previous_content else "(empty)")
+                rendered.append("```")
+                rendered.append("Current file content (full):")
+                rendered.append("```")
+                rendered.append(current_content if current_content else "(empty)")
+                rendered.append("```")
+            else:
+                # Backward-compatible fallback when full snapshots are unavailable.
+                removed_lines = entry.get("removed_lines", [])[:8]
+                added_lines = entry.get("added_lines", [])[:8]
+                if removed_lines:
+                    rendered.append("Removed lines:")
+                    rendered.extend(
+                        f"- {_format_line_with_section_context(file_path, line, section_index_cache)}"
+                        for line in removed_lines
+                    )
+                if added_lines:
+                    rendered.append("Added lines:")
+                    rendered.extend(
+                        f"- {_format_line_with_section_context(file_path, line, section_index_cache)}"
+                        for line in added_lines
+                    )
             rendered.append("")
         return "\n".join(rendered).strip()
 
@@ -2015,26 +2118,29 @@ def build_config_changes_prompt(diff_payload, max_items=12):
     return (
         "Write concise end-user facing config change bullets for a Minecraft modpack changelog.\n"
         "Output only bullet lines. Each line must start with '- '.\n"
-        "Keep wording factual and short. No markdown headers and no counts.\n"
-        "Summarize what values or options changed, based on the changed lines.\n"
+        "Keep wording factual, short, and natural. No markdown headers and no counts.\n"
+        "Use varied sentence openings; do not repeat the same lead-in phrase on every bullet.\n"
+        "Compare the full previous/current config file contents and infer the important value/option changes yourself.\n"
+        "Summarize player-facing impact when clear.\n"
         "Files under 'yosbr/' are defaults applied only on first launch.\n"
-        "When summarizing those files, use 'Changed default ...' instead of 'Changed ...'.\n"
         "Do not treat regular config -> yosbr moves as removals.\n"
-        "For each item listed under 'Regular config files moved to yosbr', include one explicit bullet using wording like 'Moved <from> to be handled by YOSBR'.\n"
+        "For each item listed under 'Regular config files moved to yosbr', include one explicit bullet that mentions the source path and YOSBR.\n"
         "For added/removed list entries, explicitly mention the section path when provided in '(section: ...)' context.\n"
         "Do not write generic lines like 'updated config files'.\n"
+        "Avoid redundant tails like 'in <mod> config/settings/overrides'; keep wording focused on the actual value/behavior change.\n"
+        "For files under 'fancymenu/customization', do not mention specific keys/values; summarize those changes generically but do mention which menu was changes.\n"
         "Do not write about added/removed config files.\n"
         "Summarize in-file setting/value changes from modified files, and also include yosbr move bullets.\n"
-        "Each bullet must end with ': [Mod Name]'.\n"
+        "Each bullet must end with '[Mod Name]'.\n"
         "Use the file-to-mod mapping below when possible.\n"
         "Preferred style examples:\n"
-        "- Changed adsEnabled to \"false\": [Resourcify]\n"
-        "- Changed button URL to use the new wiki format: [Simple Discord RPC]\n"
-        "- Changed \"coloredText\" to false: [Breakneck Menu]\n\n"
+        "- Ads are now disabled in the client panel: [Resourcify]\n"
+        "- Switched the button URL to the new wiki format: [Simple Discord RPC]\n"
+        "- Set \"coloredText\" to false for cleaner menu text: [Breakneck Menu]\n\n"
         "YOSBR style example:\n"
-        "- Changed default \"coloredText\" to false: [Breakneck Menu]\n\n"
+        "- Set default \"coloredText\" to false by default: [Breakneck Menu]\n\n"
         "YOSBR move style example:\n"
-        "- Moved breakneckmenu.json5 to be handled by YOSBR: [Breakneck Menu]\n\n"
+        "- Moved <source path> to YOSBR so defaults are applied on first launch: [Mod Name]\n\n"
         f"Current version: {diff_payload.get('current_version')}\n"
         f"Compared from: {diff_payload.get('previous_version')}\n"
         f"Minecraft: {diff_payload.get('mc_version')}\n\n"
@@ -2042,7 +2148,7 @@ def build_config_changes_prompt(diff_payload, max_items=12):
         f"{_render_path_to_label(modified_line_diffs, moved_to_yosbr)}\n\n"
         "Regular config files moved to yosbr:\n"
         f"{_render_yosbr_moves(moved_to_yosbr)}\n\n"
-        "Modified config line changes (old/new):\n"
+        "Modified config file contents (previous/current):\n"
         f"{_render_line_changes(modified_line_diffs)}\n"
     )
 
@@ -2056,6 +2162,14 @@ def generate_config_changes_fallback_from_line_diffs(diff_payload, max_lines=8) 
     for entry in line_diffs:
         file_path = str(entry.get("path", "")).strip()
         mod_label = derive_mod_display_label_from_config_path(file_path)
+        if _is_fancymenu_customization_path(file_path):
+            if is_yosbr_config_path(file_path):
+                bullets.append(f"- Adjusted default FancyMenu customizations: [{mod_label}].")
+            else:
+                bullets.append(f"- Adjusted FancyMenu customizations: [{mod_label}].")
+            if len(bullets) >= max_lines:
+                break
+            continue
         added_lines = entry.get("added_lines", [])
         removed_lines = entry.get("removed_lines", [])
         candidate_lines = list(added_lines) + list(removed_lines)
@@ -2230,27 +2344,71 @@ def format_config_change_labels_with_llm(text: str, diff_payload, settings) -> O
     return None
 
 
-def _build_single_config_change_payload(diff_payload, modified_line_diff=None, moved_to_yosbr=None):
+def _build_config_change_payload_for_file(diff_payload, file_path: str):
+    normalized_path = str(file_path or "").replace("\\", "/").strip("/")
+    if not normalized_path:
+        return None
+
+    base_config_diff = dict((diff_payload or {}).get("config_differences") or {})
+    all_line_diffs = list(base_config_diff.get("modified_line_diffs", []))
+    all_moves = list(base_config_diff.get("moved_to_yosbr", []))
+
+    selected_line_diffs = []
+    for entry in all_line_diffs:
+        entry_path = str(entry.get("path", "")).replace("\\", "/").strip("/")
+        if entry_path == normalized_path:
+            selected_line_diffs.append(entry)
+
+    if len(selected_line_diffs) > 1:
+        merged_removed = []
+        merged_added = []
+        merged_previous_content = ""
+        merged_current_content = ""
+        seen_removed = set()
+        seen_added = set()
+        for entry in selected_line_diffs:
+            if not merged_previous_content:
+                merged_previous_content = str(entry.get("previous_content", ""))
+            if not merged_current_content:
+                merged_current_content = str(entry.get("current_content", ""))
+            for line in list(entry.get("removed_lines", [])):
+                key = str(line).strip().lower()
+                if not key or key in seen_removed:
+                    continue
+                seen_removed.add(key)
+                merged_removed.append(str(line).strip())
+            for line in list(entry.get("added_lines", [])):
+                key = str(line).strip().lower()
+                if not key or key in seen_added:
+                    continue
+                seen_added.add(key)
+                merged_added.append(str(line).strip())
+        selected_line_diffs = [
+            {
+                "path": normalized_path,
+                "removed_lines": merged_removed[:20],
+                "added_lines": merged_added[:20],
+                "previous_content": merged_previous_content,
+                "current_content": merged_current_content,
+            }
+        ]
+
+    selected_moves = []
+    for move in all_moves:
+        move_to_path = str(move.get("to", "")).replace("\\", "/").strip("/")
+        if move_to_path == normalized_path:
+            selected_moves.append(move)
+
+    if not selected_line_diffs and not selected_moves:
+        return None
+
     single_payload = dict(diff_payload or {})
-    config_diff = dict((diff_payload or {}).get("config_differences") or {})
-    single_line_diffs = [modified_line_diff] if modified_line_diff else []
-    single_moves = [moved_to_yosbr] if moved_to_yosbr else []
-    single_modified_paths = []
-
-    if modified_line_diff:
-        path = str(modified_line_diff.get("path", "")).strip()
-        if path:
-            single_modified_paths.append(path)
-    elif moved_to_yosbr:
-        move_to_path = str(moved_to_yosbr.get("to", "")).strip()
-        if move_to_path:
-            single_modified_paths.append(move_to_path)
-
+    config_diff = dict(base_config_diff)
     config_diff["added"] = []
     config_diff["removed"] = []
-    config_diff["modified"] = single_modified_paths
-    config_diff["modified_line_diffs"] = single_line_diffs
-    config_diff["moved_to_yosbr"] = single_moves
+    config_diff["modified"] = [normalized_path]
+    config_diff["modified_line_diffs"] = selected_line_diffs
+    config_diff["moved_to_yosbr"] = selected_moves
     single_payload["config_differences"] = config_diff
     return single_payload
 
@@ -2268,6 +2426,11 @@ def _generate_config_change_item_with_llm(item_payload, settings, max_lines: int
     best_missing_score = None
     missing_labels_for_retry = []
     missing_moves_for_retry = []
+    try:
+        llm_temperature = float(getattr(settings, "auto_config_temperature", 0.25))
+    except (TypeError, ValueError):
+        llm_temperature = 0.25
+    llm_temperature = max(0.0, min(llm_temperature, 2.0))
 
     for attempt in range(max_attempts):
         num_predict = 200 + (attempt * 140)
@@ -2285,7 +2448,7 @@ def _generate_config_change_item_with_llm(item_payload, settings, max_lines: int
                 missing_move_render = "\n".join(f"- {move}" for move in missing_moves_for_retry[:6])
                 coverage_hint_parts.append(
                     "Ensure one bullet for each missing yosbr move below.\n"
-                    "Start each move bullet with 'Moved <from> to be handled by YOSBR' using these exact source paths:\n"
+                    "Mention each exact source path and make clear it moved to YOSBR:\n"
                     f"{missing_move_render}\n"
                 )
             coverage_hint = (
@@ -2302,7 +2465,7 @@ def _generate_config_change_item_with_llm(item_payload, settings, max_lines: int
                     "prompt": prompt,
                     "stream": False,
                     "options": {
-                        "temperature": 0,
+                        "temperature": llm_temperature,
                         "num_predict": num_predict,
                     },
                 },
@@ -2331,6 +2494,8 @@ def _generate_config_change_item_with_llm(item_payload, settings, max_lines: int
 
                 llm_bullets = _normalize_llm_text_to_bullets(llm_text, max_lines=max_lines)
                 llm_bullets = _normalize_yosbr_move_bullet_wording(llm_bullets, item_payload)
+                llm_bullets = _filter_unexpected_yosbr_move_bullets(llm_bullets, item_payload)
+                llm_bullets = _normalize_redundant_config_context_tail(llm_bullets)
                 missing_labels = _get_missing_config_labels_from_bullets(llm_bullets, item_payload)
                 missing_moves = _get_missing_yosbr_moves_from_bullets(llm_bullets, item_payload)
                 missing_score = len(missing_labels) + len(missing_moves)
@@ -2376,11 +2541,29 @@ def generate_config_changes_with_llm(diff_payload, settings, max_lines: Optional
     modified_line_diffs = list(config_diff.get("modified_line_diffs", []))
     moved_to_yosbr = list(config_diff.get("moved_to_yosbr", []))
 
-    change_items = []
+    ordered_paths = []
+    seen_paths = set()
+
+    def _append_path(raw_path):
+        normalized = str(raw_path or "").replace("\\", "/").strip("/")
+        if not normalized:
+            return
+        lowered = normalized.lower()
+        if lowered in seen_paths:
+            return
+        seen_paths.add(lowered)
+        ordered_paths.append(normalized)
+
     for entry in moved_to_yosbr:
-        change_items.append(_build_single_config_change_payload(diff_payload, moved_to_yosbr=entry))
+        _append_path(entry.get("to", ""))
     for entry in modified_line_diffs:
-        change_items.append(_build_single_config_change_payload(diff_payload, modified_line_diff=entry))
+        _append_path(entry.get("path", ""))
+
+    change_items = []
+    for file_path in ordered_paths:
+        payload = _build_config_change_payload_for_file(diff_payload, file_path)
+        if payload:
+            change_items.append(payload)
 
     if not change_items:
         return None
@@ -2393,7 +2576,7 @@ def generate_config_changes_with_llm(diff_payload, settings, max_lines: Optional
         if remaining_budget <= 0:
             break
 
-        # One prompt per config change item; allow each item to emit as many bullets as budget allows.
+        # One prompt per modified config file; allow each file to emit as many bullets as budget allows.
         item_bullets = _generate_config_change_item_with_llm(
             item_payload,
             settings,
@@ -2403,7 +2586,7 @@ def generate_config_changes_with_llm(diff_payload, settings, max_lines: Optional
             line = str(bullet or "").strip()
             if not line:
                 continue
-            dedupe_key = line.lower()
+            dedupe_key = re.sub(r"[\s\.:;,\-]+$", "", line.lower())
             if dedupe_key in seen:
                 continue
             seen.add(dedupe_key)
@@ -2457,10 +2640,14 @@ def maybe_generate_config_changes(changelog_path, diff_payload):
             max_lines=settings.auto_config_max_lines,
         )
     remaining_after_yosbr = max(int(settings.auto_config_max_lines) - len(moved_to_yosbr_bullets), 0)
-    removed_config_file_bullets = generate_removed_config_file_bullets(
-        diff_payload,
-        max_lines=remaining_after_yosbr,
-    )
+    include_removed_config_files = bool(getattr(settings, "auto_config_include_removed_files", True))
+    if include_removed_config_files and remaining_after_yosbr > 0:
+        removed_config_file_bullets = generate_removed_config_file_bullets(
+            diff_payload,
+            max_lines=remaining_after_yosbr,
+        )
+    else:
+        removed_config_file_bullets = []
 
     with open(changelog_path, "r", encoding="utf-8") as f:
         changelog_yml = yaml.load(f) or {}
@@ -2661,6 +2848,7 @@ class Settings:
     auto_summary_overwrite_existing: bool = False
     auto_generate_config_changes: bool = False
     auto_config_overwrite_existing: bool = False
+    auto_config_include_removed_files: bool = True
 
     # String settings
     bh_banner: str = ""
@@ -2684,6 +2872,7 @@ class Settings:
     auto_summary_timeout_seconds: int = 45
     auto_summary_max_items: int = 8
     auto_config_timeout_seconds: int = 45
+    auto_config_temperature: float = 0.25
     auto_config_max_items: int = 20
     auto_config_max_lines: int = 18
 

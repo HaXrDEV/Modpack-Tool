@@ -72,14 +72,16 @@ The export flow can auto-populate changelog fields in `Changelogs/<version>+<mc_
 - `auto_summary_overwrite_existing`: Overwrites existing `Update overview` when `true`.
 - `auto_generate_config_changes`: Enables LLM generation for `Config Changes`.
 - `auto_config_overwrite_existing`: Overwrites existing `Config Changes` when `true`.
+- `auto_config_include_removed_files`: Includes removed config-file bullets in `Config Changes` when `true`.
 - `auto_config_provider`: Provider name (`ollama` currently supported).
 - `auto_config_model`: Model used by Ollama (default: `qwen3:4b-instruct`).
 - `auto_config_endpoint`: Ollama generate endpoint (default: `http://127.0.0.1:11434/api/generate`).
 - `auto_config_timeout_seconds`: HTTP timeout for the model call.
+- `auto_config_temperature`: Creativity for config bullets (default: `0.25`); higher values allow more varied wording.
 - `auto_config_max_items`: Max config diff items per category included in the prompt.
 - `auto_config_max_lines`: Max output bullet lines written to `Config Changes`.
 
-`Config Changes` generation uses line-level diffs from modified files (old/new lines) so the model can summarize concrete option/value changes instead of only reporting that a file changed.
+`Config Changes` generation provides full previous/current contents for modified config files so the model can infer meaningful option/value changes with broader context.
 
 ### Requirements
 
