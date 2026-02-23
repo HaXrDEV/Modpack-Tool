@@ -93,6 +93,15 @@ def determine_server_export():
         return False
 
 
+def normalize_drag_drop_path(raw_path: str) -> str:
+    """Normalize terminal drag-and-drop paths (often wrapped in quotes)."""
+    cleaned_path = str(raw_path or "").strip()
+    if len(cleaned_path) >= 2 and cleaned_path[0] == cleaned_path[-1] and cleaned_path[0] in ("'", '"'):
+        cleaned_path = cleaned_path[1:-1].strip()
+    cleaned_path = os.path.expanduser(os.path.expandvars(cleaned_path))
+    return os.path.normpath(cleaned_path) if cleaned_path else ""
+
+
 def ensure_migration_targets(settings):
     if not settings.migration_target_minecraft:
         settings.migration_target_minecraft = input("Target Minecraft version for migration: ").strip()
@@ -3155,7 +3164,17 @@ def main():
 
             copytree("Server Pack", tempfolder_path)
 
-            server_mods_path = input(f'Create a new modpack instance in the CurseForge launcher using the {server_zip_name} file. Then drag the mods folder from that instance into the terminal (No spaces allowed for the source directory): ')
+            server_mods_input = input(
+                f"Create a new modpack instance in the CurseForge launcher using the {server_zip_name} file. "
+                "Then drag the mods folder from that instance into the terminal: "
+            )
+            server_mods_path = normalize_drag_drop_path(server_mods_input)
+            if not server_mods_path:
+                raise ValueError("No source mods directory was provided.")
+            if not os.path.isdir(server_mods_path):
+                raise FileNotFoundError(
+                    f"Source mods directory was not found or is invalid: {server_mods_path!r}"
+                )
 
             copytree(server_mods_path, temp_mods_path, dirs_exist_ok=True)
 
