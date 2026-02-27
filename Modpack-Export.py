@@ -2518,6 +2518,49 @@ def _filter_unexpected_yosbr_move_bullets(bullets: List[str], diff_payload) -> L
     return filtered
 
 
+def _filter_unverified_config_operation_bullets(bullets: List[str], diff_payload) -> List[str]:
+    config_diff = diff_payload.get("config_differences") or {}
+    line_diffs = list(config_diff.get("modified_line_diffs", []))
+    moved_to_yosbr = list(config_diff.get("moved_to_yosbr", []))
+
+    has_removed_lines = False
+    evidence_chunks = []
+    for entry in line_diffs:
+        removed_lines = [str(line).strip() for line in list(entry.get("removed_lines", [])) if str(line).strip()]
+        added_lines = [str(line).strip() for line in list(entry.get("added_lines", [])) if str(line).strip()]
+        if removed_lines:
+            has_removed_lines = True
+        evidence_chunks.extend(removed_lines)
+        evidence_chunks.extend(added_lines)
+
+    has_move_entries = bool(moved_to_yosbr)
+    evidence_text = "\n".join(evidence_chunks).lower()
+    operation_pattern = re.compile(r"\b(removed|moved|reordered|re-ordered|replaced|relocated|swapped)\b")
+    set_key_pattern = re.compile(r'\bset\s+"([^"]+)"')
+
+    filtered = []
+    for raw_line in bullets:
+        line = str(raw_line or "").strip()
+        if not line:
+            continue
+        lowered = line.lower()
+
+        # Prevent hallucinated move/remove/reorder language when the source diff has no removals or yosbr moves.
+        if not has_removed_lines and not has_move_entries and operation_pattern.search(lowered):
+            continue
+
+        # If a bullet claims a specific quoted key was set, keep it only when that key appears in diff evidence.
+        set_key_match = set_key_pattern.search(lowered)
+        if set_key_match:
+            quoted_key = str(set_key_match.group(1) or "").strip().lower()
+            if quoted_key and quoted_key not in evidence_text:
+                continue
+
+        filtered.append(line)
+
+    return filtered
+
+
 def derive_mod_label_from_config_path(path: str) -> str:
     raw_path = str(path or "").replace("\\", "/").strip("/")
     if not raw_path:
@@ -2753,33 +2796,25 @@ def build_config_changes_prompt(diff_payload, max_items=12):
                 rendered.append("Use a generic summary only (example: 'Adjusted FancyMenu customizations').")
                 rendered.append("")
                 continue
-            previous_content = str(entry.get("previous_content", ""))
-            current_content = str(entry.get("current_content", ""))
-            if previous_content or current_content:
-                rendered.append("Previous file content (full):")
-                rendered.append("```")
-                rendered.append(previous_content if previous_content else "(empty)")
-                rendered.append("```")
-                rendered.append("Current file content (full):")
-                rendered.append("```")
-                rendered.append(current_content if current_content else "(empty)")
-                rendered.append("```")
+            removed_lines = list(entry.get("removed_lines", []))[:8]
+            added_lines = list(entry.get("added_lines", []))[:8]
+            rendered.append("Verified line deltas (source of truth):")
+            if removed_lines:
+                rendered.append("Removed lines:")
+                rendered.extend(
+                    f"- {_format_line_with_section_context(file_path, line, section_index_cache)}"
+                    for line in removed_lines
+                )
             else:
-                # Backward-compatible fallback when full snapshots are unavailable.
-                removed_lines = entry.get("removed_lines", [])[:8]
-                added_lines = entry.get("added_lines", [])[:8]
-                if removed_lines:
-                    rendered.append("Removed lines:")
-                    rendered.extend(
-                        f"- {_format_line_with_section_context(file_path, line, section_index_cache)}"
-                        for line in removed_lines
-                    )
-                if added_lines:
-                    rendered.append("Added lines:")
-                    rendered.extend(
-                        f"- {_format_line_with_section_context(file_path, line, section_index_cache)}"
-                        for line in added_lines
-                    )
+                rendered.append("Removed lines: none")
+            if added_lines:
+                rendered.append("Added lines:")
+                rendered.extend(
+                    f"- {_format_line_with_section_context(file_path, line, section_index_cache)}"
+                    for line in added_lines
+                )
+            else:
+                rendered.append("Added lines: none")
             rendered.append("")
         return "\n".join(rendered).strip()
 
@@ -2834,7 +2869,11 @@ def build_config_changes_prompt(diff_payload, max_items=12):
         "Output only bullet lines. Each line must start with '- '.\n"
         "Keep wording factual, short, and natural. No markdown headers and no counts.\n"
         "Use varied sentence openings; do not repeat the same lead-in phrase on every bullet.\n"
-        "Compare the full previous/current config file contents and infer the important value/option changes yourself.\n"
+        "Treat 'Verified line deltas' as the only source of truth.\n"
+        "Only describe facts directly supported by those deltas.\n"
+        "If a value appears in both old and new file state, treat it as unchanged and do not mention it.\n"
+        "Do not claim moves/removals/reorders/replacements unless that operation is explicitly shown in removed+added evidence or YOSBR move entries.\n"
+        "If a file says 'Removed lines: none', do not use moved/removed/reordered/replaced wording for that file.\n"
         "Summarize player-facing impact when clear.\n"
         "Files under 'yosbr/' are defaults applied only on first launch.\n"
         "Do not treat regular config -> yosbr moves as removals.\n"
@@ -2862,7 +2901,7 @@ def build_config_changes_prompt(diff_payload, max_items=12):
         f"{_render_path_to_label(modified_line_diffs, moved_to_yosbr)}\n\n"
         "Regular config files moved to yosbr:\n"
         f"{_render_yosbr_moves(moved_to_yosbr)}\n\n"
-        "Modified config file contents (previous/current):\n"
+        "Modified config evidence (verified line deltas):\n"
         f"{_render_line_changes(modified_line_diffs)}\n"
     )
 
@@ -3209,6 +3248,7 @@ def _generate_config_change_item_with_llm(item_payload, settings, max_lines: int
                 llm_bullets = _normalize_llm_text_to_bullets(llm_text, max_lines=max_lines)
                 llm_bullets = _normalize_yosbr_move_bullet_wording(llm_bullets, item_payload)
                 llm_bullets = _filter_unexpected_yosbr_move_bullets(llm_bullets, item_payload)
+                llm_bullets = _filter_unverified_config_operation_bullets(llm_bullets, item_payload)
                 llm_bullets = _normalize_redundant_config_context_tail(llm_bullets)
                 missing_labels = _get_missing_config_labels_from_bullets(llm_bullets, item_payload)
                 missing_moves = _get_missing_yosbr_moves_from_bullets(llm_bullets, item_payload)
