@@ -1721,11 +1721,14 @@ def migrate_minecraft_version(
     with open(packwiz_manifest, "w", encoding="utf8") as f:
         toml.dump(local_pack_toml, f)
 
+    print("[Migration] Running packwiz refresh...", flush=True)
     subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
     if update_all_mods:
         previous_snapshot = snapshot_mod_toml_content()
+        print("[Migration] Running packwiz update --all -y (this can take a while)...", flush=True)
         subprocess.call(f"{packwiz_exe_path} update --all -y", shell=True)
         enforce_release_channel_policy(previous_snapshot, log_prefix="[Migration]")
+        print("[Migration] Running packwiz refresh...", flush=True)
         subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
 
     disabled_mods = []
@@ -1747,6 +1750,7 @@ def migrate_minecraft_version(
         else:
             compatibility_loader = resolved_target_loader
         disabled_mods = disable_incompatible_mods(target_minecraft_version, compatibility_loader)
+        print("[Migration] Running packwiz refresh...", flush=True)
         subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
 
     print(
