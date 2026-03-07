@@ -4049,10 +4049,23 @@ def main():
                 pass
 
             # Move override folders into .minecraft
-            move_list = ["shaderpacks", "resourcepacks", "mods", "config"]
+            move_list = ["shaderpacks", "resourcepacks", "mods", "config", "resources"]
             for item in os.listdir(os.getcwd()):
                 if item in move_list:
                     move(item, mmc_dotminecraft_path)
+
+            # Keep legacy resources rooted at .minecraft/resources.
+            # If resources stays at mmc-cache root, mmc_export can flatten
+            # assets/minecraft/* into overrides/* (lang, textures, etc.).
+            cache_root_resources = os.path.join(mmc_cache_path, "resources")
+            dotminecraft_resources = os.path.join(mmc_dotminecraft_path, "resources")
+            if os.path.isdir(cache_root_resources):
+                if os.path.isdir(dotminecraft_resources):
+                    for entry in os.listdir(cache_root_resources):
+                        move(os.path.join(cache_root_resources, entry), dotminecraft_resources)
+                    rmtree(cache_root_resources)
+                else:
+                    move(cache_root_resources, mmc_dotminecraft_path)
 
             if move_disabled_mods:
                 os.chdir(disabled_mods_path)
