@@ -1860,9 +1860,6 @@ def ensure_changelog_yml(target_pack_version, target_minecraft_version, target_m
         if settings.changelog_template_use_overview_layout:
             legacy_fabric_line = f"Fabric version: {loader_version}\n" if normalized_loader == "fabric" else ""
             changelog_template = (
-                f"version: {target_pack_version}\n"
-                f"mc_version: {target_minecraft_version}\n"
-                "\n"
                 f"Mod loader: {loader_label}\n"
                 f"Mod loader version: {loader_version}\n"
                 + legacy_fabric_line
@@ -1873,7 +1870,6 @@ def ensure_changelog_yml(target_pack_version, target_minecraft_version, target_m
                 f.write(changelog_template)
         else:
             data = CommentedMap()
-            data["version"] = target_pack_version
             data["Mod loader"] = loader_label
             data["Mod loader version"] = loader_version
             if normalized_loader == "fabric":
@@ -3810,7 +3806,6 @@ def run_release_notes_generation(settings):
         print(f"No changelog found for {pack_version}, creating a template...")
 
         data = CommentedMap()
-        data["version"] = pack_version
         data["Mod loader"] = get_mod_loader_label(active_mod_loader)
         data["Mod loader version"] = mod_loader_version
         if normalize_mod_loader_name(active_mod_loader) == "fabric":
