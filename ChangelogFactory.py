@@ -676,8 +676,8 @@ class ChangelogFactory:
                     mdFile.new_paragraph(f"<a href='https://github.com/{repo_owner}/{repo_name}/blob/{repo_branch}/Changelogs/changelog_mods_{version}.md'><Badge type='tip' text='Mod Updates'/></a><Badge type='info' text='{loader_badge_text}'/>")
                 # mdFile.new_paragraph(f"*{date_only}* | *Fabric Loader {fabric_loader}* | *[Mod Updates](https://github.com/{repo_owner}/{repo_name}/blob/{repo_branch}/Changelogs/changelog_mods_{version}.md)*")
 
-                # (Breakneck) Check if it's the second last iteration and prints info box for comparison point.
-                if i == len(changelog_list) - 2 and self.settings.breakneck_fixes:
+                # Optional comparison notice for the first version of a new MC line.
+                if i == len(changelog_list) - 2 and getattr(self.settings, "changelog_include_compare_notice", False):
                     mdFile.new_paragraph(self.vitepress_container_maker("info", f"Changes are in comparison to version [{next_version}]({next_mc_version}.md#v{next_version})."))
                 
                 if "beta" in version or "alpha" in version:

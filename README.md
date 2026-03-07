@@ -34,13 +34,27 @@ At startup, the tool now shows an action menu so you can choose what to run for 
 
 `generate changelog summary only` only regenerates changelog text (`Update overview` and/or `Config Changes`) without exporting packs.
 
-## Breakneck specific stuff
+## Legacy comparison workflow
 
 When migrating to a new Minecraft version (*For example, going from 1.21.3 to 1.21.4*), make sure to leave only the last changelog in the repository from the previous version like seen below. 
 This is due to the program reading the files and thereby being able to recognize that it should compare the first new version to that old one.
-This feature is only active when enabling the `breakneck-fixes` option.
+This comparison-note behavior is controlled by `changelog_include_compare_notice`.
 
 ![1736264492349](image/README/1736264492349.png)
+
+### Modular compatibility settings
+
+The previous `breakneck_fixes` switch has been split into focused settings:
+
+- `client_export_use_mmc`: Use the MMC-based client export flow (CurseForge + Modrinth) instead of `packwiz cf export`.
+- `show_export_mode_notice`: Show a confirmation prompt when export actions are enabled.
+- `changelog_template_use_overview_layout`: Create new changelog files with `Update overview` + block-style `Config Changes` template.
+- `changelog_include_compare_notice`: Add the "comparison to previous version" info box in generated markdown changelog files.
+- `comparison_files_use_versioned_packwiz_root`: Enables version-ranged comparison download roots.
+- `comparison_files_versioned_root_pattern`: Root format when the version range matches (supports `{mc_version}` and `{version}`).
+- `comparison_files_versioned_root_min_version` / `comparison_files_versioned_root_max_version`: Inclusive version range for the custom comparison root.
+
+`breakneck_fixes` is still accepted as a legacy compatibility preset; when set to `true`, it auto-enables the modular flags above unless they are already defined.
 
 ## Automated Minecraft migration
 

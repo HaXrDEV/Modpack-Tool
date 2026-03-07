@@ -11,7 +11,13 @@ update_publish_workflow: True
 download_compare_files: True
 generate_primary_changelog: True
 generate_mods_changelog: True
+# Legacy compatibility preset. If True, missing modular flags below are auto-enabled.
 breakneck_fixes: False
+client_export_use_mmc: False
+show_export_mode_notice: False
+changelog_template_use_overview_layout: False
+changelog_include_compare_notice: False
+comparison_files_use_versioned_packwiz_root: False
 github_auth: False
 changelog_side_tag: True
 modlist_side_tag: True
@@ -36,6 +42,9 @@ auto_config_timeout_seconds: 45
 auto_config_temperature: 0.25
 auto_config_max_items: 12
 auto_config_max_lines: 8
+comparison_files_versioned_root_pattern: "Packwiz/{mc_version}" # Available placeholders: {mc_version}, {version}
+comparison_files_versioned_root_min_version: "4.0.0-beta.3"
+comparison_files_versioned_root_max_version: "4.4.0-beta.1"
 
 bh_banner: ""
 

@@ -573,6 +573,28 @@ def clear_mmc_cache(path):
                 pass
 
 
+def resolve_comparison_packwiz_root(input_version, tag_mc_ver):
+    if not settings.comparison_files_use_versioned_packwiz_root:
+        return "Packwiz"
+
+    min_version = str(settings.comparison_files_versioned_root_min_version or "").strip() or None
+    max_version = str(settings.comparison_files_versioned_root_max_version or "").strip() or None
+
+    try:
+        if not is_version_in_range(input_version, min_version, max_version):
+            return "Packwiz"
+    except ValueError as ex:
+        print(f"[Settings] Invalid comparison-files version range: {ex}. Falling back to default 'Packwiz' root.")
+        return "Packwiz"
+
+    pattern = str(settings.comparison_files_versioned_root_pattern or "").strip() or "Packwiz/{mc_version}"
+    try:
+        return pattern.format(version=input_version, mc_version=tag_mc_ver)
+    except KeyError as ex:
+        print(f"[Settings] Invalid comparison root pattern key {ex}. Falling back to 'Packwiz/{{mc_version}}'.")
+        return f"Packwiz/{tag_mc_ver}"
+
+
 def normalize_disabled_side(side_value):
     side_text = str(side_value).strip()
     if "disabled" in side_text:
@@ -1835,9 +1857,9 @@ def ensure_changelog_yml(target_pack_version, target_minecraft_version, target_m
     normalized_loader = normalize_mod_loader_name(target_mod_loader)
 
     if not os.path.isfile(changelog_path):
-        if settings.breakneck_fixes:
+        if settings.changelog_template_use_overview_layout:
             legacy_fabric_line = f"Fabric version: {loader_version}\n" if normalized_loader == "fabric" else ""
-            breakneck_template = (
+            changelog_template = (
                 f"version: {target_pack_version}\n"
                 f"mc_version: {target_minecraft_version}\n"
                 "\n"
@@ -1848,7 +1870,7 @@ def ensure_changelog_yml(target_pack_version, target_minecraft_version, target_m
                 + "Config Changes: |\n"
             )
             with open(changelog_path, "w", encoding="utf-8") as f:
-                f.write(breakneck_template)
+                f.write(changelog_template)
         else:
             data = CommentedMap()
             data["version"] = target_pack_version
@@ -3483,10 +3505,7 @@ def download_missing_comparison_files():
 
     async def download_compare_files_async(input_version, destination, tag_mc_ver):
         print(f"Downloading {input_version} comparison files.")
-        if settings.breakneck_fixes and is_version_in_range(input_version, "4.0.0-beta.3", "4.4.0-beta.1"):
-            packwiz_root = f"Packwiz/{tag_mc_ver}"
-        else:
-            packwiz_root = "Packwiz"
+        packwiz_root = resolve_comparison_packwiz_root(input_version, tag_mc_ver)
 
         local_downloader = AsyncGitHubDownloader(
             settings.repo_owner,
@@ -3588,7 +3607,13 @@ class Settings:
     download_comparison_files: bool = False
     generate_mods_changelog: bool = False
     generate_primary_changelog: bool = False
+    # Legacy preset alias. When true, missing modular options are auto-enabled.
     breakneck_fixes: bool = False
+    client_export_use_mmc: bool = False
+    show_export_mode_notice: bool = False
+    changelog_template_use_overview_layout: bool = False
+    changelog_include_compare_notice: bool = False
+    comparison_files_use_versioned_packwiz_root: bool = False
     github_auth: bool = False
     changelog_side_tag: bool = True
     changelog_updated_mods: bool = False
@@ -3627,6 +3652,9 @@ class Settings:
     auto_config_provider: str = "ollama"
     auto_config_model: str = "qwen3:4b-instruct"
     auto_config_endpoint: str = "http://127.0.0.1:11434/api/generate"
+    comparison_files_versioned_root_pattern: str = "Packwiz/{mc_version}"
+    comparison_files_versioned_root_min_version: str = "4.0.0-beta.3"
+    comparison_files_versioned_root_max_version: str = "4.4.0-beta.1"
 
     # List settings
     server_mods_remove_list: List[str] = None
@@ -3636,6 +3664,23 @@ class Settings:
     auto_config_temperature: float = 0.25
     auto_config_max_items: int = 20
     auto_config_max_lines: int = 18
+
+
+def apply_legacy_breakneck_settings(settings_dict: dict):
+    if not bool(settings_dict.get("breakneck_fixes", False)):
+        return settings_dict
+
+    legacy_defaults = {
+        "client_export_use_mmc": True,
+        "show_export_mode_notice": True,
+        "changelog_template_use_overview_layout": True,
+        "changelog_include_compare_notice": True,
+        "comparison_files_use_versioned_packwiz_root": True,
+    }
+    for key, value in legacy_defaults.items():
+        settings_dict.setdefault(key, value)
+    print("[Settings] 'breakneck_fixes' is deprecated. Applied equivalent modular settings for compatibility.")
+    return settings_dict
 
 
 def update_settings_from_dict(settings: Settings, settings_dict: dict):
@@ -3650,6 +3695,7 @@ def update_settings_from_dict(settings: Settings, settings_dict: dict):
 with open(settings_path, "r", encoding="utf-8") as s_file:
     settings_yml = yaml.load(s_file) or {}
 
+settings_yml = apply_legacy_breakneck_settings(settings_yml)
 settings = Settings()
 update_settings_from_dict(settings, settings_yml)
 
@@ -3864,8 +3910,8 @@ def main():
     special_menu_action_selected = has_special_menu_action_selected(settings)
 
     if not special_menu_action_selected:
-        if settings.breakneck_fixes and (settings.export_client or settings.export_server):
-            input("Using fixes for Breakneck. Press Enter to continue...")
+        if settings.show_export_mode_notice and (settings.export_client or settings.export_server):
+            input("Using modular export compatibility settings. Press Enter to continue...")
 
         if settings.migrate_minecraft_version:
             minecraft_version, active_mod_loader, mod_loader_version = migrate_minecraft_version(
@@ -3931,15 +3977,15 @@ def main():
         subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
 
         client_zip_name = f'{modpack_name}-{pack_version}.zip'
-        if settings.export_client and not settings.breakneck_fixes:
+        if settings.export_client and not settings.client_export_use_mmc:
             subprocess.call(f"{packwiz_exe_path} cf export", shell=True)
             move(client_zip_name, os.path.join(export_path, client_zip_name))
             print("[PackWiz] Client exported.")
 
         #----------------------------------------
-        # Export client pack. (CurseForge & Modrinth with MMC) — Breakneck only
+        # Export client pack. (CurseForge & Modrinth with MMC)
         #----------------------------------------
-        if settings.export_client and settings.breakneck_fixes:
+        if settings.export_client and settings.client_export_use_mmc:
 
             bootstrap_nogui = False
             mmc_cache_path = os.path.join(packwiz_path, "mmc-cache")
