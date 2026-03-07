@@ -11,6 +11,7 @@ import MarkdownHelper as markdown
 from packaging import version as version_helper
 import requests
 from datetime import datetime
+from urllib.parse import quote
 
 class ChangelogFactory:
     def __init__(self, changelog_dir, modpack_name, modpack_version, settings, yaml_instance):
@@ -19,6 +20,7 @@ class ChangelogFactory:
         self.modpack_version = modpack_version
         self.settings = settings
         self.yaml = yaml_instance
+        self._missing_key_warnings = set()
         
     def get_changelog_value(self, changelog_yml, key):
         if changelog_yml and changelog_yml.endswith(('.yml', '.yaml')):
@@ -30,7 +32,10 @@ class ChangelogFactory:
             except YAMLError as e:
                 print(f"Error parsing {file_path}: {e}")
             except KeyError:
-                print(f"Key '{key}' not found in {file_path}")
+                warning_key = (file_path, str(key))
+                if warning_key not in self._missing_key_warnings:
+                    self._missing_key_warnings.add(warning_key)
+                    print(f"Key '{key}' not found in {file_path}")
             except OSError as e:
                 print(f"Error reading {file_path}: {e}")
 
@@ -137,40 +142,84 @@ class ChangelogFactory:
 
         return results
 
-    def get_previous_version_for_mc(self, target_version, mc_version):
+    def _extract_version_and_mc_from_filename(self, changelog_filename):
+        base_name = os.path.splitext(os.path.basename(str(changelog_filename or "")))[0]
+        version_part, has_sep, mc_part = base_name.partition("+")
+        version_part = str(version_part or "").strip()
+        mc_part = str(mc_part or "").strip()
+        if not has_sep or not version_part or not mc_part:
+            return None, None
+        return version_part, mc_part
+
+    def parse_changelog_filename(self, changelog_filename):
+        return self._extract_version_and_mc_from_filename(changelog_filename)
+
+    def _resolve_compare_version_path(self, tempgit_path, version, mc_version):
+        combined_path = os.path.join(tempgit_path, f"{version}+{mc_version}")
+        legacy_path = os.path.join(tempgit_path, str(version))
+        if os.path.isdir(combined_path):
+            return combined_path
+        return legacy_path
+
+    def get_previous_version_for_mc(self, target_version, mc_version, migration_mode=False):
         version_candidates = []
         for changelog in os.listdir(self.changelog_dir):
             if not changelog.endswith((".yml", ".yaml")):
                 continue
-            try:
-                if str(self.get_changelog_value(changelog, "mc_version")) != str(mc_version):
-                    continue
-                current_version = str(self.get_changelog_value(changelog, "version"))
-                version_candidates.append(current_version)
-            except Exception:
+            current_version, changelog_mc_version = self._extract_version_and_mc_from_filename(changelog)
+            if not current_version or not changelog_mc_version:
                 continue
+            version_candidates.append((str(current_version), str(changelog_mc_version)))
 
         if not version_candidates:
-            return None
+            return None, None
 
         sorted_versions = sorted(
             version_candidates,
-            key=lambda x: version_helper.parse(self.normalize_version(str(x))),
+            key=lambda x: (
+                version_helper.parse(self.normalize_version(str(x[0]))),
+                version_helper.parse(str(x[1])),
+            ),
             reverse=True,
         )
-        target_parsed = version_helper.parse(self.normalize_version(str(target_version)))
-        for candidate in sorted_versions:
-            candidate_parsed = version_helper.parse(self.normalize_version(candidate))
-            if candidate_parsed < target_parsed:
-                return candidate
-        return None
+        target_parsed = (
+            version_helper.parse(self.normalize_version(str(target_version))),
+            version_helper.parse(str(mc_version)),
+        )
 
-    def get_current_pack_diff_payload(self, target_version, mc_version, tempgit_path, packwiz_path):
-        previous_version = self.get_previous_version_for_mc(target_version, mc_version)
+        if migration_mode:
+            for candidate_version, candidate_mc in sorted_versions:
+                candidate_parsed = (
+                    version_helper.parse(self.normalize_version(str(candidate_version))),
+                    version_helper.parse(str(candidate_mc)),
+                )
+                if candidate_parsed < target_parsed:
+                    return candidate_version, candidate_mc
+            return None, None
+
+        target_mc_text = str(mc_version)
+        for candidate_version, candidate_mc in sorted_versions:
+            if str(candidate_mc) != target_mc_text:
+                continue
+            candidate_parsed = version_helper.parse(self.normalize_version(str(candidate_version)))
+            if candidate_parsed < target_parsed[0]:
+                return candidate_version, candidate_mc
+        return None, None
+
+    def get_current_pack_diff_payload(self, target_version, mc_version, tempgit_path, packwiz_path, migration_mode=False):
+        previous_version, previous_mc_version = self.get_previous_version_for_mc(
+            target_version,
+            mc_version,
+            migration_mode=bool(migration_mode),
+        )
         if not previous_version:
             return None
 
-        previous_version_path = os.path.join(tempgit_path, str(previous_version))
+        previous_version_path = self._resolve_compare_version_path(
+            tempgit_path,
+            previous_version,
+            previous_mc_version or mc_version,
+        )
         previous_mods_path = os.path.join(previous_version_path, "mods")
         previous_resourcepacks_path = os.path.join(previous_version_path, "resourcepacks")
         previous_shaderpacks_path = os.path.join(previous_version_path, "shaderpacks")
@@ -204,6 +253,7 @@ class ChangelogFactory:
 
         return {
             "previous_version": previous_version,
+            "previous_mc_version": previous_mc_version,
             "current_version": str(target_version),
             "mc_version": str(mc_version),
             "mod_differences": mod_differences,
@@ -492,14 +542,31 @@ class ChangelogFactory:
         Returns:
             list: A list of version data in JSON format, or None if an error occurs.
         """
-        try:
-            api_url = f"https://api.modrinth.com/v2/project/{modpack_slug}/version"
-            response = requests.get(api_url)
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.RequestException as e:
-            print(f"Error fetching data from API: {e}")
+        raw_value = str(modpack_slug or "").strip()
+        if not raw_value:
             return None
+
+        candidates = [raw_value]
+        slug_candidate = re.sub(r"[^a-z0-9]+", "-", raw_value.lower()).strip("-")
+        if slug_candidate and slug_candidate not in candidates:
+            candidates.append(slug_candidate)
+
+        last_error = None
+        for candidate in candidates:
+            try:
+                encoded_candidate = quote(candidate, safe="")
+                api_url = f"https://api.modrinth.com/v2/project/{encoded_candidate}/version"
+                response = requests.get(api_url, timeout=20)
+                if response.status_code == 404:
+                    continue
+                response.raise_for_status()
+                return response.json()
+            except requests.exceptions.RequestException as e:
+                last_error = e
+
+        if last_error:
+            print(f"Error fetching data from API: {last_error}")
+        return None
 
 
     def extract_modrinth_version_info(self, versions, version_number=None):
@@ -546,22 +613,26 @@ class ChangelogFactory:
         changelog_files = os.listdir(self.changelog_dir)
         modrinth_versions = self.fetch_modrinth_versions(self.modpack_name)
         
-        # Create a list of (filename, version) tuples for sorting
+        # Create a list of (filename, version, mc_version) tuples from filenames.
         version_file_pairs = []
         for changelog in changelog_files:
             if changelog.endswith(('.yml', '.yaml')):
-                ver = self.get_changelog_value(changelog, 'version')
-                version_file_pairs.append((changelog, str(ver)))
+                ver, mc_ver = self._extract_version_and_mc_from_filename(changelog)
+                if not ver or not mc_ver:
+                    continue
+                version_file_pairs.append((changelog, str(ver), str(mc_ver)))
         
-        # Sort based on version numbers, handling letter suffixes
+        # Sort by modpack version first, then MC version.
         sorted_pairs = sorted(
             version_file_pairs,
-            key=lambda x: version_helper.parse(self.normalize_version(x[1])),
+            key=lambda x: (
+                version_helper.parse(self.normalize_version(x[1])),
+                version_helper.parse(str(x[2])),
+            ),
             reverse=True
         )
         
-        # Convert back to just filenames, maintaining the correct order
-        changelog_list = [pair[0] for pair in sorted_pairs]
+        changelog_list = list(sorted_pairs)
 
 
 
@@ -574,7 +645,8 @@ class ChangelogFactory:
         else:
             mdFile.new_paragraph(f"# Changelog")
 
-        for i, changelog in enumerate(changelog_list):
+        for i, changelog_entry in enumerate(changelog_list):
+            changelog, version, changelog_mc_version = changelog_entry
             # Check if there's a "next" item
             if i + 1 < len(changelog_list):
                 next_changelog = changelog_list[i + 1]
@@ -591,11 +663,9 @@ class ChangelogFactory:
             next_version = None
             next_mc_version = None
 
-            if changelog.endswith(('.yml', '.yaml')) and mc_version == self.get_changelog_value(changelog, 'mc_version'): # Only takes yaml files and those with the correct mc version.
-                version = self.get_changelog_value(changelog, "version")
+            if changelog.endswith(('.yml', '.yaml')) and (not mc_version or str(mc_version) == str(changelog_mc_version)):
                 if next_changelog:
-                    next_version = self.get_changelog_value(next_changelog, "version")
-                    next_mc_version = self.get_changelog_value(next_changelog, "mc_version")
+                    _, next_version, next_mc_version = next_changelog
 
                 legacy_fabric_loader = self.get_changelog_value(changelog, "Fabric version")
                 mod_loader_name = self.get_changelog_value(changelog, "Mod loader")
@@ -611,7 +681,11 @@ class ChangelogFactory:
                 config_changes = self.get_changelog_value(changelog, "Config Changes")
                 script_changes = self.get_changelog_value(changelog, "Script/Datapack changes")
 
-                version_path = os.path.join(tempgit_path, str(version))
+                version_path = self._resolve_compare_version_path(
+                    tempgit_path,
+                    version,
+                    changelog_mc_version,
+                )
                 version_mods_path = os.path.join(version_path, "mods")
                 version_resourcepacks_path = os.path.join(version_path, "resourcepacks")
 
@@ -619,7 +693,11 @@ class ChangelogFactory:
                 packwiz_resourcepacks_path = os.path.join(packwiz_path, "resourcepacks")
 
                 if next_version:
-                    next_version_path = os.path.join(tempgit_path, str(next_version))
+                    next_version_path = self._resolve_compare_version_path(
+                        tempgit_path,
+                        next_version,
+                        next_mc_version,
+                    )
                     next_version_mods_path = os.path.join(next_version_path, "mods")
                     next_version_resourcepacks_path = os.path.join(next_version_path, "resourcepacks")
                     print(f"[DEBUG] {next_version_path} + {version_path}")
@@ -676,8 +754,13 @@ class ChangelogFactory:
                     mdFile.new_paragraph(f"<a href='https://github.com/{repo_owner}/{repo_name}/blob/{repo_branch}/Changelogs/changelog_mods_{version}.md'><Badge type='tip' text='Mod Updates'/></a><Badge type='info' text='{loader_badge_text}'/>")
                 # mdFile.new_paragraph(f"*{date_only}* | *Fabric Loader {fabric_loader}* | *[Mod Updates](https://github.com/{repo_owner}/{repo_name}/blob/{repo_branch}/Changelogs/changelog_mods_{version}.md)*")
 
-                # Optional comparison notice for the first version of a new MC line.
-                if i == len(changelog_list) - 2 and getattr(self.settings, "changelog_include_compare_notice", False):
+                # Show comparison note when crossing to a previous MC line.
+                if (
+                    next_version
+                    and next_mc_version
+                    and str(next_mc_version) != str(changelog_mc_version)
+                    and getattr(self.settings, "changelog_include_compare_notice", False)
+                ):
                     mdFile.new_paragraph(self.vitepress_container_maker("info", f"Changes are in comparison to version [{next_version}]({next_mc_version}.md#v{next_version})."))
                 
                 if "beta" in version or "alpha" in version:

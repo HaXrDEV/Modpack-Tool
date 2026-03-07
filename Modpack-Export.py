@@ -3525,16 +3525,19 @@ def download_missing_comparison_files():
 
     for changelog in reversed(os.listdir(changelog_dir_path)):
         if changelog.endswith((".yml", ".yaml")):
-            version = str(changelog_factory.get_changelog_value(changelog, "version"))
-            tag_mc_ver = str(changelog_factory.get_changelog_value(changelog, "mc_version"))
-            version_path = os.path.join(tempgit_path, version)
+            version, tag_mc_ver = changelog_factory.parse_changelog_filename(changelog)
+            if not version or not tag_mc_ver:
+                print(f"[Changelog] Skipping invalid changelog filename format: {changelog}")
+                continue
+            version_path = os.path.join(tempgit_path, f"{version}+{tag_mc_ver}")
             missing_compare_data = (
                 not os.path.isdir(os.path.join(version_path, "mods"))
                 or not os.path.isdir(os.path.join(version_path, "resourcepacks"))
                 or not os.path.isdir(os.path.join(version_path, "shaderpacks"))
                 or not os.path.isdir(os.path.join(version_path, "config"))
             )
-            if version != pack_version and (not os.path.exists(version_path) or missing_compare_data):
+            is_current_release = str(version) == str(pack_version) and str(tag_mc_ver) == str(minecraft_version)
+            if not is_current_release and (not os.path.exists(version_path) or missing_compare_data):
                 os.makedirs(version_path, exist_ok=True)
                 try:
                     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
@@ -3554,6 +3557,7 @@ def run_changelog_auto_generation():
         mc_version=minecraft_version,
         tempgit_path=tempgit_path,
         packwiz_path=packwiz_path,
+        migration_mode=bool(settings.migrate_minecraft_version),
     )
     if settings.auto_generate_update_overview or settings.generate_update_summary_only:
         maybe_generate_update_overview(changelog_path, diff_payload)
@@ -3574,7 +3578,7 @@ def clear_stored_repository_data():
 
 os.chdir(packwiz_path)
 
-with open(packwiz_manifest, "r") as f:
+with open(packwiz_manifest, "r", encoding="utf-8") as f:
     pack_toml = toml.load(f)
 pack_version = pack_toml["version"]
 modpack_name = pack_toml["name"]
@@ -3879,13 +3883,13 @@ def update_publish_workflow(settings):
 def update_bcc_versions(settings):
     if settings.export_client:
         os.chdir(packwiz_path)
-        with open(bcc_client_config_path, "r") as f:
+        with open(bcc_client_config_path, "r", encoding="utf-8") as f:
             bcc_json = json.load(f)
         bcc_json["modpackVersion"] = pack_version
         with open(bcc_client_config_path, "w") as f:
             json.dump(bcc_json, f)
     if settings.export_server:
-        with open(bcc_server_config_path, "r") as f:
+        with open(bcc_server_config_path, "r", encoding="utf-8") as f:
             bcc_json = json.load(f)
         bcc_json["modpackVersion"] = pack_version
         with open(bcc_server_config_path, "w") as f:
@@ -4012,12 +4016,12 @@ def main():
                     if not item.endswith(".toml"):
                         continue
                     try:
-                        with open(item, "r") as f:
+                        with open(item, "r", encoding="utf-8") as f:
                             mod_toml = toml.load(f)
                         if "disabled" in str(mod_toml.get("side", "")).lower():
                             move(item, disabled_mods_path)
-                    except OSError as e:
-                        print(f"move_disabled_mods: {e}")
+                    except (OSError, UnicodeDecodeError, toml.TomlDecodeError) as e:
+                        print(f"move_disabled_mods: Failed to read '{item}': {e}")
                 os.chdir(packwiz_path)
                 subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
 
