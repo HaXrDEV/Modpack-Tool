@@ -3,6 +3,7 @@ packwiz
 prev_release
 tempgit
 gh-token.txt
+.claude
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

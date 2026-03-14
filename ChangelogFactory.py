@@ -519,11 +519,6 @@ class ChangelogFactory:
 
 
 
-    def Reverse(self, lst):
-        new_lst = lst[::-1]
-        return new_lst
-
-
     def vitepress_container_maker(self, type: str, content: str):
         """https://vitepress.dev/guide/markdown#custom-containers"""
         return(
