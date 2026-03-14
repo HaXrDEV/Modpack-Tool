@@ -7,13 +7,19 @@ from ruamel.yaml.error import YAMLError
 from mdutils.mdutils import MdUtils
 import re
 import toml
-import MarkdownHelper as markdown
+import markdown_helper as markdown
 from packaging import version as version_helper
 import requests
 from datetime import datetime
 from urllib.parse import quote
 
 class ChangelogFactory:
+    """Generates and compares modpack changelogs from YAML changelog files and packwiz TOML data.
+
+    Handles version resolution, mod/config diffing, Modrinth API queries, and
+    Markdown/VitePress output for a single modpack project.
+    """
+
     def __init__(self, changelog_dir, modpack_name, modpack_version, settings, yaml_instance):
         self.changelog_dir = changelog_dir
         self.modpack_name = modpack_name
@@ -23,6 +29,17 @@ class ChangelogFactory:
         self._missing_key_warnings = set()
         
     def get_changelog_value(self, changelog_yml, key):
+        """Read a single key from a YAML changelog file, with deduplicated warnings.
+
+        Args:
+            changelog_yml (str): Filename (not full path) of the changelog YAML inside
+                ``self.changelog_dir``.
+            key: The top-level key to retrieve from the parsed YAML mapping.
+
+        Returns:
+            The value associated with ``key``, or ``None`` if the file cannot be
+            read, parsed, or does not contain the key.
+        """
         if changelog_yml and changelog_yml.endswith(('.yml', '.yaml')):
             file_path = os.path.join(self.changelog_dir, changelog_yml)
             try:
@@ -42,6 +59,21 @@ class ChangelogFactory:
 
 
     def compare_toml_files(self, dir1, dir2):
+        """Diff two directories of packwiz mod TOML files and return added/removed/modified entries.
+
+        Mods whose display name appears in both the added and removed sets are
+        treated as renames and excluded from both lists to reduce noise.
+
+        Args:
+            dir1 (str): Path to the older (previous) mods directory.
+            dir2 (str): Path to the newer (current) mods directory.
+
+        Returns:
+            dict: Keys ``'added'``, ``'removed'``, and ``'modified'``.
+                  ``'added'`` and ``'removed'`` are lists of display-name strings.
+                  ``'modified'`` is a list of ``(name, before, after)`` tuples where
+                  *before* and *after* describe the filename or hash that changed.
+        """
         # Initialize dictionaries to store TOML data
         toml_data_1 = {}
         toml_data_2 = {}
@@ -152,6 +184,12 @@ class ChangelogFactory:
         return version_part, mc_part
 
     def parse_changelog_filename(self, changelog_filename):
+        """Return ``(version, mc_version)`` parsed from a changelog filename.
+
+        Delegates to ``_extract_version_and_mc_from_filename``.  Expected
+        filename format: ``<version>+<mc_version>.yml``.  Returns
+        ``(None, None)`` when the format does not match.
+        """
         return self._extract_version_and_mc_from_filename(changelog_filename)
 
     def _resolve_compare_version_path(self, tempgit_path, version, mc_version):
@@ -162,6 +200,23 @@ class ChangelogFactory:
         return legacy_path
 
     def get_previous_version_for_mc(self, target_version, mc_version, migration_mode=False):
+        """Find the most recent changelog version that precedes ``target_version``.
+
+        In normal mode only candidates sharing the same MC version are
+        considered.  In migration mode the MC version constraint is lifted so
+        the diff can span a Minecraft version upgrade.
+
+        Args:
+            target_version (str): The modpack version to search below.
+            mc_version (str): The Minecraft version to match (ignored in
+                migration mode).
+            migration_mode (bool): When ``True``, return the highest version
+                strictly below ``target_version`` regardless of MC version.
+
+        Returns:
+            tuple[str, str] | tuple[None, None]: ``(version, mc_version)`` of
+            the best candidate, or ``(None, None)`` if none exists.
+        """
         version_candidates = []
         for changelog in os.listdir(self.changelog_dir):
             if not changelog.endswith((".yml", ".yaml")):
@@ -207,6 +262,25 @@ class ChangelogFactory:
         return None, None
 
     def get_current_pack_diff_payload(self, target_version, mc_version, tempgit_path, packwiz_path, migration_mode=False):
+        """Build a full diff payload comparing the previous pack snapshot to the current working tree.
+
+        Args:
+            target_version (str): The modpack version being released.
+            mc_version (str): The Minecraft version for this release.
+            tempgit_path (str): Root of the git-history snapshot directory,
+                containing per-version subdirectories.
+            packwiz_path (str): Root of the live packwiz project (current state).
+            migration_mode (bool): Passed through to ``get_previous_version_for_mc``
+                to allow cross-MC-version comparisons.
+
+        Returns:
+            dict | None: Mapping with keys ``previous_version``,
+            ``previous_mc_version``, ``current_version``, ``mc_version``,
+            ``mod_differences``, ``resourcepack_differences``,
+            ``shaderpack_differences``, ``mod_addition_breakdown``, and
+            ``config_differences``.  Returns ``None`` when no previous version
+            can be found or the previous snapshot is missing required directories.
+        """
         previous_version, previous_mc_version = self.get_previous_version_for_mc(
             target_version,
             mc_version,
@@ -264,6 +338,29 @@ class ChangelogFactory:
         }
 
     def compare_directory_files(self, previous_dir, current_dir):
+        """Recursively diff two config directories and return file-level change details.
+
+        Computes SHA-256 hashes to detect changes, collects line-level diffs for
+        text-based formats, and identifies files that were relocated into a YOSBR
+        overlay subtree.
+
+        Args:
+            previous_dir (str): Path to the older config directory snapshot.
+            current_dir (str): Path to the newer config directory.
+
+        Returns:
+            dict: Keys:
+                ``'added'`` — list of relative paths that are new.
+                ``'removed'`` — list of relative paths that were deleted (excluding
+                    those accounted for by a YOSBR move).
+                ``'modified'`` — list of relative paths whose content changed
+                    (including YOSBR-moved files whose content also changed).
+                ``'modified_line_diffs'`` — list of dicts, each with ``'path'``,
+                    ``'removed_lines'``, ``'added_lines'``, ``'previous_content'``,
+                    and ``'current_content'`` for text-diffable files.
+                ``'moved_to_yosbr'`` — list of dicts with ``'from'``, ``'to'``,
+                    and ``'content_changed'`` for files relocated under ``yosbr/``.
+        """
         line_diff_extensions = {
             ".json",
             ".json5",
@@ -364,6 +461,14 @@ class ChangelogFactory:
             key=lambda x: x.lower(),
         )
 
+        # YOSBR (You Shall Not Break Recipes) is a Minecraft mod that lets pack authors
+        # ship default configs inside a special "yosbr/" overlay directory so that those
+        # defaults are only applied on first run and are never overwritten again.  When a
+        # pack migrates a config file from its plain location (e.g. "config/mod.toml") into
+        # the YOSBR overlay (e.g. "yosbr/config/mod.toml") the naive diff reports the
+        # original path as removed and the new overlay path as added — even though it is
+        # really just a structural reorganisation.  The block below detects these pairs and
+        # records them as "moved_to_yosbr" instead, keeping the removed/added lists clean.
         moved_to_yosbr = []
         if added and removed:
             added_lookup = {str(path).lower(): path for path in added}
@@ -372,10 +477,14 @@ class ChangelogFactory:
 
             for removed_path in removed:
                 normalized_removed = str(removed_path).replace("\\", "/").strip("/")
+                # If the removed path is itself already inside yosbr/, it was not
+                # moved out — skip it so it stays in the removed list as-is.
                 if _is_yosbr_path(normalized_removed):
                     filtered_removed.append(removed_path)
                     continue
 
+                # Try both "yosbr/<path>" and "yosbr/config/<path>" because packs
+                # sometimes nest files one level deeper inside the overlay.
                 candidate_counterparts = [
                     f"yosbr/{normalized_removed}",
                     f"yosbr/config/{normalized_removed}",
@@ -465,6 +574,20 @@ class ChangelogFactory:
         return state
 
     def get_mod_addition_breakdown(self, previous_mods_path, current_mods_path):
+        """Classify newly appearing enabled mods as brand-new additions or re-enablements.
+
+        A mod counts as "reenabled" when its TOML file existed in the previous
+        snapshot but was disabled (side contained "disabled") and is now enabled.
+        All other newly enabled mods are treated as "newly added".
+
+        Args:
+            previous_mods_path (str): Path to the previous snapshot's mods directory.
+            current_mods_path (str): Path to the current mods directory.
+
+        Returns:
+            dict: ``{'newly_added': [...], 'reenabled_from_disabled': [...]}`` —
+            both values are sorted, deduplicated lists of display-name strings.
+        """
         previous_state = self._load_toml_state(previous_mods_path)
         current_state = self._load_toml_state(current_mods_path)
 
@@ -603,6 +726,24 @@ class ChangelogFactory:
         }
 
     def build_markdown_changelog(self, repo_owner, repo_name, tempgit_path, packwiz_path, file_name="CHANGELOG", repo_branch="main", mc_version=None):
+        """Generate a full Markdown changelog file from all YAML changelog entries.
+
+        Iterates over every changelog YAML in ``self.changelog_dir``, sorted
+        newest-first, diffs consecutive pack snapshots from ``tempgit_path``,
+        annotates each section with Modrinth publish dates and VitePress badges,
+        and writes a per-version mod-update sidecar Markdown file under
+        ``Changelogs/``.
+
+        Args:
+            repo_owner (str): GitHub repository owner used to build badge/link URLs.
+            repo_name (str): GitHub repository name.
+            tempgit_path (str): Root directory of the git-history pack snapshots.
+            packwiz_path (str): Root of the live packwiz project (current state).
+            file_name (str): Output filename for the Markdown file (no extension).
+            repo_branch (str): Branch name used in GitHub URLs.
+            mc_version (str | None): When set, only changelog entries matching
+                this Minecraft version are included.
+        """
         mdFile = MdUtils(file_name)
 
         changelog_files = os.listdir(self.changelog_dir)
@@ -618,11 +759,17 @@ class ChangelogFactory:
                 version_file_pairs.append((changelog, str(ver), str(mc_ver)))
         
         # Sort by modpack version first, then MC version.
+        # The key is a 2-tuple so that when two entries share the same modpack
+        # version (e.g. a build released for multiple MC lines), the one with the
+        # higher MC version sorts first.  normalize_version() is called on the
+        # modpack version to handle letter suffixes (e.g. "4.1.1a" → "4.1.1.post1")
+        # so that post-release letters rank above the bare version; MC versions are
+        # standard PEP-440 strings and need no normalisation.
         sorted_pairs = sorted(
             version_file_pairs,
             key=lambda x: (
-                version_helper.parse(self.normalize_version(x[1])),
-                version_helper.parse(str(x[2])),
+                version_helper.parse(self.normalize_version(x[1])),  # modpack version (index 1)
+                version_helper.parse(str(x[2])),                     # MC version fallback (index 2)
             ),
             reverse=True
         )
@@ -789,7 +936,7 @@ class ChangelogFactory:
                     mdFile.new_paragraph(markdown.markdown_list_maker([item[0] for item in modified_mods]))
                 
                 # Modified resource packs section
-                if resourcepack_differences and resourcepack_differences.get('modified') and self.settings.changelog_updated_resoucepacks:
+                if resourcepack_differences and resourcepack_differences.get('modified') and self.settings.changelog_updated_resourcepacks:
                     mdFile.new_paragraph("### Updated Resource Packs 🔃")
                     mdFile.new_paragraph(markdown.markdown_list_maker([item[0] for item in modified_resourcepacks]))
 

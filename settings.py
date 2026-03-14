@@ -7,6 +7,13 @@ from typing import List, Optional
 
 @dataclass
 class Settings:
+    """Runtime configuration for the Modpack CLI Tool.
+
+    All fields map directly to YAML keys in the settings file and are populated
+    by `load_settings`. Boolean flags default to ``False`` unless a safe-on
+    default is noted inline. String fields default to ``""`` and list fields
+    default to ``None`` (treated as empty by callers).
+    """
     # Boolean flags
     update_crash_assistant_modlist: bool = False
     export_client: bool = False
@@ -30,7 +37,7 @@ class Settings:
     github_auth: bool = False
     changelog_side_tag: bool = True
     changelog_updated_mods: bool = False
-    changelog_updated_resoucepacks: bool = False
+    changelog_updated_resourcepacks: bool = False
     modlist_side_tag: bool = True
     update_mods_only: bool = False
     bump_version_only: bool = False
@@ -80,6 +87,18 @@ class Settings:
 
 
 def apply_legacy_breakneck_settings(settings_dict: dict):
+    """Expand the deprecated ``breakneck_fixes`` preset into its modular equivalents.
+
+    If ``breakneck_fixes`` is falsy the dict is returned unchanged. Otherwise,
+    each modular option that the preset implies is inserted via ``setdefault`` so
+    that explicit values in the file are never overwritten.
+
+    Args:
+        settings_dict: Raw key/value pairs loaded from the settings YAML file.
+
+    Returns:
+        The same ``settings_dict`` with any missing modular keys filled in.
+    """
     if not bool(settings_dict.get("breakneck_fixes", False)):
         return settings_dict
 
@@ -97,6 +116,14 @@ def apply_legacy_breakneck_settings(settings_dict: dict):
 
 
 def update_settings_from_dict(settings: Settings, settings_dict: dict):
+    """Apply key/value pairs from a dict onto a ``Settings`` instance in place.
+
+    Unknown keys are skipped with a printed warning rather than raising an error.
+
+    Args:
+        settings: The ``Settings`` object to mutate.
+        settings_dict: Mapping of attribute names to their desired values.
+    """
     for key, value in settings_dict.items():
         if hasattr(settings, key):
             setattr(settings, key, value)
@@ -105,6 +132,19 @@ def update_settings_from_dict(settings: Settings, settings_dict: dict):
 
 
 def load_settings(settings_path: str, yaml_instance) -> "Settings":
+    """Parse a YAML settings file and return a populated ``Settings`` object.
+
+    Handles legacy ``breakneck_fixes`` expansion before mapping values onto the
+    dataclass. Missing keys retain their dataclass defaults.
+
+    Args:
+        settings_path: Absolute or relative path to the settings YAML file.
+        yaml_instance: A ``ruamel.yaml.YAML`` (or compatible) instance used to
+            parse the file.
+
+    Returns:
+        A fully initialised ``Settings`` instance.
+    """
     with open(settings_path, "r", encoding="utf-8") as s_file:
         settings_yml = yaml_instance.load(s_file) or {}
     settings_yml = apply_legacy_breakneck_settings(settings_yml)

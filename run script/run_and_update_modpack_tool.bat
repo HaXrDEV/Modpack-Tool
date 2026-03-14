@@ -221,8 +221,8 @@ if "%UPDATE_DEPS%"=="1" (
 :: ----------------------------------------
 :: Run the main script
 :: ----------------------------------------
-echo Running Modpack-Export.py...
-"%VENV_PYTHON%" "%REPO_ABS%\Modpack-Export.py"
+echo Running modpack_export.py...
+"%VENV_PYTHON%" "%REPO_ABS%\modpack_export.py"
 if %errorlevel% neq 0 (
     echo Python script failed. Exiting...
     popd >nul

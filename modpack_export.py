@@ -5,8 +5,8 @@ launch_message = """
 █                           █
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀"""
 
-import os, sys
-import os.path
+import os
+import sys
 import json
 import re
 import subprocess
@@ -82,14 +82,14 @@ from changelog_helpers import (
 )
 
 # GitHub Download
-from GitHubDownloader import AsyncGitHubDownloader
+from github_downloader import AsyncGitHubDownloader
 import asyncio
 
 # Changelog stuff
-from ChangelogFactory import ChangelogFactory
+from changelog_factory import ChangelogFactory
 
 # Markdown Stuff
-import MarkdownHelper as markdown
+import markdown_helper as markdown
 
 # Semver stuff
 from packaging.version import Version, InvalidVersion
@@ -149,6 +149,11 @@ def normalize_drag_drop_path(raw_path: str) -> str:
 
 
 def ensure_migration_targets(settings):
+    """Prompt for any missing migration targets and validate them against supported loaders.
+
+    Args:
+        settings: The loaded Settings object; target fields are populated in-place.
+    """
     if not settings.migration_target_minecraft:
         settings.migration_target_minecraft = input("Target Minecraft version for migration: ").strip()
     if not settings.migration_target_minecraft:
@@ -220,6 +225,7 @@ def ensure_migration_targets(settings):
 
 
 def get_config_changes_mode_label(settings) -> str:
+    """Return a human-readable label describing the active config-changes generation mode."""
     if uses_llm_config_changes(settings):
         model = str(settings.auto_config_model).strip() or "default-model"
         return f"LLM ({model})"
@@ -228,6 +234,11 @@ def get_config_changes_mode_label(settings) -> str:
 
 
 def configure_actions_via_menu(settings):
+    """Display the interactive action menu and apply the chosen workflow to settings.
+
+    Returns:
+        False if the user selects exit (choice 0), True otherwise.
+    """
     def prompt_changelog_autogen_overwrite(force_prompt=False):
         should_prompt_overview = force_prompt or settings.auto_generate_update_overview or settings.generate_update_summary_only
         if should_prompt_overview:
@@ -407,6 +418,15 @@ def parse_filenames_as_json(input_path):
 
 
 def build_combined_modlist_markdown(input_path, include_side_tags=True):
+    """Build a Markdown document listing active and inactive mods from pw.toml files.
+
+    Args:
+        input_path: Directory containing the mod .toml files.
+        include_side_tags: When True, appends a [Both/Client/Server] tag to each name.
+
+    Returns:
+        A Markdown string with ## Active Mods and ## Inactive Mods sections.
+    """
     active_mods = []
     inactive_mods = []
 
@@ -451,6 +471,7 @@ def build_combined_modlist_markdown(input_path, include_side_tags=True):
 
 
 def list_disabled_mods():
+    """Print all disabled mods to stdout and return them as a list of (name, filename, side) tuples."""
     disabled_mods = []
     os.chdir(mods_path)
     for item in sorted(os.listdir()):
@@ -476,6 +497,11 @@ def list_disabled_mods():
 
 
 def add_mod_via_prompt():
+    """Interactively prompt for a mod source and identifier, then add it via packwiz.
+
+    Returns:
+        True if the mod was added successfully, False otherwise.
+    """
     print("[PackWiz] Add mod")
     source_input = input("Source [modrinth(mr)/curseforge(cf)/url] [modrinth]: ").strip().lower() or "modrinth"
     source_aliases = {
@@ -512,6 +538,21 @@ def add_mod_via_prompt():
 
 
 def is_version_in_range(input_version, min_version=None, max_version=None, include_min=True, include_max=True):
+    """Return True if input_version falls within [min_version, max_version].
+
+    Args:
+        input_version: The version string to test.
+        min_version: Lower bound (inclusive by default). None means no lower bound.
+        max_version: Upper bound (inclusive by default). None means no upper bound.
+        include_min: Whether the lower bound is inclusive.
+        include_max: Whether the upper bound is inclusive.
+
+    Returns:
+        True if in range, False otherwise.
+
+    Raises:
+        ValueError: If any version string is not a valid PEP 440 version.
+    """
     try:
         input_ver = Version(input_version)
         if min_version is not None:
@@ -528,6 +569,7 @@ def is_version_in_range(input_version, min_version=None, max_version=None, inclu
 
 
 def clear_mmc_cache(path):
+    """Delete all files and directories under path except packwiz-installer.jar."""
     os.chdir(path)
     retain = ["packwiz-installer.jar"]
     for item in os.listdir(os.getcwd()):
@@ -543,6 +585,18 @@ def clear_mmc_cache(path):
 
 
 def resolve_comparison_packwiz_root(input_version, tag_mc_ver):
+    """Resolve the Packwiz root folder path for a given changelog version.
+
+    When versioned roots are enabled in settings the path is derived from
+    the configured pattern; otherwise "Packwiz" is returned.
+
+    Args:
+        input_version: The modpack version string of the comparison snapshot.
+        tag_mc_ver: The Minecraft version string associated with that snapshot.
+
+    Returns:
+        A relative path string such as "Packwiz" or "Packwiz/1.21.1".
+    """
     if not settings.comparison_files_use_versioned_packwiz_root:
         return "Packwiz"
 
@@ -565,6 +619,7 @@ def resolve_comparison_packwiz_root(input_version, tag_mc_ver):
 
 
 def normalize_disabled_side(side_value):
+    """Return a side string with a (disabled) suffix, preserving the base side value."""
     side_text = str(side_value).strip()
     if "disabled" in side_text:
         return side_text
@@ -573,6 +628,7 @@ def normalize_disabled_side(side_value):
 
 
 def normalize_enabled_side(side_value):
+    """Return a side string with the (disabled) suffix stripped, leaving the base side value."""
     side_text = str(side_value).strip()
     if "disabled" not in side_text:
         return side_text or "both"
@@ -581,6 +637,7 @@ def normalize_enabled_side(side_value):
 
 
 def snapshot_mod_toml_content():
+    """Read all mod .toml files and return a dict mapping filename to raw file content."""
     snapshot = {}
     os.chdir(mods_path)
     for item in sorted(os.listdir()):
@@ -597,6 +654,14 @@ def snapshot_mod_toml_content():
 
 
 def find_updated_disabled_mods(previous_snapshot):
+    """Return mods whose .toml changed since the snapshot and are currently disabled.
+
+    Args:
+        previous_snapshot: Dict of {filename: raw_content} from snapshot_mod_toml_content().
+
+    Returns:
+        List of (filename, mod_name) tuples for updated disabled mods.
+    """
     updated_disabled_mods = []
     os.chdir(mods_path)
     for item in sorted(os.listdir()):
@@ -620,6 +685,14 @@ def find_updated_disabled_mods(previous_snapshot):
 
 
 def enable_mods_by_files(mod_files):
+    """Re-enable a list of disabled mods by stripping the (disabled) suffix from their side field.
+
+    Args:
+        mod_files: Iterable of .toml filenames (relative to mods_path) to enable.
+
+    Returns:
+        List of mod display names that were successfully re-enabled.
+    """
     enabled_mods = []
     os.chdir(mods_path)
     for item in mod_files:
@@ -646,6 +719,11 @@ def enable_mods_by_files(mod_files):
 
 
 def get_pack_update_constraints():
+    """Read pack.toml and return the current Minecraft version and active mod loaders.
+
+    Returns:
+        A tuple ([game_version], [loader, ...]) suitable for Modrinth version queries.
+    """
     try:
         with open(os.path.join(packwiz_path, packwiz_manifest), "r", encoding="utf8") as f:
             local_pack_toml = toml.load(f)
@@ -664,6 +742,22 @@ def get_pack_update_constraints():
 
 
 def enforce_release_channel_policy(previous_snapshot, log_prefix="[Update]", allowed_alpha_mod_files=None):
+    """Revert or redirect any mod update that landed on a disallowed alpha version.
+
+    Compares the current .toml files against a pre-update snapshot. For each mod
+    that moved to an alpha release channel, the update is either rolled back to the
+    previous version or redirected to the latest non-alpha version, according to
+    the alpha update policy in settings.
+
+    Args:
+        previous_snapshot: Dict of {filename: raw_content} captured before the update run.
+        log_prefix: String prefix for console log messages.
+        allowed_alpha_mod_files: Set of filenames exempt from alpha enforcement.
+
+    Returns:
+        Dict with keys "blocked_alpha" (list of mod names reverted) and
+        "retargeted" (list of (mod_name, target_label) tuples redirected).
+    """
     if not previous_snapshot:
         return {"blocked_alpha": [], "retargeted": []}
 
@@ -765,6 +859,13 @@ def enforce_release_channel_policy(previous_snapshot, log_prefix="[Update]", all
 
 
 def find_pinned_mods_with_available_updates():
+    """Scan pinned mods and return those that have a newer version available on Modrinth.
+
+    Returns:
+        List of candidate dicts with keys: file, name, current_version_id,
+        latest_version_id, latest_version_label, latest_version_type,
+        requires_alpha_consent.
+    """
     update_candidates = []
     game_versions, loaders = get_pack_update_constraints()
     version_cache = {}
@@ -858,6 +959,14 @@ def find_pinned_mods_with_available_updates():
 
 
 def prompt_for_pinned_mod_updates(update_candidates):
+    """Ask the user which pinned mods they want to update and collect consent for alpha versions.
+
+    Args:
+        update_candidates: List of candidate dicts from find_pinned_mods_with_available_updates().
+
+    Returns:
+        Tuple (selected_files, approved_alpha_files) of filename lists.
+    """
     selected_files = []
     approved_alpha_files = []
     for candidate in update_candidates:
@@ -881,6 +990,15 @@ def prompt_for_pinned_mod_updates(update_candidates):
 
 
 def set_pin_state_for_mod_files(mod_files, should_pin):
+    """Set or remove the pin flag on a list of mod .toml files.
+
+    Args:
+        mod_files: Iterable of .toml filenames to update.
+        should_pin: True to add pin = true, False to remove the pin key.
+
+    Returns:
+        List of filenames that were successfully updated.
+    """
     updated_files = []
     os.chdir(mods_path)
     for item in mod_files:
@@ -907,6 +1025,15 @@ def set_pin_state_for_mod_files(mod_files, should_pin):
 
 
 def attempt_packwiz_targeted_mod_update(item, mod_toml):
+    """Try to update a single mod via packwiz using several candidate identifiers.
+
+    Args:
+        item: The .toml filename (e.g. "sodium.pw.toml").
+        mod_toml: Parsed TOML dict for the mod.
+
+    Returns:
+        Tuple (success: bool, identifier: str) where identifier is the one that worked.
+    """
     candidate_identifiers = []
     mod_name = str(mod_toml.get("name", "")).strip()
     if mod_name:
@@ -953,6 +1080,25 @@ def try_find_replacement_for_incompatible_mod(
     curseforge_file_cache,
     curseforge_project_files_cache,
 ):
+    """Attempt to retarget an incompatible mod to a compatible version.
+
+    First tries Modrinth retargeting, then falls back to a packwiz update. The
+    updated file is verified for target compatibility before reporting success.
+
+    Args:
+        item: The .toml filename.
+        item_path: Absolute path to the .toml file.
+        mod_toml: Parsed TOML dict for the mod.
+        target_minecraft_version: Minecraft version being migrated to.
+        mod_loader: Mod loader being migrated to.
+        version_cache: Shared Modrinth version API response cache.
+        project_versions_cache: Shared Modrinth project-versions API response cache.
+        curseforge_file_cache: Shared CurseForge file API response cache.
+        curseforge_project_files_cache: Shared CurseForge project-files API response cache.
+
+    Returns:
+        Tuple (replaced: bool, details: str) where details describes the replacement source.
+    """
     try:
         replaced_with_modrinth, modrinth_target = try_retarget_modrinth_mod_to_target(
             item_path=item_path,
@@ -994,6 +1140,19 @@ def try_find_replacement_for_incompatible_mod(
 
 
 def disable_incompatible_mods(target_minecraft_version, mod_loader):
+    """Check every active mod for compatibility with the migration target and disable those that are incompatible.
+
+    For each incompatible mod a replacement is attempted first via
+    try_find_replacement_for_incompatible_mod; if that fails the mod's side
+    field is set to disabled.
+
+    Args:
+        target_minecraft_version: The Minecraft version being migrated to.
+        mod_loader: The mod loader being migrated to.
+
+    Returns:
+        List of strings describing each disabled mod (name + compatibility source).
+    """
     disabled_mods = []
     replaced_mods = []
     version_cache = {}
@@ -1067,6 +1226,20 @@ def migrate_minecraft_version(
     disable_outdated_mods=True,
     mod_loader=None,
 ):
+    """Update pack.toml to a new Minecraft version and optionally update/disable mods.
+
+    Args:
+        target_minecraft_version: The Minecraft version to migrate to.
+        target_fabric_version: Legacy Fabric version override (superseded by target_mod_loader_version).
+        target_mod_loader: Target mod loader name; defaults to the current loader.
+        target_mod_loader_version: Target loader version string.
+        update_all_mods: When True, runs packwiz update --all after updating pack.toml.
+        disable_outdated_mods: When True, calls disable_incompatible_mods after updating.
+        mod_loader: Loader name used for compatibility checks; defaults to target loader.
+
+    Returns:
+        Tuple (minecraft_version, mod_loader, mod_loader_version) reflecting the final state.
+    """
     os.chdir(packwiz_path)
     with open(packwiz_manifest, "r", encoding="utf8") as f:
         local_pack_toml = toml.load(f)
@@ -1163,6 +1336,11 @@ def migrate_minecraft_version(
 
 
 def bump_modpack_version(new_pack_version):
+    """Update the modpack version in pack.toml and BCC configs, then create a changelog template.
+
+    Args:
+        new_pack_version: The new version string to apply.
+    """
     global pack_version, changelog_factory
     if not new_pack_version:
         print("[Version] No target version provided. Skipping.")
@@ -1196,6 +1374,16 @@ def bump_modpack_version(new_pack_version):
 
 
 def apply_loader_metadata_to_changelog(changelog_yml, target_mod_loader, target_mod_loader_version):
+    """Write mod loader name and version into a changelog YAML mapping in-place.
+
+    Args:
+        changelog_yml: A ruamel CommentedMap (or dict) representing the changelog.
+        target_mod_loader: Loader name (e.g. "fabric", "neoforge").
+        target_mod_loader_version: Loader version string.
+
+    Returns:
+        True if any value was changed, False if the mapping was already up-to-date.
+    """
     changed = False
     normalized_loader = normalize_mod_loader_name(target_mod_loader)
     loader_label = get_mod_loader_label(normalized_loader)
@@ -1217,6 +1405,19 @@ def apply_loader_metadata_to_changelog(changelog_yml, target_mod_loader, target_
 
 
 def ensure_changelog_yml(target_pack_version, target_minecraft_version, target_mod_loader, target_mod_loader_version):
+    """Create a changelog YAML template for the given version if one does not already exist.
+
+    If the file exists its mod loader metadata is updated in-place.
+
+    Args:
+        target_pack_version: Modpack version string (used in the filename).
+        target_minecraft_version: Minecraft version string (used in the filename).
+        target_mod_loader: Loader name written into the template.
+        target_mod_loader_version: Loader version written into the template.
+
+    Returns:
+        Absolute path to the changelog YAML file.
+    """
     os.makedirs(changelog_dir_path, exist_ok=True)
     changelog_path = os.path.join(changelog_dir_path, f"{target_pack_version}+{target_minecraft_version}.yml")
     loader_label = get_mod_loader_label(target_mod_loader)
@@ -1258,6 +1459,7 @@ def ensure_changelog_yml(target_pack_version, target_minecraft_version, target_m
     return changelog_path
 
 def download_missing_comparison_files():
+    """Download Packwiz snapshot data from GitHub for any changelogs that lack local comparison files."""
     if not settings.download_comparison_files:
         return
 
@@ -1310,6 +1512,7 @@ def download_missing_comparison_files():
 
 
 def run_changelog_auto_generation():
+    """Run the configured automatic changelog generation steps (update overview and/or config changes)."""
     os.chdir(git_path)
     changelog_path = os.path.join(changelog_dir_path, f"{pack_version}+{minecraft_version}.yml")
     if not os.path.isfile(changelog_path):
@@ -1333,6 +1536,7 @@ def run_changelog_auto_generation():
 
 
 def clear_stored_repository_data():
+    """Delete and recreate the tempgit and prev_release directories to wipe cached repository data."""
     repo_data_paths = [tempgit_path, prev_release]
     for path in repo_data_paths:
         if os.path.isdir(path):
@@ -1382,6 +1586,7 @@ changelog_factory = ChangelogFactory(changelog_dir_path, modpack_name, pack_vers
 # Main Program
 
 def has_special_menu_action_selected(settings):
+    """Return True if any single-action shortcut flag is enabled in settings."""
     return any(
         [
             settings.refresh_only,
@@ -1396,6 +1601,7 @@ def has_special_menu_action_selected(settings):
 
 
 def run_special_menu_action(settings):
+    """Execute the single special action selected through the menu (e.g. update mods, bump version)."""
     if settings.clear_repo_data_only:
         clear_stored_repository_data()
     elif settings.bump_version_only:
@@ -1452,6 +1658,7 @@ def run_special_menu_action(settings):
 
 
 def run_release_notes_generation(settings):
+    """Generate CurseForge and Modrinth release-note Markdown files from the current changelog YAML."""
     os.chdir(git_path)
     changelog_path = os.path.join(git_path, "Changelogs", f"{pack_version}+{minecraft_version}.yml")
     major_minecraft_version = '.'.join(minecraft_version.split('.', 2)[:2])
@@ -1517,6 +1724,7 @@ def run_release_notes_generation(settings):
 
 
 def update_publish_workflow(settings):
+    """Update MC_VERSION, RELEASE_TYPE, and PRE_RELEASE fields in the GitHub publish workflow YAML."""
     os.chdir(git_path)
     publish_workflow_path = os.path.join(git_path, ".github", "workflows", "publish.yml")
 
@@ -1540,6 +1748,7 @@ def update_publish_workflow(settings):
 
 
 def update_bcc_versions(settings):
+    """Write the current pack_version into the BCC client and/or server config JSON files."""
     if settings.export_client:
         os.chdir(packwiz_path)
         with open(bcc_client_config_path, "r", encoding="utf-8") as f:
@@ -1556,6 +1765,7 @@ def update_bcc_versions(settings):
 
 
 def update_crash_assistant_modlist(settings):
+    """Regenerate the Crash Assistant modlist JSON and the modlist.md Markdown file."""
     mod_filenames_json = parse_filenames_as_json(mods_path)
     with open(crash_assistant_config_path, "w", encoding="utf8") as output_file:
         output_file.write(mod_filenames_json)
@@ -1774,6 +1984,7 @@ def _run_server_export():
 
 
 def main():
+    """Run the full export workflow or the selected special action for one loop iteration."""
     global minecraft_version, active_mod_loader, mod_loader_version
 
     special_menu_action_selected = has_special_menu_action_selected(settings)

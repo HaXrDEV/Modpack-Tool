@@ -19,10 +19,12 @@ MOD_LOADER_LABELS = {
 # --- Mod loader utilities ---
 
 def is_supported_mod_loader(loader_name):
+    """Return True if loader_name is one of the recognised mod loaders."""
     return str(loader_name or "").strip().lower() in SUPPORTED_MOD_LOADERS
 
 
 def normalize_mod_loader_name(loader_name, default="fabric"):
+    """Return a canonical lowercase loader name, falling back to default (or "fabric") if unrecognised."""
     normalized = str(loader_name or "").strip().lower()
     if normalized in SUPPORTED_MOD_LOADERS:
         return normalized
@@ -31,6 +33,7 @@ def normalize_mod_loader_name(loader_name, default="fabric"):
 
 
 def get_mod_loader_label(loader_name):
+    """Return the display label for a loader (e.g. "NeoForge"), defaulting to "Fabric"."""
     raw_value = str(loader_name or "").strip()
     normalized = raw_value.lower()
     if normalized in MOD_LOADER_LABELS:
@@ -41,6 +44,7 @@ def get_mod_loader_label(loader_name):
 
 
 def detect_active_mod_loader(versions_dict):
+    """Return the first loader in SUPPORTED_MOD_LOADERS that has a non-empty version string, or "fabric"."""
     versions = versions_dict or {}
     for loader_name in SUPPORTED_MOD_LOADERS:
         if str(versions.get(loader_name, "")).strip():
@@ -49,6 +53,7 @@ def detect_active_mod_loader(versions_dict):
 
 
 def get_pack_mod_loader_details(pack_toml):
+    """Return (active_loader, active_loader_version) from a pack.toml dict."""
     versions = (pack_toml or {}).get("versions", {}) or {}
     active_loader = detect_active_mod_loader(versions)
     active_loader_version = str(versions.get(active_loader, "")).strip()
@@ -58,6 +63,7 @@ def get_pack_mod_loader_details(pack_toml):
 # --- Modrinth API ---
 
 def infer_release_channel_from_metadata(mod_toml):
+    """Guess the release channel ("alpha", "beta", or "release") from the filename and download URL."""
     metadata = " ".join(
         [
             str(mod_toml.get("filename", "")),
@@ -72,6 +78,15 @@ def infer_release_channel_from_metadata(mod_toml):
 
 
 def fetch_modrinth_version_by_id(version_id, version_cache):
+    """Fetch a single Modrinth version payload by ID, using version_cache to avoid duplicate requests.
+
+    Args:
+        version_id: Modrinth version ID string.
+        version_cache: Dict used as a mutable in-process cache (keyed by version ID).
+
+    Returns:
+        The parsed JSON payload dict, or None on failure or missing ID.
+    """
     version_id = str(version_id or "").strip()
     if not version_id:
         return None
@@ -90,6 +105,17 @@ def fetch_modrinth_version_by_id(version_id, version_cache):
 
 
 def fetch_modrinth_project_versions(project_id, game_versions, loaders, project_versions_cache):
+    """Fetch all Modrinth versions for a project filtered by game versions and loaders.
+
+    Args:
+        project_id: Modrinth project ID string.
+        game_versions: List of Minecraft version strings to filter by.
+        loaders: List of loader name strings to filter by.
+        project_versions_cache: Dict used as a mutable in-process cache.
+
+    Returns:
+        List of version payload dicts, or [] on failure or missing ID.
+    """
     project_id = str(project_id or "").strip()
     if not project_id:
         return []
@@ -118,6 +144,7 @@ def fetch_modrinth_project_versions(project_id, game_versions, loaders, project_
 
 
 def get_modrinth_version_type(mod_toml, version_cache):
+    """Return the release channel for a mod's installed Modrinth version, falling back to metadata inference."""
     version_id = mod_toml.get("update", {}).get("modrinth", {}).get("version")
     version_payload = fetch_modrinth_version_by_id(version_id, version_cache)
     if version_payload:
@@ -128,12 +155,17 @@ def get_modrinth_version_type(mod_toml, version_cache):
 
 
 def get_allowed_update_channels(current_channel):
+    """Return the set of version types that are acceptable updates given the current channel.
+
+    Alpha mods may update to any channel; all others are restricted to release and beta.
+    """
     if str(current_channel).lower() == "alpha":
         return {"release", "beta", "alpha"}
     return {"release", "beta"}
 
 
 def get_alpha_update_policy(settings):
+    """Return the normalised alpha update policy ("always_skip", "always_allow", or "prompt") from settings."""
     raw_policy = str(getattr(settings, "alpha_update_policy", "prompt")).strip().lower()
     if raw_policy in ("always_skip", "skip", "never"):
         return "always_skip"
@@ -143,6 +175,7 @@ def get_alpha_update_policy(settings):
 
 
 def should_keep_alpha_update(mod_name, current_channel, settings, log_prefix="[Update]"):
+    """Return True if an alpha update should be applied, prompting the user when the policy is "prompt"."""
     policy = get_alpha_update_policy(settings)
     if policy == "always_skip":
         return False
@@ -156,6 +189,7 @@ def should_keep_alpha_update(mod_name, current_channel, settings, log_prefix="[U
 
 
 def select_latest_allowed_modrinth_version(project_id, current_channel, game_versions, loaders, project_versions_cache):
+    """Return the newest Modrinth version payload whose type is permitted by current_channel, or None."""
     allowed_channels = get_allowed_update_channels(current_channel)
     versions = fetch_modrinth_project_versions(project_id, game_versions, loaders, project_versions_cache)
     for version_payload in versions:
@@ -166,6 +200,7 @@ def select_latest_allowed_modrinth_version(project_id, current_channel, game_ver
 
 
 def select_modrinth_primary_file(version_payload):
+    """Return the primary file entry from a Modrinth version payload, falling back to the first file."""
     files = list(version_payload.get("files", []) or [])
     if not files:
         return None
@@ -176,6 +211,11 @@ def select_modrinth_primary_file(version_payload):
 
 
 def apply_modrinth_version_to_mod_toml(mod_toml, version_payload):
+    """Write a Modrinth version's file metadata (URL, hash, filename, version ID) into mod_toml in-place.
+
+    Returns:
+        True if all required fields were present and mod_toml was updated; False otherwise.
+    """
     target_version_id = str(version_payload.get("id", "")).strip()
     if not target_version_id:
         return False
@@ -212,28 +252,41 @@ def apply_modrinth_version_to_mod_toml(mod_toml, version_payload):
 # --- Compatibility inference ---
 
 def extract_loader_hints_from_metadata(metadata):
+    """Parse a metadata string and return the set of loader names mentioned in it."""
     text = str(metadata or "").lower()
     hints = set()
+    # Matches "fabric" as a standalone word — negative lookbehind/lookahead [a-z0-9]
+    # prevents partial matches (e.g. "fabricmc" does not trigger this).
     if re.search(r"(?<![a-z0-9])fabric(?![a-z0-9])", text):
         hints.add("fabric")
+    # Same word-boundary guard for "quilt".
     if re.search(r"(?<![a-z0-9])quilt(?![a-z0-9])", text):
         hints.add("quilt")
+    # "neoforge" must be checked before "forge" so the longer token is consumed first.
     if re.search(r"(?<![a-z0-9])neoforge(?![a-z0-9])", text):
         hints.add("neoforge")
+    # Only add "forge" when "neoforge" was not already matched, avoiding a double-hit
+    # on strings like "neoforge-1.21" that contain the substring "forge".
     if re.search(r"(?<![a-z0-9])forge(?![a-z0-9])", text) and "neoforge" not in hints:
         hints.add("forge")
     return hints
 
 
 def extract_minecraft_version_hints_from_metadata(metadata):
+    """Parse a metadata string and return the set of Minecraft version strings found in it."""
     text = str(metadata or "").lower()
     version_hints = set()
 
     # Explicit Minecraft tokens (e.g. mc1.20.1, minecraft-1.21.1)
+    # Captures the version number that follows "mc" or "minecraft" with an optional separator.
+    # The version group matches major.minor or major.minor.patch (e.g. "1.20", "1.20.1").
     for version in re.findall(r"(?:mc|minecraft)[-_ +]?(1\.\d{1,2}(?:\.\d{1,2})?)", text):
         version_hints.add(str(version))
 
     # Common filename suffixes/prefixes (e.g. +1.20.1, -1.21.1, _1.21)
+    # The character class 1[6-9]|2\d restricts matches to MC 1.16+ to avoid false positives
+    # on unrelated version numbers (e.g. Java versions, mod API versions).
+    # Negative lookbehind/lookahead (?<!\d) / (?!\d) prevents matching inside longer numbers.
     for version in re.findall(r"(?<!\d)(1\.(?:1[6-9]|2\d)(?:\.\d{1,2})?)(?!\d)", text):
         version_hints.add(str(version))
 
@@ -241,6 +294,7 @@ def extract_minecraft_version_hints_from_metadata(metadata):
 
 
 def is_target_minecraft_compatible_with_hints(target_minecraft_version, version_hints):
+    """Return True/False if hints confirm/deny MC compatibility, or None when no hints are available."""
     hints = set(version_hints or [])
     if not hints:
         return None
@@ -256,6 +310,10 @@ def is_target_minecraft_compatible_with_hints(target_minecraft_version, version_
 
 
 def is_target_loader_compatible_with_hints(target_loader, loader_hints):
+    """Return True/False if hints confirm/deny loader compatibility, or None when no hints are available.
+
+    Quilt is treated as compatible with Fabric mods because Quilt can load Fabric mods.
+    """
     hints = set(loader_hints or [])
     if not hints:
         return None
@@ -271,18 +329,41 @@ def is_target_loader_compatible_with_hints(target_loader, loader_hints):
 
 
 def resolve_target_compatibility(loader_compatible, minecraft_compatible):
+    """Combine per-axis compatibility signals into a single three-state result.
+
+    Each axis uses True (confirmed compatible), False (confirmed incompatible), or
+    None (no information). The combined result follows these rules:
+
+    - Either axis is False  → False  (one confirmed incompatibility is enough to reject)
+    - Both axes are True    → True   (both axes positively confirmed)
+    - One axis True, one None → True (confirmed on one axis, silent on the other is acceptable)
+    - Both axes are None    → None   (no information at all; caller decides)
+
+    Args:
+        loader_compatible: Three-state result for loader axis.
+        minecraft_compatible: Three-state result for Minecraft version axis.
+
+    Returns:
+        True, False, or None.
+    """
+    # A single confirmed incompatibility overrides everything else.
     if loader_compatible is False or minecraft_compatible is False:
         return False
+    # Both axes positively confirmed.
     if loader_compatible is True and minecraft_compatible is True:
         return True
+    # Loader confirmed, MC unknown — treat as compatible (MC version data may simply be absent).
     if loader_compatible is True and minecraft_compatible is None:
         return True
+    # MC confirmed, loader unknown — treat as compatible (loader data may simply be absent).
     if loader_compatible is None and minecraft_compatible is True:
         return True
+    # Both axes are None — not enough information to decide.
     return None
 
 
 def infer_compatibility_from_metadata(mod_toml, target_minecraft_version, mod_loader):
+    """Infer compatibility purely from the mod's filename and download URL without any API calls."""
     metadata = " ".join(
         [
             str(mod_toml.get("filename", "")),
@@ -298,6 +379,12 @@ def infer_compatibility_from_metadata(mod_toml, target_minecraft_version, mod_lo
 
 
 def is_installed_modrinth_version_compatible(mod_toml, target_minecraft_version, mod_loader, version_cache):
+    """Check whether the mod's currently installed Modrinth version supports the target MC version and loader.
+
+    Returns:
+        True/False if the Modrinth API confirms compatibility; None if the version ID is absent,
+        the API call fails, or there is insufficient data.
+    """
     try:
         modrinth_meta = mod_toml.get("update", {}).get("modrinth", {})
         version_id = str(modrinth_meta.get("version", "")).strip()
@@ -337,6 +424,7 @@ def is_installed_modrinth_version_compatible(mod_toml, target_minecraft_version,
 
 
 def has_modrinth_project_version_for_target(mod_toml, target_minecraft_version, mod_loader, project_versions_cache):
+    """Return True if the Modrinth project has any version for the target MC version and loader, else False/None."""
     try:
         project_id = mod_toml.get("update", {}).get("modrinth", {}).get("mod-id")
         if not project_id:
@@ -466,6 +554,11 @@ def is_installed_curseforge_file_compatible(
     mod_loader,
     curseforge_file_cache,
 ):
+    """Check whether the mod's currently installed CurseForge file supports the target MC version and loader.
+
+    Returns:
+        True/False if compatibility can be determined from the file metadata; None otherwise.
+    """
     try:
         curseforge_meta = mod_toml.get("update", {}).get("curseforge", {})
         project_id = curseforge_meta.get("project-id")
@@ -487,6 +580,11 @@ def has_curseforge_project_version_for_target(
     mod_loader,
     curseforge_project_files_cache,
 ):
+    """Return True if any CurseForge file for the project is compatible with the target, else False/None.
+
+    Iterates all fetched project files and short-circuits as soon as a confirmed-compatible file is
+    found. Returns None only when every file returned an inconclusive result.
+    """
     try:
         curseforge_meta = mod_toml.get("update", {}).get("curseforge", {})
         project_id = curseforge_meta.get("project-id")
@@ -537,6 +635,16 @@ def determine_mod_target_compatibility(
     curseforge_file_cache,
     curseforge_project_files_cache,
 ):
+    """Determine mod compatibility with the target MC version and loader using a prioritised fallback chain.
+
+    Sources are tried in order: installed Modrinth version, Modrinth project versions,
+    installed CurseForge file, CurseForge project files, and finally filename/URL metadata.
+    The first source that returns a non-None result wins.
+
+    Returns:
+        Tuple of (compatibility, source_label) where compatibility is True, False, or None,
+        and source_label is a string identifying which source produced the result.
+    """
     compatibility = is_installed_modrinth_version_compatible(
         mod_toml,
         target_minecraft_version,
@@ -593,6 +701,14 @@ def select_modrinth_replacement_version_for_target(
     project_versions_cache,
     settings,
 ):
+    """Find the best Modrinth version to migrate a mod to the target MC version and loader.
+
+    Prefers the latest version within the allowed channels; if none qualify and the only
+    available version is alpha, prompts (or defers to policy) before returning it.
+
+    Returns:
+        A Modrinth version payload dict, or None if no suitable version exists.
+    """
     target_game_versions = [str(target_minecraft_version)]
     target_loaders = [normalize_mod_loader_name(mod_loader, default="fabric")]
 
@@ -632,6 +748,14 @@ def try_retarget_modrinth_mod_to_target(
     project_versions_cache,
     settings,
 ):
+    """Attempt to update a Modrinth-tracked mod's .toml file to a version compatible with the target.
+
+    Finds the best replacement version, applies it to mod_toml, and writes the result back to
+    item_path. Does nothing if the mod is already on the best available version.
+
+    Returns:
+        Tuple of (success: bool, version_label: str). version_label is empty on failure.
+    """
     modrinth_meta = mod_toml.get("update", {}).get("modrinth", {})
     project_id = str(modrinth_meta.get("mod-id", "")).strip()
     current_version_id = str(modrinth_meta.get("version", "")).strip()

@@ -20,6 +20,19 @@ def markdown_list_maker(lines):
 
 
 def write_differences_to_markdown(differences, input_modpack_name, version1, version2, output_file=None):
+    """Build a Markdown diff report for a modpack version comparison.
+
+    Args:
+        differences: Dict with keys ``'added'``, ``'removed'``, and ``'modified'``.
+            ``'modified'`` entries are ``(name, old_version, new_version)`` tuples.
+        input_modpack_name: Display name used in the report heading.
+        version1: The older version label.
+        version2: The newer version label.
+        output_file: Optional file path; when provided the Markdown is written there.
+
+    Returns:
+        The full Markdown document as a string.
+    """
     markdown_lines = []
 
     # Title for the Markdown report

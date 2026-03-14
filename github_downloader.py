@@ -7,6 +7,8 @@ from typing import Optional, Dict
 
 
 class AsyncGitHubDownloader:
+    """Async GitHub repository downloader that fetches a branch/tag zipball and extracts selected folders."""
+
     GITHUB_API_URL = "https://api.github.com/repos"
     CHUNK_SIZE = 8192
 

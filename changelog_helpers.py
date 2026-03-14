@@ -10,7 +10,15 @@ _mod_label_index_cache = None
 
 
 def initialize_modlist_label_index(active_mod_names: list):
-    """Call this once before changelog generation to populate the mod label index."""
+    """Seed the module-level mod label cache from the active mod list.
+
+    Must be called once before any changelog generation that needs display-label
+    resolution.  Subsequent calls overwrite the cache entirely.
+
+    Args:
+        active_mod_names: Raw mod name strings as they appear in the modlist
+            (may include side-suffixes like ``[Client]`` or trailing dashes).
+    """
     global _mod_label_index_cache
     index = {}
     entries = []
@@ -28,6 +36,7 @@ def initialize_modlist_label_index(active_mod_names: list):
 
 
 def uses_llm_config_changes(settings) -> bool:
+    """Return True when the active settings configure Ollama as the config-change provider."""
     return str(settings.auto_config_provider).strip().lower() == "ollama"
 
 
@@ -129,6 +138,19 @@ def _append_added_removed_summary(lines, added_names, removed_names, singular_la
 
 
 def generate_deterministic_update_overview(diff_payload, migration_mode=False) -> List[str]:
+    """Build a human-readable summary of pack changes without calling an LLM.
+
+    Produces one sentence per significant change category (added/removed mods,
+    updated mods/resource-packs/shaderpacks, etc.) and deduplicates the result.
+
+    Args:
+        diff_payload: Structured diff dict produced by the pack comparison step.
+        migration_mode: When True, prepends a Minecraft version upgrade line and
+            formats removed mods as temporarily incompatible.
+
+    Returns:
+        Ordered list of summary sentences, each ending with a period.
+    """
     mod_diff = diff_payload.get("mod_differences") or {}
     res_diff = diff_payload.get("resourcepack_differences") or {}
     shader_diff = diff_payload.get("shaderpack_differences") or {}
@@ -297,6 +319,18 @@ def _normalize_redundant_config_context_tail(bullets: List[str]) -> List[str]:
 
 
 def format_config_filename_as_title(filename: str) -> str:
+    """Convert a raw config filename into a title-cased display label.
+
+    Strips the file extension, splits on underscores/hyphens/dots and
+    camelCase boundaries, then capitalizes each token.
+
+    Args:
+        filename: Bare filename or path component (e.g. ``"myMod_config.json"``).
+
+    Returns:
+        Title-cased string (e.g. ``"My Mod Config"``), or ``"Unknown"`` when the
+        input is empty or yields no tokens.
+    """
     name = os.path.splitext(str(filename or "").strip())[0]
     if not name:
         return "Unknown"
@@ -336,6 +370,21 @@ def _get_normalized_config_path_parts(path: str) -> List[str]:
 
 
 def derive_mod_display_label_from_config_path(path: str) -> str:
+    """Resolve a config file path to the best-matching mod display label.
+
+    Resolution order:
+    1. Exact normalized-key lookup against the mod label index (tries top-level
+       folder, filename stem, full filename, then parent folder).
+    2. Score-based containment match across all index entries (longest common
+       normalized substring wins, minimum length 6 to suppress false positives).
+    3. Title-cased top-level folder name, or title-cased filename as last resort.
+
+    Args:
+        path: Relative config path (forward- or back-slash separated).
+
+    Returns:
+        Human-readable mod label string, never empty.
+    """
     normalized_parts = _get_normalized_config_path_parts(path)
     filename = normalized_parts[-1] if normalized_parts else derive_mod_label_from_config_path(path)
     stem = os.path.splitext(filename)[0].strip()
@@ -357,6 +406,8 @@ def derive_mod_display_label_from_config_path(path: str) -> str:
             return index[key]
 
     # Loose fallback: match by containment on normalized keys.
+    # Build the list of lookup keys to try, prioritising the top-level folder
+    # (most likely to match the mod name) before the filename stem.
     loose_keys = []
     top_folder_key = _normalize_lookup_key(top_folder)
     if top_folder_key:
@@ -372,13 +423,20 @@ def derive_mod_display_label_from_config_path(path: str) -> str:
             alias_key = _normalize_lookup_key(mod_name)
             if not alias_key:
                 continue
+            # Exact match on the normalized key — return immediately.
             if lookup_key == alias_key:
                 return mod_name
+            # Containment in either direction qualifies as a partial match.
             if lookup_key in alias_key or alias_key in lookup_key:
+                # Score is the length of the shorter key: longer overlap = more
+                # specific match.  This prefers "sodium" over "na" when both
+                # are substrings of the lookup key.
                 score = min(len(lookup_key), len(alias_key))
                 if score > best_score:
                     best_score = score
                     best_name = mod_name
+        # Require a minimum overlap length of 6 characters to avoid spurious
+        # matches from very short or generic tokens.
         if best_name and best_score >= 6:
             return best_name
 
@@ -703,6 +761,14 @@ def _filter_unverified_config_operation_bullets(bullets: List[str], diff_payload
 
 
 def derive_mod_label_from_config_path(path: str) -> str:
+    """Return the bare filename component of a config path.
+
+    Args:
+        path: Relative config path, forward- or back-slash separated.
+
+    Returns:
+        The final path segment (filename), or ``"Unknown"`` for empty input.
+    """
     raw_path = str(path or "").replace("\\", "/").strip("/")
     if not raw_path:
         return "Unknown"
@@ -713,11 +779,16 @@ def derive_mod_label_from_config_path(path: str) -> str:
 
 
 def is_yosbr_config_path(path: str) -> bool:
+    """Return True when *path* lives inside the ``yosbr/`` defaults directory."""
     normalized = str(path or "").replace("\\", "/").strip("/").lower()
     return normalized.startswith("yosbr/")
 
 
 def get_config_change_verb(path: str) -> str:
+    """Return the appropriate change verb for a config path.
+
+    Returns ``"Changed default"`` for yosbr paths and ``"Changed"`` otherwise.
+    """
     return "Changed default" if is_yosbr_config_path(path) else "Changed"
 
 
@@ -794,20 +865,27 @@ def _build_json_array_value_section_index(relative_config_path: str, packwiz_con
             container_stack.pop()
 
     for raw_line in lines:
+        # Strip inline // comments before processing so JSON5 files parse cleanly.
         line = _strip_double_slash_comments(raw_line).strip()
         if not line:
             continue
 
+        # If this line is a quoted array element, record which named containers
+        # it belongs to so callers can surface section context in changelogs.
         string_value = _extract_array_item_string_value(line)
         if string_value is not None:
+            # Collect names of all enclosing named containers (arrays/objects).
             section_names = [item["name"] for item in container_stack if item.get("name")]
             if section_names:
+                # Build a dot-separated path, e.g. "dependencies.required".
                 section_path = ".".join(section_names)
                 lowered = string_value.lower()
                 section_list = section_index.setdefault(lowered, [])
                 if section_path not in section_list:
                     section_list.append(section_path)
 
+        # Detect the opening of a named array or object (e.g. "key": [ or "key": {)
+        # and push it onto the container stack so nested values inherit context.
         key_open_match = re.match(r'^"([^"]+)"\s*:\s*([\[{])', line)
         if key_open_match:
             key_name = key_open_match.group(1)
@@ -819,6 +897,8 @@ def _build_json_array_value_section_index(relative_config_path: str, packwiz_con
                 }
             )
 
+        # Scan closing brackets on this line to pop the matching container.
+        # String literals are blanked out first so brackets inside them are ignored.
         line_no_strings = re.sub(r'"(?:[^"\\]|\\.)*"', '""', line)
         for ch in line_no_strings:
             if ch == "]":
@@ -883,6 +963,20 @@ def _is_fancymenu_customization_path(path: str) -> bool:
 
 
 def build_config_label_title_prompt(text: str, diff_payload, max_items=20):
+    """Build a prompt that asks an LLM to rewrite bracket labels in *text*.
+
+    The prompt instructs the model to replace raw filename-based labels inside
+    ``[…]`` with the proper mod display names derived from the diff payload,
+    leaving all other wording untouched.
+
+    Args:
+        text: Existing bullet text whose bracket labels need correcting.
+        diff_payload: Structured diff dict used to build the filename-to-label mapping.
+        max_items: Maximum number of file mappings to include in the prompt.
+
+    Returns:
+        Prompt string ready to be sent to the LLM.
+    """
     config_diff = diff_payload.get("config_differences") or {}
     modified_line_diffs = list(config_diff.get("modified_line_diffs", []))
     moved_to_yosbr = list(config_diff.get("moved_to_yosbr", []))
@@ -920,6 +1014,20 @@ def build_config_label_title_prompt(text: str, diff_payload, max_items=20):
 
 
 def build_config_changes_prompt(diff_payload, max_items=12, packwiz_config_path=""):
+    """Build the main LLM prompt for generating config-change changelog bullets.
+
+    Embeds verified line-delta evidence, file-to-mod label mappings, and yosbr
+    move entries alongside detailed style and accuracy instructions.
+
+    Args:
+        diff_payload: Structured diff dict produced by the pack comparison step.
+        max_items: Maximum number of config file entries to include in the prompt.
+        packwiz_config_path: Absolute path to the packwiz config directory, used
+            to resolve section context for JSON array values.
+
+    Returns:
+        Prompt string ready to be sent to the LLM.
+    """
     config_diff = diff_payload.get("config_differences") or {}
     modified_line_diffs = list(config_diff.get("modified_line_diffs", []))
     moved_to_yosbr = list(config_diff.get("moved_to_yosbr", []))
@@ -1048,6 +1156,21 @@ def build_config_changes_prompt(diff_payload, max_items=12, packwiz_config_path=
 
 
 def generate_config_changes_fallback_from_line_diffs(diff_payload, max_lines=8, packwiz_config_path="") -> str:
+    """Generate config-change bullets deterministically from raw line diffs.
+
+    Used when LLM generation is disabled or unavailable.  Attempts to produce
+    specific bullets for added/removed JSON array values with section context,
+    then falls back to listing changed key names, and finally emits a generic
+    summary line if no specific information can be extracted.
+
+    Args:
+        diff_payload: Structured diff dict produced by the pack comparison step.
+        max_lines: Maximum number of bullet lines to produce.
+        packwiz_config_path: Absolute path to the packwiz config directory.
+
+    Returns:
+        Newline-joined bullet string (may be empty if there are no diffs).
+    """
     config_diff = diff_payload.get("config_differences") or {}
     line_diffs = list(config_diff.get("modified_line_diffs", []))
     bullets = []
@@ -1133,6 +1256,18 @@ def generate_config_changes_fallback_from_line_diffs(diff_payload, max_lines=8, 
 
 
 def generate_removed_config_file_bullets(diff_payload, max_lines=8) -> List[str]:
+    """Build bullets for config files that were deleted between versions.
+
+    Files that appear in the ``moved_to_yosbr`` list are excluded because they
+    are not true removals.
+
+    Args:
+        diff_payload: Structured diff dict produced by the pack comparison step.
+        max_lines: Maximum number of bullets to return.
+
+    Returns:
+        List of formatted bullet strings.
+    """
     config_diff = diff_payload.get("config_differences") or {}
     removed_paths = list(config_diff.get("removed", []))
     moved_to_yosbr = list(config_diff.get("moved_to_yosbr", []))
@@ -1165,6 +1300,15 @@ def generate_removed_config_file_bullets(diff_payload, max_lines=8) -> List[str]
 
 
 def generate_yosbr_default_move_bullets(diff_payload, max_lines=8) -> List[str]:
+    """Build bullets describing configs that were promoted to yosbr defaults.
+
+    Args:
+        diff_payload: Structured diff dict produced by the pack comparison step.
+        max_lines: Maximum number of bullets to return.
+
+    Returns:
+        List of formatted bullet strings.
+    """
     config_diff = diff_payload.get("config_differences") or {}
     moved_to_yosbr = list(config_diff.get("moved_to_yosbr", []))
     bullets = []
@@ -1192,6 +1336,21 @@ def generate_yosbr_default_move_bullets(diff_payload, max_lines=8) -> List[str]:
 
 
 def format_config_change_labels_with_llm(text: str, diff_payload, settings, packwiz_config_path="") -> Optional[str]:
+    """Post-process config-change bullets by asking the LLM to fix bracket labels.
+
+    Sends ``text`` to the configured Ollama model with a label-rewriting prompt
+    and retries up to three times if the output is incomplete.
+
+    Args:
+        text: Bullet text with potentially incorrect bracket labels.
+        diff_payload: Structured diff dict used to build the label mapping prompt.
+        settings: Settings object with Ollama connection and model parameters.
+        packwiz_config_path: Unused here; accepted for call-site consistency.
+
+    Returns:
+        Corrected bullet text, or ``None`` if the provider is not Ollama or all
+        attempts fail.
+    """
     if str(settings.auto_config_provider).lower() != "ollama":
         return None
 
@@ -1427,6 +1586,23 @@ def _generate_config_change_item_with_llm(item_payload, settings, max_lines: int
 
 
 def generate_config_changes_with_llm(diff_payload, settings, max_lines: Optional[int] = None, packwiz_config_path="") -> Optional[str]:
+    """Generate config-change changelog bullets via Ollama, one file at a time.
+
+    Iterates over each changed config file in the diff, issues a focused LLM
+    prompt per file, applies post-processing and deduplication, and aggregates
+    results up to the line budget.
+
+    Args:
+        diff_payload: Structured diff dict produced by the pack comparison step.
+        settings: Settings object with Ollama connection and generation parameters.
+        max_lines: Override for the maximum total bullet lines.  Defaults to
+            ``settings.auto_config_max_lines`` when ``None``.
+        packwiz_config_path: Absolute path to the packwiz config directory.
+
+    Returns:
+        Newline-joined bullet string, or ``None`` when the provider is not Ollama,
+        the budget is zero, or no usable output was produced.
+    """
     if str(settings.auto_config_provider).lower() != "ollama":
         print(f"[Changelog] Unsupported auto_config_provider '{settings.auto_config_provider}'.")
         return None
@@ -1499,6 +1675,17 @@ def generate_config_changes_with_llm(diff_payload, settings, max_lines: Optional
 
 
 def maybe_generate_update_overview(changelog_path, diff_payload, settings, yaml_instance):
+    """Write a deterministic ``Update overview`` section into a changelog YAML file.
+
+    Skips writing when the section already exists and
+    ``settings.auto_summary_overwrite_existing`` is False.
+
+    Args:
+        changelog_path: Absolute path to the changelog ``.yml`` file to update.
+        diff_payload: Structured diff dict produced by the pack comparison step.
+        settings: Settings object checked for ``auto_summary_overwrite_existing``.
+        yaml_instance: Configured ``ruamel.yaml.YAML`` instance for round-trip I/O.
+    """
     if not diff_payload:
         print("[Changelog] No diff payload available. Skipping auto summary.")
         return
@@ -1523,6 +1710,22 @@ def maybe_generate_update_overview(changelog_path, diff_payload, settings, yaml_
 
 
 def maybe_generate_config_changes(changelog_path, diff_payload, settings, yaml_instance, packwiz_config_path=""):
+    """Write a ``Config Changes`` section into a changelog YAML file.
+
+    Coordinates all config-change generation strategies: yosbr-move bullets,
+    removed-file bullets, LLM-generated line-diff bullets (when Ollama is
+    configured), and the deterministic fallback.  Skips writing when the section
+    already contains non-placeholder content and
+    ``settings.auto_config_overwrite_existing`` is False.
+
+    Args:
+        changelog_path: Absolute path to the changelog ``.yml`` file to update.
+        diff_payload: Structured diff dict produced by the pack comparison step.
+        settings: Settings object controlling generation strategy and limits.
+        yaml_instance: Configured ``ruamel.yaml.YAML`` instance for round-trip I/O.
+        packwiz_config_path: Absolute path to the packwiz config directory, passed
+            through to JSON section-index helpers.
+    """
     if not diff_payload:
         print("[Changelog] No diff payload available. Skipping config change generation.")
         return
