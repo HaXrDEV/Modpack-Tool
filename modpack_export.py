@@ -1115,8 +1115,26 @@ def try_find_replacement_for_incompatible_mod(
         mod_name = mod_toml.get("name", item)
         print(f"[Migration] Failed Modrinth retarget for '{mod_name}': {ex}")
 
+    # Temporarily clear the pin flag so packwiz can update a pinned mod during migration.
+    was_pinned = bool(mod_toml.get("pin", False))
+    if was_pinned:
+        unpinned = {k: v for k, v in mod_toml.items() if k != "pin"}
+        try:
+            with open(item_path, "w", encoding="utf8") as f:
+                toml.dump(unpinned, f)
+        except Exception:
+            was_pinned = False  # couldn't write, skip restore logic
+
     updated_by_packwiz, packwiz_identifier = attempt_packwiz_targeted_mod_update(item, mod_toml)
+
     if not updated_by_packwiz:
+        if was_pinned:
+            # Restore original TOML (update failed, leave it pinned as before)
+            try:
+                with open(item_path, "w", encoding="utf8") as f:
+                    toml.dump(mod_toml, f)
+            except Exception:
+                pass
         return False, ""
 
     try:
