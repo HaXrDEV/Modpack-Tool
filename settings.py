@@ -45,6 +45,7 @@ class Settings:
     generate_update_summary_only: bool = False
     list_disabled_mods_only: bool = False
     add_mod_only: bool = False
+    find_orphaned_libraries_only: bool = False
     migrate_minecraft_version: bool = False
     migration_disable_incompatible_mods: bool = True
     migration_update_all_mods: bool = True

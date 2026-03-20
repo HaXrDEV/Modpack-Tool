@@ -523,6 +523,79 @@ def _get_curseforge_project_files(project_id, target_minecraft_version, project_
     return files
 
 
+def fetch_modrinth_project_info(project_id, project_info_cache):
+    """Fetch Modrinth project metadata (GET /v2/project/{id}).
+
+    Returns the project dict, or None on failure/not-found.
+    """
+    key = str(project_id or "").strip()
+    if not key:
+        return None
+    if key in project_info_cache:
+        return project_info_cache[key]
+    payload = None
+    try:
+        response = requests.get(f"{MODRINTH_API_BASE}/project/{key}", timeout=20)
+        if response.status_code == 404:
+            project_info_cache[key] = None
+            return None
+        response.raise_for_status()
+        payload = response.json()
+    except Exception:
+        pass
+    project_info_cache[key] = payload
+    return payload
+
+
+def fetch_curseforge_project_info(project_id, project_info_cache):
+    """Fetch CurseForge project metadata (GET /v1/mods/{modId}).
+
+    Returns the project dict, or None on failure/not-found.
+    """
+    key = str(project_id or "").strip()
+    if not key:
+        return None
+    if key in project_info_cache:
+        return project_info_cache[key]
+    payload = None
+    try:
+        response = requests.get(f"{CURSEFORGE_API_BASE}/mods/{key}", timeout=20)
+        if response.status_code == 404:
+            project_info_cache[key] = None
+            return None
+        response.raise_for_status()
+        payload = (response.json() or {}).get("data")
+    except Exception:
+        pass
+    project_info_cache[key] = payload
+    return payload
+
+
+def is_mod_classified_as_library(mod_toml, mr_project_info_cache, cf_project_info_cache):
+    """Return True if Modrinth or CurseForge classifies this mod as a library, else False or None.
+
+    Modrinth: checks for "library" in the project's categories list.
+    CurseForge: checks for a category whose name or slug contains "library".
+    Returns None if no project info could be fetched.
+    """
+    mr_id = str(mod_toml.get("update", {}).get("modrinth", {}).get("mod-id", "")).strip()
+    if mr_id:
+        info = fetch_modrinth_project_info(mr_id, mr_project_info_cache)
+        if info is not None:
+            return "library" in [str(c).lower() for c in info.get("categories", [])]
+
+    cf_id = str(mod_toml.get("update", {}).get("curseforge", {}).get("project-id", "")).strip()
+    if cf_id:
+        info = fetch_curseforge_project_info(cf_id, cf_project_info_cache)
+        if info is not None:
+            for cat in info.get("categories", []):
+                if "library" in str(cat.get("name", "")).lower() or "library" in str(cat.get("slug", "")).lower():
+                    return True
+            return False
+
+    return None
+
+
 def _evaluate_curseforge_file_compatibility(file_payload, target_minecraft_version, mod_loader):
     if not file_payload:
         return None

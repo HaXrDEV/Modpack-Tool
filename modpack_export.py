@@ -11,6 +11,7 @@ import json
 import re
 import subprocess
 import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from shutil import rmtree, make_archive, move, copytree
 from pathlib import Path
 
@@ -60,6 +61,9 @@ from api_clients import (
     determine_mod_target_compatibility,
     select_modrinth_replacement_version_for_target,
     try_retarget_modrinth_mod_to_target,
+    fetch_modrinth_project_info,
+    fetch_curseforge_project_info,
+    is_mod_classified_as_library,
 )
 from typing import List, Optional
 
@@ -279,6 +283,7 @@ Choose action:
 11) Generate changelog summary only
 12) List disabled mods
 13) Add mod
+14) Find orphaned library mods
 0) Exit
 
 Config Changes generator: {config_mode_label}
@@ -298,6 +303,7 @@ Config Changes generator: {config_mode_label}
     settings.generate_update_summary_only = False
     settings.list_disabled_mods_only = False
     settings.add_mod_only = False
+    settings.find_orphaned_libraries_only = False
     settings.migrate_minecraft_version = False
     settings.export_client = False
     settings.export_server = False
@@ -369,6 +375,10 @@ Config Changes generator: {config_mode_label}
 
     if choice == "13":
         settings.add_mod_only = True
+        return True
+
+    if choice == "14":
+        settings.find_orphaned_libraries_only = True
         return True
 
     print(f"Unknown choice '{choice}'. Falling back to configured workflow.")
@@ -494,6 +504,144 @@ def list_disabled_mods():
         print(f"- {mod_name} ({mod_file}, side={side_value})")
 
     return disabled_mods
+
+
+def find_and_remove_orphaned_library_mods():
+    """Scan active mods for library mods with no active dependants and let the user remove them."""
+    os.chdir(mods_path)
+    toml_files = [
+        f for f in sorted(os.listdir())
+        if os.path.isfile(os.path.join(mods_path, f)) and f.endswith(".toml")
+    ]
+    active_mods = []
+    for f in toml_files:
+        try:
+            with open(os.path.join(mods_path, f), "r", encoding="utf8") as fh:
+                t = toml.load(fh)
+            if "disabled" not in str(t.get("side", "both")):
+                active_mods.append((f, t))
+        except Exception:
+            pass
+
+    total = len(active_mods)
+    print(f"[LibScan] Step 1/{total}: Fetching dependency data for {total} mods...", flush=True)
+
+    # Build the set of project IDs that are required dependencies of any active mod.
+    # Fetches are done in parallel to minimise API wait time.
+    version_cache = {}
+    curseforge_file_cache = {}
+    required_cf_ids = set()
+    required_mr_ids = set()
+
+    def _fetch_deps(item, mod_toml):
+        cf_deps = set()
+        mr_deps = set()
+        cf_meta = mod_toml.get("update", {}).get("curseforge", {})
+        cf_file_id = str(cf_meta.get("file-id", "")).strip()
+        cf_proj_id = str(cf_meta.get("project-id", "")).strip()
+        if cf_file_id and cf_proj_id:
+            payload = _get_curseforge_file_payload(cf_file_id, cf_proj_id, curseforge_file_cache)
+            if payload:
+                for dep in payload.get("dependencies", []):
+                    if dep.get("relationType") == 3:
+                        dep_id = str(dep.get("modId", "")).strip()
+                        if dep_id:
+                            cf_deps.add(dep_id)
+        mr_version_id = str(mod_toml.get("update", {}).get("modrinth", {}).get("version", "")).strip()
+        if mr_version_id:
+            version_payload = fetch_modrinth_version_by_id(mr_version_id, version_cache)
+            if version_payload:
+                for dep in version_payload.get("dependencies", []):
+                    if str(dep.get("dependency_type", "")).lower() == "required":
+                        dep_id = str(dep.get("project_id", "")).strip()
+                        if dep_id:
+                            mr_deps.add(dep_id)
+        return mod_toml.get("name", item), cf_deps, mr_deps
+
+    completed = 0
+    with ThreadPoolExecutor(max_workers=16) as executor:
+        futures = {executor.submit(_fetch_deps, item, mod_toml): None for item, mod_toml in active_mods}
+        for future in as_completed(futures):
+            completed += 1
+            mod_name, cf_deps, mr_deps = future.result()
+            required_cf_ids.update(cf_deps)
+            required_mr_ids.update(mr_deps)
+            print(f"[LibScan] [{completed}/{total}] {mod_name}", flush=True)
+
+    # Find active mods that are not depended on by anything and are classified as libraries.
+    candidates = [
+        (item, mod_toml) for item, mod_toml in active_mods
+        if str(mod_toml.get("update", {}).get("curseforge", {}).get("project-id", "")).strip() not in required_cf_ids
+        and str(mod_toml.get("update", {}).get("modrinth", {}).get("mod-id", "")).strip() not in required_mr_ids
+    ]
+    num_candidates = len(candidates)
+    print(f"\n[LibScan] Step 2: Checking {num_candidates} mods with no dependants for library classification...", flush=True)
+    mr_project_info_cache = {}
+    cf_project_info_cache = {}
+    orphaned_libraries = []
+
+    def _classify(item, mod_toml):
+        mod_name = mod_toml.get("name", item)
+        is_lib = is_mod_classified_as_library(mod_toml, mr_project_info_cache, cf_project_info_cache)
+        return item, mod_name, is_lib
+
+    completed2 = 0
+    with ThreadPoolExecutor(max_workers=16) as executor:
+        futures2 = {executor.submit(_classify, item, mod_toml): None for item, mod_toml in candidates}
+        for future in as_completed(futures2):
+            completed2 += 1
+            item, mod_name, is_lib = future.result()
+            print(f"[LibScan] [{completed2}/{num_candidates}] Checking {mod_name}...", flush=True)
+            if is_lib:
+                orphaned_libraries.append((mod_name, item))
+
+    if not orphaned_libraries:
+        print("[LibScan] No orphaned library mods found.")
+        os.chdir(packwiz_path)
+        return
+
+    print(f"\n[LibScan] Found {len(orphaned_libraries)} orphaned library mod(s):")
+    for i, (mod_name, _) in enumerate(orphaned_libraries, 1):
+        print(f"  {i}) {mod_name}")
+
+    print()
+    choice = input("Remove all [A], select individually [S], or cancel [Enter]: ").strip().lower()
+    if not choice:
+        print("[LibScan] Cancelled.")
+        os.chdir(packwiz_path)
+        return
+
+    to_remove = []
+    if choice == "a":
+        to_remove = list(orphaned_libraries)
+    elif choice == "s":
+        for mod_name, item in orphaned_libraries:
+            ans = input(f"  Remove {mod_name}? [y/N]: ").strip().lower()
+            if ans in ("y", "yes"):
+                to_remove.append((mod_name, item))
+
+    if not to_remove:
+        print("[LibScan] Nothing to remove.")
+        os.chdir(packwiz_path)
+        return
+
+    os.chdir(packwiz_path)
+    removed = []
+    for mod_name, item in to_remove:
+        result = subprocess.call(
+            f'{packwiz_exe_path} remove "mods/{item}"',
+            shell=True,
+            cwd=packwiz_path,
+        )
+        if result == 0:
+            removed.append(mod_name)
+            print(f"[LibScan] Removed: {mod_name}", flush=True)
+        else:
+            print(f"[LibScan] Failed to remove: {mod_name}")
+
+    if removed:
+        subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
+        print(f"[LibScan] Removed {len(removed)} orphaned library mod(s).")
 
 
 def add_mod_via_prompt():
@@ -1629,6 +1777,7 @@ def has_special_menu_action_selected(settings):
             settings.generate_update_summary_only,
             settings.list_disabled_mods_only,
             settings.add_mod_only,
+            settings.find_orphaned_libraries_only,
         ]
     )
 
@@ -1647,6 +1796,8 @@ def run_special_menu_action(settings):
         list_disabled_mods()
     elif settings.add_mod_only:
         add_mod_via_prompt()
+    elif settings.find_orphaned_libraries_only:
+        find_and_remove_orphaned_library_mods()
     elif settings.update_mods_only:
         previous_snapshot = snapshot_mod_toml_content()
         subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
