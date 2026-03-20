@@ -1160,16 +1160,28 @@ def disable_incompatible_mods(target_minecraft_version, mod_loader):
     curseforge_file_cache = {}
     curseforge_project_files_cache = {}
     os.chdir(mods_path)
-    for item in sorted(os.listdir()):
+    toml_files = [f for f in sorted(os.listdir()) if os.path.isfile(os.path.join(mods_path, f)) and f.endswith(".toml")]
+    active_toml_files = []
+    for f in toml_files:
+        try:
+            with open(os.path.join(mods_path, f), "r", encoding="utf8") as fh:
+                t = toml.load(fh)
+            if "disabled" not in str(t.get("side", "both")):
+                active_toml_files.append(f)
+        except Exception:
+            pass
+    print(f"[Migration] Checking {len(active_toml_files)} active mods for compatibility with {target_minecraft_version} ({mod_loader})...", flush=True)
+    for i, item in enumerate(active_toml_files, 1):
         item_path = os.path.join(mods_path, item)
-        if not os.path.isfile(item_path) or not item.endswith(".toml"):
-            continue
         try:
             with open(item_path, "r", encoding="utf8") as f:
                 mod_toml = toml.load(f)
             side_value = str(mod_toml.get("side", "both"))
             if "disabled" in side_value:
                 continue
+
+            mod_name = mod_toml.get("name", item)
+            print(f"[Migration] [{i}/{len(active_toml_files)}] Checking {mod_name}...", flush=True)
 
             compatibility, compatibility_source = determine_mod_target_compatibility(
                 mod_toml,
@@ -1188,6 +1200,7 @@ def disable_incompatible_mods(target_minecraft_version, mod_loader):
             if compatible:
                 continue
 
+            print(f"[Migration]   -> Incompatible ({compatibility_source}), attempting replacement...", flush=True)
             replacement_applied, replacement_details = try_find_replacement_for_incompatible_mod(
                 item=item,
                 item_path=item_path,
@@ -1200,13 +1213,15 @@ def disable_incompatible_mods(target_minecraft_version, mod_loader):
                 curseforge_project_files_cache=curseforge_project_files_cache,
             )
             if replacement_applied:
-                replaced_mods.append(f"{mod_toml.get('name', item)} -> {replacement_details}")
+                replaced_mods.append(f"{mod_name} -> {replacement_details}")
+                print(f"[Migration]   -> Replaced via {replacement_details}", flush=True)
                 continue
 
             mod_toml["side"] = normalize_disabled_side(side_value)
             with open(item_path, "w", encoding="utf8") as f:
                 toml.dump(mod_toml, f)
-            disabled_mods.append(f"{mod_toml.get('name', item)} ({compatibility_source})")
+            disabled_mods.append(f"{mod_name} ({compatibility_source})")
+            print(f"[Migration]   -> Disabled", flush=True)
         except Exception as ex:
             print(f"[Migration] Failed to process '{item}': {ex}")
 
