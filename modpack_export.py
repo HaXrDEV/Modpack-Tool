@@ -628,8 +628,9 @@ def find_and_remove_orphaned_library_mods():
     os.chdir(packwiz_path)
     removed = []
     for mod_name, item in to_remove:
+        slug = re.sub(r"\.pw\.toml$", "", item, flags=re.IGNORECASE)
         result = subprocess.call(
-            f'{packwiz_exe_path} remove "mods/{item}"',
+            f'{packwiz_exe_path} remove "{slug}"',
             shell=True,
             cwd=packwiz_path,
         )
