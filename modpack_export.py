@@ -2095,8 +2095,14 @@ if __name__ == "__main__":
                 print("No action selected. Exiting.")
                 break
             print("")
-            main()
-            input("\nWorkflow complete. Press Enter to return to the menu...")
+            try:
+                main()
+                input("\nWorkflow complete. Press Enter to return to the menu...")
+            except KeyboardInterrupt:
+                raise
+            except Exception as e:
+                print(f"\n[ERROR] Workflow crashed: {e}")
+                input("Press Enter to return to the menu...")
     except KeyboardInterrupt:
         print("Operation aborted by user.")
         exit(-1)
