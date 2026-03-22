@@ -627,7 +627,7 @@ def find_and_remove_orphaned_library_mods():
     removed = []
     for mod_name, item in to_remove:
         try:
-            pack_manager.remove_mod(packwiz_path, mods_path, item)
+            pack_manager.remove_mod(packwiz_exe_path, packwiz_path, mods_path, item)
             removed.append(mod_name)
             print(f"[LibScan] Removed: {mod_name}", flush=True)
         except Exception as ex:
@@ -668,11 +668,11 @@ def add_mod_via_prompt():
 
     try:
         if source == "modrinth":
-            pack_manager.add_mod_from_modrinth(packwiz_path, mods_path, add_value, minecraft_version, active_mod_loader, settings)
+            pack_manager.add_mod_from_modrinth(packwiz_exe_path, packwiz_path, add_value)
         elif source == "curseforge":
-            pack_manager.add_mod_from_curseforge(packwiz_path, mods_path, add_value, minecraft_version, active_mod_loader, settings)
+            pack_manager.add_mod_from_curseforge(packwiz_exe_path, packwiz_path, add_value)
         elif source == "url":
-            pack_manager.add_mod_from_url(packwiz_path, mods_path, add_value, settings)
+            pack_manager.add_mod_from_url(packwiz_exe_path, packwiz_path, mods_path, add_value)
     except Exception as ex:
         print(f"[PackWiz] Add command failed: {ex}")
         return False
@@ -1163,11 +1163,8 @@ def attempt_packwiz_targeted_mod_update(item, mod_toml):
         Tuple (success: bool, identifier: str) where identifier is the mod name on success.
     """
     item_path = os.path.join(mods_path, item)
-    caches = {"project_versions": {}, "project_files": {}}
     try:
-        success = pack_manager.update_single_mod(
-            item_path, mod_toml, minecraft_version, active_mod_loader, settings, caches
-        )
+        success = pack_manager.update_single_mod(packwiz_exe_path, packwiz_path, item_path)
     except Exception:
         success = False
     if success:
@@ -1423,11 +1420,11 @@ def migrate_minecraft_version(
         toml.dump(local_pack_toml, f)
 
     print("[Migration] Running refresh...", flush=True)
-    pack_manager.refresh_index(packwiz_path)
+    pack_manager.refresh_index(packwiz_exe_path, packwiz_path)
     if update_all_mods:
         previous_snapshot = snapshot_mod_toml_content()
         print("[Migration] Updating all mods (this can take a while)...", flush=True)
-        pack_manager.update_all_mods(packwiz_path, mods_path, target_minecraft_version, resolved_target_loader, settings)
+        pack_manager.update_all_mods(packwiz_exe_path, packwiz_path, mods_path)
         enforce_release_channel_policy(previous_snapshot, log_prefix="[Migration]")
 
     disabled_mods = []
@@ -1450,7 +1447,7 @@ def migrate_minecraft_version(
             compatibility_loader = resolved_target_loader
         disabled_mods = disable_incompatible_mods(target_minecraft_version, compatibility_loader)
         print("[Migration] Running refresh...", flush=True)
-        pack_manager.refresh_index(packwiz_path)
+        pack_manager.refresh_index(packwiz_exe_path, packwiz_path)
 
     print(
         f"[Migration] Minecraft {current_minecraft} -> {target_minecraft_version}"
@@ -1753,7 +1750,7 @@ def run_special_menu_action(settings):
         clear_stored_repository_data()
     elif settings.bump_version_only:
         bump_modpack_version(settings.bump_target_version)
-        pack_manager.refresh_index(packwiz_path)
+        pack_manager.refresh_index(packwiz_exe_path, packwiz_path)
     elif settings.generate_update_summary_only:
         download_missing_comparison_files()
         run_changelog_auto_generation()
@@ -1765,7 +1762,7 @@ def run_special_menu_action(settings):
         find_and_remove_orphaned_library_mods()
     elif settings.update_mods_only:
         previous_snapshot = snapshot_mod_toml_content()
-        pack_manager.refresh_index(packwiz_path)
+        pack_manager.refresh_index(packwiz_exe_path, packwiz_path)
 
         pinned_updates = find_pinned_mods_with_available_updates()
         temp_unpinned_mod_files = []
@@ -1775,15 +1772,15 @@ def run_special_menu_action(settings):
             if selected_pinned_mod_files:
                 temp_unpinned_mod_files = set_pin_state_for_mod_files(selected_pinned_mod_files, should_pin=False)
                 if temp_unpinned_mod_files:
-                    pack_manager.refresh_index(packwiz_path)
+                    pack_manager.refresh_index(packwiz_exe_path, packwiz_path)
 
         try:
-            pack_manager.update_all_mods(packwiz_path, mods_path, minecraft_version, active_mod_loader, settings)
+            pack_manager.update_all_mods(packwiz_exe_path, packwiz_path, mods_path)
         finally:
             if temp_unpinned_mod_files:
                 repinned_mod_files = set_pin_state_for_mod_files(temp_unpinned_mod_files, should_pin=True)
                 if repinned_mod_files:
-                    pack_manager.refresh_index(packwiz_path)
+                    pack_manager.refresh_index(packwiz_exe_path, packwiz_path)
                     print(f"[PackWiz] Re-pinned {len(repinned_mod_files)} pinned mods after update.")
 
         enforce_release_channel_policy(
@@ -1791,7 +1788,7 @@ def run_special_menu_action(settings):
             log_prefix="[Update]",
             allowed_alpha_mod_files=allowed_alpha_mod_files,
         )
-        pack_manager.refresh_index(packwiz_path)
+        pack_manager.refresh_index(packwiz_exe_path, packwiz_path)
         print("[PackWiz] Mods updated.")
 
         updated_disabled_mods = find_updated_disabled_mods(previous_snapshot)
@@ -1800,10 +1797,10 @@ def run_special_menu_action(settings):
             print("[PackWiz] Updated mods that are still disabled: " + ", ".join(updated_disabled_names))
             if input("Enable these updated disabled mods? [N]: ") in ("y", "Y", "yes", "Yes"):
                 enabled_mods = enable_mods_by_files([mod_file for mod_file, _ in updated_disabled_mods])
-                pack_manager.refresh_index(packwiz_path)
+                pack_manager.refresh_index(packwiz_exe_path, packwiz_path)
                 print(f"[PackWiz] Re-enabled {len(enabled_mods)} updated disabled mods.")
     elif settings.refresh_only:
-        pack_manager.refresh_index(packwiz_path)
+        pack_manager.refresh_index(packwiz_exe_path, packwiz_path)
 
 
 def run_release_notes_generation(settings):
@@ -2048,7 +2045,7 @@ def main():
         # Export client pack. (CurseForge with pack_manager)
         #----------------------------------------
         os.chdir(packwiz_path)
-        pack_manager.refresh_index(packwiz_path)
+        pack_manager.refresh_index(packwiz_exe_path, packwiz_path)
 
         if settings.export_client and not settings.client_export_multi_platform:
             fmt = str(settings.client_export_format or "curseforge").strip().lower()
@@ -2078,7 +2075,7 @@ def main():
             print("Temp folder cleanup finished.")
 
         os.chdir(packwiz_path)
-        pack_manager.refresh_index(packwiz_path)
+        pack_manager.refresh_index(packwiz_exe_path, packwiz_path)
 
     else:
         run_special_menu_action(settings)

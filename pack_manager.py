@@ -1,32 +1,21 @@
-"""Pack manager — packwiz-independent implementations of refresh, update, remove, add, and export."""
+"""Pack manager — native export implementations; packwiz CLI delegation for refresh, update, and add."""
 
 import hashlib
 import json
 import os
 import re
-import threading
+import subprocess
 import urllib.parse
 import zipfile
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
 import toml
 
 from api_clients import (
-    CURSEFORGE_API_BASE,
     _compute_cf_fingerprint,
-    _evaluate_curseforge_file_compatibility,
-    _get_curseforge_project_files,
-    apply_modrinth_version_to_mod_toml,
     fetch_cf_fingerprints_batch,
     fetch_curseforge_download_url,
-    fetch_curseforge_project_info,
-    fetch_modrinth_project_info,
-    fetch_modrinth_project_versions,
-    infer_release_channel_from_metadata,
-    normalize_mod_loader_name,
-    select_latest_allowed_modrinth_version,
-    select_modrinth_primary_file,
 )
 
 
@@ -34,65 +23,18 @@ from api_clients import (
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _sha256_file(path):
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(65536), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def _load_packwizignore_rules(packwiz_path):
-    """Return list of non-blank, non-comment lines from .packwizignore."""
-    ignore_path = os.path.join(packwiz_path, ".packwizignore")
-    if not os.path.isfile(ignore_path):
-        return []
-    rules = []
-    with open(ignore_path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.rstrip("\n\r")
-            if line and not line.startswith("#"):
-                rules.append(line)
-    return rules
-
-
-def _is_ignored(rel_path, rules):
-    """Return True if rel_path (forward-slash, relative to packwiz root) matches any ignore rule.
-
-    Implements the gitignore-format subset used by .packwizignore:
-    - Leading ``/`` = anchored to packwiz root.
-    - Trailing ``/*`` = all entries directly inside that directory.
-    - Otherwise treated as a literal path prefix/suffix check.
-    """
-    for rule in rules:
-        anchored = rule.startswith("/")
-        pattern = rule[1:] if anchored else rule
-
-        if pattern.endswith("/*"):
-            # Match everything inside the directory
-            dir_prefix = pattern[:-1]  # strip the trailing *
-            if anchored:
-                if rel_path.startswith(dir_prefix):
-                    return True
-            else:
-                # non-anchored: match anywhere in tree
-                if ("/" + dir_prefix) in ("/" + rel_path) or rel_path.startswith(dir_prefix):
-                    return True
-        else:
-            # Literal path: exact match OR the path is inside this directory
-            if anchored:
-                if rel_path == pattern or rel_path.startswith(pattern + "/") or rel_path.startswith(pattern):
-                    return True
-            else:
-                if rel_path == pattern or rel_path.endswith("/" + pattern):
-                    return True
-    return False
-
 
 def _write_mod_toml(item_path, mod_toml):
     """Write mod_toml dict to item_path using toml.dump."""
     with open(item_path, "w", encoding="utf-8") as f:
         toml.dump(mod_toml, f)
+
+
+def _print_packwiz(text):
+    """Print each non-empty line from packwiz output with a [PackWiz] prefix."""
+    for line in text.splitlines():
+        if line.strip():
+            print(f"[PackWiz] {line}", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +72,7 @@ def run_packwiz_export(packwiz_exe, packwiz_path, export_format="curseforge"):
         capture_output=True,
         text=True,
     )
+    _print_packwiz(result.stdout)
     if result.returncode != 0:
         raise RuntimeError(
             f"packwiz {export_format} export failed:\n{result.stderr.strip()}"
@@ -151,71 +94,33 @@ def run_packwiz_export(packwiz_exe, packwiz_path, export_format="curseforge"):
 # refresh_index
 # ---------------------------------------------------------------------------
 
-def refresh_index(packwiz_path):
-    """Rebuild index.toml and update pack.toml's index hash.
-
-    Walks the packwiz directory, applies .packwizignore rules, computes SHA-256
-    for every tracked file, writes index.toml, then updates pack.toml with the
-    new index hash.
+def refresh_index(packwiz_exe, packwiz_path):
+    """Rebuild the packwiz index by delegating to 'packwiz refresh'.
 
     Args:
+        packwiz_exe: Absolute path to the packwiz executable.
         packwiz_path: Absolute path to the packwiz directory (contains pack.toml).
     """
-    rules = _load_packwizignore_rules(packwiz_path)
-    entries = []  # list of (rel_path, is_metafile, full_path)
-
-    _skip_always = {"pack.toml", "index.toml", ".packwizignore"}
-
-    for dirpath, dirnames, filenames in os.walk(packwiz_path):
-        # Skip hidden directories (e.g. .git)
-        dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
-        for filename in sorted(filenames):
-            full_path = os.path.join(dirpath, filename)
-            rel_path = os.path.relpath(full_path, packwiz_path).replace("\\", "/")
-
-            if rel_path in _skip_always:
-                continue
-            if _is_ignored(rel_path, rules):
-                continue
-
-            is_metafile = rel_path.lower().endswith(".pw.toml")
-            entries.append((rel_path, is_metafile, full_path))
-
-    # Sort alphabetically (case-insensitive, forward-slash paths)
-    entries.sort(key=lambda x: x[0].lower())
-
-    # Write index.toml
-    index_path = os.path.join(packwiz_path, "index.toml")
-    with open(index_path, "w", encoding="utf-8", newline="\n") as f:
-        f.write('hash-format = "sha256"\n')
-        for rel_path, is_metafile, full_path in entries:
-            file_hash = _sha256_file(full_path)
-            f.write("\n[[files]]\n")
-            f.write(f'file = "{rel_path}"\n')
-            f.write(f'hash = "{file_hash}"\n')
-            if is_metafile:
-                f.write("metafile = true\n")
-
-    print(f"[Refresh] Indexed {len(entries)} file(s).", flush=True)
-
-    # Update pack.toml with new index hash
-    index_hash = _sha256_file(index_path)
-    pack_toml_path = os.path.join(packwiz_path, "pack.toml")
-    with open(pack_toml_path, "r", encoding="utf-8") as f:
-        pack_data = toml.load(f)
-    pack_data.setdefault("index", {})["hash"] = index_hash
-    with open(pack_toml_path, "w", encoding="utf-8") as f:
-        toml.dump(pack_data, f)
+    result = subprocess.run(
+        [packwiz_exe, "refresh"],
+        cwd=packwiz_path,
+        capture_output=True,
+        text=True,
+    )
+    _print_packwiz(result.stdout)
+    if result.returncode != 0:
+        raise RuntimeError(f"packwiz refresh failed:\n{result.stderr.strip()}")
 
 
 # ---------------------------------------------------------------------------
 # remove_mod
 # ---------------------------------------------------------------------------
 
-def remove_mod(packwiz_path, mods_path, slug):
+def remove_mod(packwiz_exe, packwiz_path, mods_path, slug):
     """Delete a mod's .pw.toml file and refresh the index.
 
     Args:
+        packwiz_exe: Absolute path to the packwiz executable.
         packwiz_path: Absolute path to the packwiz directory.
         mods_path: Absolute path to the mods subdirectory.
         slug: Mod slug (with or without .pw.toml extension).
@@ -228,352 +133,125 @@ def remove_mod(packwiz_path, mods_path, slug):
     if not os.path.isfile(toml_path):
         raise FileNotFoundError(f"Mod file not found: {toml_path}")
     os.remove(toml_path)
-    refresh_index(packwiz_path)
+    refresh_index(packwiz_exe, packwiz_path)
 
 
 # ---------------------------------------------------------------------------
 # update_single_mod
 # ---------------------------------------------------------------------------
 
-def update_single_mod(item_path, mod_toml, mc_version, loader, settings, caches):
-    """Update a single mod to its latest compatible version.
-
-    Tries Modrinth first (if the mod has a Modrinth update section), then
-    CurseForge. Writes the updated TOML back to disk on success.
+def update_single_mod(packwiz_exe, packwiz_path, item_path):
+    """Update a single mod via 'packwiz update <slug> -y'.
 
     Args:
+        packwiz_exe: Absolute path to the packwiz executable.
+        packwiz_path: Absolute path to the packwiz directory.
         item_path: Absolute path to the .pw.toml file.
-        mod_toml: Parsed TOML dict (mutated in-place on success).
-        mc_version: Target Minecraft version string (e.g. "1.21.1").
-        loader: Mod loader name (e.g. "fabric").
-        settings: Settings instance (used for alpha update policy).
-        caches: Dict with ``"project_versions"`` and ``"project_files"`` sub-dicts.
 
     Returns:
-        True if the mod was updated and item_path was rewritten, False otherwise.
+        True if packwiz exited successfully, False otherwise.
     """
-    mr_info = mod_toml.get("update", {}).get("modrinth", {})
-    cf_info = mod_toml.get("update", {}).get("curseforge", {})
-
-    # --- Dual-platform: find the latest version available on BOTH platforms ---
-    if mr_info.get("mod-id") and cf_info.get("project-id"):
-        mr_versions = fetch_modrinth_project_versions(
-            mr_info["mod-id"],
-            [str(mc_version)],
-            [normalize_mod_loader_name(loader, default="fabric")],
-            caches["project_versions"],
-        )
-        cf_files = _get_curseforge_project_files(
-            str(cf_info["project-id"]), mc_version, caches["project_files"]
-        )
-        cf_by_filename = {
-            f.get("fileName"): f for f in cf_files
-            if _evaluate_curseforge_file_compatibility(f, mc_version, loader) is not False
-        }
-        for mr_version in mr_versions:
-            primary = select_modrinth_primary_file(mr_version)
-            if not primary:
-                continue
-            cf_file = cf_by_filename.get(primary.get("filename"))
-            if cf_file is None:
-                continue
-            # Check if already up to date on both
-            if (str(mr_version.get("id", "")) == str(mr_info.get("version", "")) and
-                    int(cf_file.get("id", 0)) == int(cf_info.get("file-id", 0))):
-                return False
-            if not apply_modrinth_version_to_mod_toml(mod_toml, mr_version):
-                continue
-            sha1 = next(
-                (h["value"] for h in cf_file.get("hashes", []) if h.get("algo") == 1), None
-            )
-            if sha1:
-                mod_toml["update"]["curseforge"]["file-id"] = int(cf_file["id"])
-            _write_mod_toml(item_path, mod_toml)
-            return True
-        return False
-
-    # --- Modrinth (single-platform) ---
-    if mr_info.get("mod-id"):
-        current_channel = infer_release_channel_from_metadata(mod_toml)
-        version_payload = select_latest_allowed_modrinth_version(
-            project_id=mr_info["mod-id"],
-            current_channel=current_channel,
-            game_versions=[str(mc_version)],
-            loaders=[normalize_mod_loader_name(loader, default="fabric")],
-            project_versions_cache=caches["project_versions"],
-        )
-        if not version_payload:
-            return False
-        # Skip write if already on this version
-        if str(version_payload.get("id", "")) == str(mr_info.get("version", "")):
-            return False
-        if apply_modrinth_version_to_mod_toml(mod_toml, version_payload):
-            _write_mod_toml(item_path, mod_toml)
-            return True
-        return False
-
-    # --- CurseForge (single-platform) ---
-    if cf_info.get("project-id"):
-        files = _get_curseforge_project_files(
-            str(cf_info["project-id"]), mc_version, caches["project_files"]
-        )
-        compatible = [
-            f for f in files
-            if _evaluate_curseforge_file_compatibility(f, mc_version, loader) is not False
-        ]
-        if not compatible:
-            return False
-        best = max(compatible, key=lambda f: int(f.get("id", 0)))
-        # Skip write if already on this file
-        if int(best["id"]) == int(cf_info.get("file-id", 0)):
-            return False
-        sha1 = next(
-            (h["value"] for h in best.get("hashes", []) if h.get("algo") == 1), None
-        )
-        if not sha1:
-            return False
-        mod_toml["filename"] = best.get("fileName", mod_toml.get("filename", ""))
-        mod_toml.setdefault("download", {})["hash-format"] = "sha1"
-        mod_toml["download"]["hash"] = sha1
-        mod_toml.setdefault("update", {}).setdefault("curseforge", {})["file-id"] = int(best["id"])
-        _write_mod_toml(item_path, mod_toml)
-        return True
-
-    return False
+    slug = os.path.basename(item_path)
+    if slug.endswith(".pw.toml"):
+        slug = slug[:-len(".pw.toml")]
+    result = subprocess.run(
+        [packwiz_exe, "update", slug, "-y"],
+        cwd=packwiz_path,
+        capture_output=True,
+        text=True,
+    )
+    _print_packwiz(result.stdout)
+    return result.returncode == 0
 
 
 # ---------------------------------------------------------------------------
 # update_all_mods
 # ---------------------------------------------------------------------------
 
-def update_all_mods(packwiz_path, mods_path, mc_version, loader, settings):
-    """Update all non-pinned mods to their latest compatible versions.
-
-    Iterates all .pw.toml files in mods_path, skips pinned mods, calls
-    update_single_mod for each, then refreshes the index once at the end.
+def update_all_mods(packwiz_exe, packwiz_path, mods_path):
+    """Update all non-pinned mods via 'packwiz update --all -y'.
 
     Args:
+        packwiz_exe: Absolute path to the packwiz executable.
         packwiz_path: Absolute path to the packwiz directory.
         mods_path: Absolute path to the mods subdirectory.
-        mc_version: Target Minecraft version string.
-        loader: Mod loader name.
-        settings: Settings instance.
-
-    Returns:
-        Number of mods that were successfully updated.
     """
-    files = sorted(f for f in os.listdir(mods_path) if f.endswith(".pw.toml"))
-    # Load all mod TOMLs first, split into pinned vs. to-update
-    to_update = []   # list of (item_path, mod_toml, mod_name)
+    files = [f for f in os.listdir(mods_path) if f.endswith(".pw.toml")]
     pinned_count = 0
-    for filename in files:
-        item_path = os.path.join(mods_path, filename)
+    for f in files:
         try:
-            with open(item_path, "r", encoding="utf-8") as f:
-                mod_toml = toml.load(f)
+            with open(os.path.join(mods_path, f), "r", encoding="utf-8") as fh:
+                if toml.load(fh).get("pin"):
+                    pinned_count += 1
         except Exception:
-            continue
-        mod_name = mod_toml.get("name", filename)
-        if mod_toml.get("pin"):
-            pinned_count += 1
-            continue
-        to_update.append((item_path, mod_toml, mod_name))
-
-    total = len(to_update)
-    print(f"[Update] Checking {total} mod(s) for updates ({pinned_count} pinned, skipped)...", flush=True)
-
-    # Shared caches — dict reads/writes are atomic in CPython; concurrent access is safe
-    shared_caches = {"project_versions": {}, "project_files": {}}
-    print_lock = threading.Lock()
-    completed = [0]
-    updated = [0]
-
-    def _update_one(item_path, mod_toml, mod_name):
-        try:
-            result = update_single_mod(item_path, mod_toml, mc_version, loader, settings, shared_caches)
-        except Exception as ex:
-            result = ex
-        with print_lock:
-            completed[0] += 1
-            idx = completed[0]
-            if isinstance(result, Exception):
-                print(f"[Update] [{idx}/{total}] Failed: {mod_name} — {result}", flush=True)
-            elif result:
-                updated[0] += 1
-                print(f"[Update] [{idx}/{total}] Updated: {mod_name}", flush=True)
-            else:
-                print(f"[Update] [{idx}/{total}] No update: {mod_name}", flush=True)
-
-    with ThreadPoolExecutor(max_workers=total or 1) as executor:
-        futures = [
-            executor.submit(_update_one, item_path, mod_toml, mod_name)
-            for item_path, mod_toml, mod_name in to_update
-        ]
-        for f in as_completed(futures):
-            f.result()  # propagate unexpected exceptions
-
-    print(f"[Update] Done. Updated {updated[0]}/{total} mod(s).", flush=True)
-    refresh_index(packwiz_path)
-    return updated[0]
+            pass
+    print(f"[Update] Updating mods ({pinned_count} pinned, skipped)...", flush=True)
+    result = subprocess.run(
+        [packwiz_exe, "update", "--all", "-y"],
+        cwd=packwiz_path,
+        capture_output=True,
+        text=True,
+    )
+    _print_packwiz(result.stdout)
+    refresh_index(packwiz_exe, packwiz_path)
 
 
 # ---------------------------------------------------------------------------
 # add_mod helpers
 # ---------------------------------------------------------------------------
 
-def add_mod_from_modrinth(packwiz_path, mods_path, identifier, mc_version, loader, settings):
-    """Fetch a Modrinth project by slug/id and create its .pw.toml file.
+def add_mod_from_modrinth(packwiz_exe, packwiz_path, identifier):
+    """Add a Modrinth mod via 'packwiz modrinth add <identifier>'.
 
     Args:
+        packwiz_exe: Absolute path to the packwiz executable.
         packwiz_path: Absolute path to the packwiz directory.
-        mods_path: Absolute path to the mods subdirectory.
         identifier: Modrinth project slug or ID.
-        mc_version: Target Minecraft version string.
-        loader: Mod loader name.
-        settings: Settings instance.
-
-    Returns:
-        Absolute path to the created .pw.toml file.
 
     Raises:
-        ValueError: If the project or a compatible version cannot be found.
-        RuntimeError: If file metadata extraction fails.
+        RuntimeError: If packwiz exits with a non-zero return code.
     """
-    info_cache = {}
-    info = fetch_modrinth_project_info(identifier, info_cache)
-    if not info:
-        raise ValueError(f"Modrinth project not found: {identifier}")
-
-    project_id = info["id"]
-    project_slug = info.get("slug", identifier)
-    mod_name = info.get("title", project_slug)
-
-    client_side = str(info.get("client_side", "required")).lower()
-    server_side = str(info.get("server_side", "required")).lower()
-    if client_side == "unsupported":
-        side = "server"
-    elif server_side == "unsupported":
-        side = "client"
-    else:
-        side = "both"
-
-    version_cache = {}
-    versions = fetch_modrinth_project_versions(
-        project_id,
-        [str(mc_version)],
-        [normalize_mod_loader_name(loader, "fabric")],
-        version_cache,
+    result = subprocess.run(
+        [packwiz_exe, "modrinth", "add", identifier],
+        cwd=packwiz_path,
+        capture_output=True,
+        text=True,
     )
-    if not versions:
-        raise ValueError(
-            f"No compatible Modrinth version found for '{mod_name}' on {mc_version}/{loader}"
-        )
-
-    version_payload = versions[0]
-    mod_toml = {
-        "name": mod_name,
-        "filename": "",
-        "side": side,
-        "download": {},
-        "update": {"modrinth": {"mod-id": project_id}},
-    }
-    if not apply_modrinth_version_to_mod_toml(mod_toml, version_payload):
-        raise RuntimeError(f"Failed to extract file info from Modrinth version for '{mod_name}'")
-
-    out_path = os.path.join(mods_path, project_slug + ".pw.toml")
-    _write_mod_toml(out_path, mod_toml)
-    refresh_index(packwiz_path)
-    print(f"[PackManager] Added from Modrinth: {mod_name}")
-    return out_path
+    _print_packwiz(result.stdout)
+    if result.returncode != 0:
+        raise RuntimeError(f"packwiz modrinth add failed for '{identifier}'")
 
 
-def add_mod_from_curseforge(packwiz_path, mods_path, identifier, mc_version, loader, settings):
-    """Fetch a CurseForge project by ID or slug and create its .pw.toml file.
+def add_mod_from_curseforge(packwiz_exe, packwiz_path, identifier):
+    """Add a CurseForge mod via 'packwiz curseforge add <identifier>'.
 
     Args:
+        packwiz_exe: Absolute path to the packwiz executable.
         packwiz_path: Absolute path to the packwiz directory.
-        mods_path: Absolute path to the mods subdirectory.
-        identifier: CurseForge project ID (numeric) or slug string.
-        mc_version: Target Minecraft version string.
-        loader: Mod loader name.
-        settings: Settings instance.
-
-    Returns:
-        Absolute path to the created .pw.toml file.
+        identifier: CurseForge project ID or slug.
 
     Raises:
-        ValueError: If the project or a compatible file cannot be found.
+        RuntimeError: If packwiz exits with a non-zero return code.
     """
-    info_cache = {}
-    info = fetch_curseforge_project_info(str(identifier), info_cache)
-    if not info:
-        # Try slug search via CF search API
-        resp = requests.get(
-            f"{CURSEFORGE_API_BASE}/mods/search",
-            params={"gameId": 432, "slug": identifier},
-            timeout=20,
-        )
-        resp.raise_for_status()
-        results = (resp.json() or {}).get("data", [])
-        if not results:
-            raise ValueError(f"CurseForge project not found: {identifier}")
-        info = results[0]
-
-    project_id = str(info["id"])
-    mod_name = info.get("name", str(identifier))
-
-    proj_files_cache = {}
-    files = _get_curseforge_project_files(project_id, mc_version, proj_files_cache)
-    compatible = [
-        f for f in files
-        if _evaluate_curseforge_file_compatibility(f, mc_version, loader) is not False
-    ]
-    if not compatible:
-        raise ValueError(
-            f"No compatible CurseForge file found for '{mod_name}' on {mc_version}/{loader}"
-        )
-
-    best = max(compatible, key=lambda f: int(f.get("id", 0)))
-    sha1 = next(
-        (h["value"] for h in best.get("hashes", []) if h.get("algo") == 1), None
+    result = subprocess.run(
+        [packwiz_exe, "curseforge", "add", identifier],
+        cwd=packwiz_path,
+        capture_output=True,
+        text=True,
     )
-    if not sha1:
-        raise ValueError(f"No sha1 hash found for '{mod_name}' file {best.get('id')}")
-
-    slug = re.sub(r"[^a-z0-9\-]", "-", mod_name.lower()).strip("-")
-    slug = re.sub(r"-+", "-", slug)
-
-    mod_toml = {
-        "name": mod_name,
-        "filename": best.get("fileName", ""),
-        "side": "both",
-        "download": {
-            "hash-format": "sha1",
-            "hash": sha1,
-            "mode": "metadata:curseforge",
-        },
-        "update": {
-            "curseforge": {
-                "file-id": int(best["id"]),
-                "project-id": int(project_id),
-            }
-        },
-    }
-    out_path = os.path.join(mods_path, slug + ".pw.toml")
-    _write_mod_toml(out_path, mod_toml)
-    refresh_index(packwiz_path)
-    print(f"[PackManager] Added from CurseForge: {mod_name}")
-    return out_path
+    _print_packwiz(result.stdout)
+    if result.returncode != 0:
+        raise RuntimeError(f"packwiz curseforge add failed for '{identifier}'")
 
 
-def add_mod_from_url(packwiz_path, mods_path, url, settings):
+def add_mod_from_url(packwiz_exe, packwiz_path, mods_path, url):
     """Download a mod from a direct URL and create its .pw.toml file.
 
     Args:
+        packwiz_exe: Absolute path to the packwiz executable.
         packwiz_path: Absolute path to the packwiz directory.
         mods_path: Absolute path to the mods subdirectory.
         url: Direct download URL for the mod jar.
-        settings: Settings instance (unused, kept for consistent signature).
 
     Returns:
         Absolute path to the created .pw.toml file.
@@ -601,7 +279,7 @@ def add_mod_from_url(packwiz_path, mods_path, url, settings):
     }
     out_path = os.path.join(mods_path, slug + ".pw.toml")
     _write_mod_toml(out_path, mod_toml)
-    refresh_index(packwiz_path)
+    refresh_index(packwiz_exe, packwiz_path)
     print(f"[PackManager] Added from URL: {filename}")
     return out_path
 
