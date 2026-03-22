@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional
 
 
@@ -29,7 +29,7 @@ class Settings:
     generate_primary_changelog: bool = False
     # Legacy preset alias. When true, missing modular options are auto-enabled.
     breakneck_fixes: bool = False
-    client_export_use_mmc: bool = False
+    client_export_multi_platform: bool = False
     show_export_mode_notice: bool = False
     changelog_template_use_overview_layout: bool = False
     changelog_include_compare_notice: bool = False
@@ -65,6 +65,7 @@ class Settings:
     migration_target_mod_loader: str = ""
     migration_target_mod_loader_version: str = ""
     migration_mod_loader: str = "fabric"
+    client_export_format: str = "curseforge"
     alpha_update_policy: str = "prompt"
     bump_target_version: str = ""
     auto_summary_provider: str = "ollama"
@@ -104,7 +105,7 @@ def apply_legacy_breakneck_settings(settings_dict: dict):
         return settings_dict
 
     legacy_defaults = {
-        "client_export_use_mmc": True,
+        "client_export_multi_platform": True,
         "show_export_mode_notice": True,
         "changelog_template_use_overview_layout": True,
         "changelog_include_compare_notice": True,
@@ -149,6 +150,14 @@ def load_settings(settings_path: str, yaml_instance) -> "Settings":
     with open(settings_path, "r", encoding="utf-8") as s_file:
         settings_yml = yaml_instance.load(s_file) or {}
     settings_yml = apply_legacy_breakneck_settings(settings_yml)
+    # Backward-compat renames: map old keys to their new names without
+    # overwriting an explicitly set new key.
+    _legacy_renames = {
+        "client_export_use_mmc": "client_export_multi_platform",
+    }
+    for old_key, new_key in _legacy_renames.items():
+        if old_key in settings_yml and new_key not in settings_yml:
+            settings_yml[new_key] = settings_yml.pop(old_key)
     s = Settings()
     update_settings_from_dict(s, settings_yml)
     return s

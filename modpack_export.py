@@ -6,14 +6,10 @@ launch_message = """
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀"""
 
 import os
-import sys
 import json
 import re
-import subprocess
-import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from shutil import rmtree, make_archive, move, copytree
-from pathlib import Path
 
 import toml  # pip install toml
 # import yaml  # REMOVE PyYAML
@@ -27,6 +23,8 @@ import requests
 
 # Settings
 from settings import Settings, load_settings
+from api_clients import configure_curseforge_api_key
+import pack_manager
 from api_clients import (
     SUPPORTED_MOD_LOADERS,
     MOD_LOADER_LABELS,
@@ -628,20 +626,14 @@ def find_and_remove_orphaned_library_mods():
     os.chdir(packwiz_path)
     removed = []
     for mod_name, item in to_remove:
-        slug = re.sub(r"\.pw\.toml$", "", item, flags=re.IGNORECASE)
-        result = subprocess.call(
-            f'{packwiz_exe_path} remove "{slug}"',
-            shell=True,
-            cwd=packwiz_path,
-        )
-        if result == 0:
+        try:
+            pack_manager.remove_mod(packwiz_path, mods_path, item)
             removed.append(mod_name)
             print(f"[LibScan] Removed: {mod_name}", flush=True)
-        else:
-            print(f"[LibScan] Failed to remove: {mod_name}")
+        except Exception as ex:
+            print(f"[LibScan] Failed to remove {mod_name}: {ex}")
 
     if removed:
-        subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
         print(f"[LibScan] Removed {len(removed)} orphaned library mod(s).")
 
 
@@ -674,14 +666,17 @@ def add_mod_via_prompt():
         print("[PackWiz] No value provided. Skipping add.")
         return False
 
-    os.chdir(packwiz_path)
-    cmd = f'{packwiz_exe_path} {source} add "{add_value}"'
-    result = subprocess.call(cmd, shell=True)
-    if result != 0:
-        print(f"[PackWiz] Add command failed with exit code {result}.")
+    try:
+        if source == "modrinth":
+            pack_manager.add_mod_from_modrinth(packwiz_path, mods_path, add_value, minecraft_version, active_mod_loader, settings)
+        elif source == "curseforge":
+            pack_manager.add_mod_from_curseforge(packwiz_path, mods_path, add_value, minecraft_version, active_mod_loader, settings)
+        elif source == "url":
+            pack_manager.add_mod_from_url(packwiz_path, mods_path, add_value, settings)
+    except Exception as ex:
+        print(f"[PackWiz] Add command failed: {ex}")
         return False
 
-    subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
     print(f"[PackWiz] Added from {source}: {add_value}")
     return True
 
@@ -715,22 +710,6 @@ def is_version_in_range(input_version, min_version=None, max_version=None, inclu
         return True
     except InvalidVersion as e:
         raise ValueError(f"Invalid version provided: {e}")
-
-
-def clear_mmc_cache(path):
-    """Delete all files and directories under path except packwiz-installer.jar."""
-    os.chdir(path)
-    retain = ["packwiz-installer.jar"]
-    for item in os.listdir(os.getcwd()):
-        if item not in retain:
-            try:
-                os.remove(item)
-            except OSError:
-                pass
-            try:
-                rmtree(item)
-            except OSError:
-                pass
 
 
 def resolve_comparison_packwiz_root(input_version, tag_mc_ver):
@@ -1174,47 +1153,25 @@ def set_pin_state_for_mod_files(mod_files, should_pin):
 
 
 def attempt_packwiz_targeted_mod_update(item, mod_toml):
-    """Try to update a single mod via packwiz using several candidate identifiers.
+    """Try to update a single mod to its latest compatible version.
 
     Args:
         item: The .toml filename (e.g. "sodium.pw.toml").
-        mod_toml: Parsed TOML dict for the mod.
+        mod_toml: Parsed TOML dict for the mod (mutated in-place on success).
 
     Returns:
-        Tuple (success: bool, identifier: str) where identifier is the one that worked.
+        Tuple (success: bool, identifier: str) where identifier is the mod name on success.
     """
-    candidate_identifiers = []
-    mod_name = str(mod_toml.get("name", "")).strip()
-    if mod_name:
-        candidate_identifiers.append(mod_name)
-
-    item_base = re.sub(r"\.pw\.toml$", "", str(item), flags=re.IGNORECASE).strip()
-    if item_base:
-        candidate_identifiers.append(item_base)
-
-    candidate_identifiers.append(f"mods/{item}")
-
-    seen = set()
-    ordered_identifiers = []
-    for identifier in candidate_identifiers:
-        key = str(identifier).strip().lower()
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        ordered_identifiers.append(str(identifier).strip())
-
-    for identifier in ordered_identifiers:
-        command = f'{packwiz_exe_path} update "{identifier}" -y'
-        exit_code = subprocess.call(
-            command,
-            shell=True,
-            cwd=packwiz_path,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+    item_path = os.path.join(mods_path, item)
+    caches = {"project_versions": {}, "project_files": {}}
+    try:
+        success = pack_manager.update_single_mod(
+            item_path, mod_toml, minecraft_version, active_mod_loader, settings, caches
         )
-        if exit_code == 0:
-            return True, identifier
-
+    except Exception:
+        success = False
+    if success:
+        return True, str(mod_toml.get("name", item))
     return False, ""
 
 
@@ -1465,15 +1422,13 @@ def migrate_minecraft_version(
     with open(packwiz_manifest, "w", encoding="utf8") as f:
         toml.dump(local_pack_toml, f)
 
-    print("[Migration] Running packwiz refresh...", flush=True)
-    subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
+    print("[Migration] Running refresh...", flush=True)
+    pack_manager.refresh_index(packwiz_path)
     if update_all_mods:
         previous_snapshot = snapshot_mod_toml_content()
-        print("[Migration] Running packwiz update --all -y (this can take a while)...", flush=True)
-        subprocess.call(f"{packwiz_exe_path} update --all -y", shell=True)
+        print("[Migration] Updating all mods (this can take a while)...", flush=True)
+        pack_manager.update_all_mods(packwiz_path, mods_path, target_minecraft_version, resolved_target_loader, settings)
         enforce_release_channel_policy(previous_snapshot, log_prefix="[Migration]")
-        print("[Migration] Running packwiz refresh...", flush=True)
-        subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
 
     disabled_mods = []
     if disable_outdated_mods:
@@ -1494,8 +1449,8 @@ def migrate_minecraft_version(
         else:
             compatibility_loader = resolved_target_loader
         disabled_mods = disable_incompatible_mods(target_minecraft_version, compatibility_loader)
-        print("[Migration] Running packwiz refresh...", flush=True)
-        subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
+        print("[Migration] Running refresh...", flush=True)
+        pack_manager.refresh_index(packwiz_path)
 
     print(
         f"[Migration] Minecraft {current_minecraft} -> {target_minecraft_version}"
@@ -1749,6 +1704,15 @@ Press Enter to continue...""")
 # Load settings.yml with ruamel (instead of yaml.safe_load)
 settings = load_settings(settings_path, yaml)
 
+# Load CurseForge API key from cf-api-key.txt if present (gitignored).
+# Falls back to the packwiz community default key when the file is absent.
+_cf_key_path = os.path.join(os.path.dirname(script_path), "cf-api-key.txt")
+try:
+    with open(_cf_key_path, "r", encoding="utf-8") as _f:
+        configure_curseforge_api_key(_f.read().strip())
+except FileNotFoundError:
+    pass
+
 ############################################################
 # Print Stuff
 
@@ -1789,7 +1753,7 @@ def run_special_menu_action(settings):
         clear_stored_repository_data()
     elif settings.bump_version_only:
         bump_modpack_version(settings.bump_target_version)
-        subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
+        pack_manager.refresh_index(packwiz_path)
     elif settings.generate_update_summary_only:
         download_missing_comparison_files()
         run_changelog_auto_generation()
@@ -1801,7 +1765,7 @@ def run_special_menu_action(settings):
         find_and_remove_orphaned_library_mods()
     elif settings.update_mods_only:
         previous_snapshot = snapshot_mod_toml_content()
-        subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
+        pack_manager.refresh_index(packwiz_path)
 
         pinned_updates = find_pinned_mods_with_available_updates()
         temp_unpinned_mod_files = []
@@ -1811,15 +1775,15 @@ def run_special_menu_action(settings):
             if selected_pinned_mod_files:
                 temp_unpinned_mod_files = set_pin_state_for_mod_files(selected_pinned_mod_files, should_pin=False)
                 if temp_unpinned_mod_files:
-                    subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
+                    pack_manager.refresh_index(packwiz_path)
 
         try:
-            subprocess.call(f"{packwiz_exe_path} update --all -y", shell=True)
+            pack_manager.update_all_mods(packwiz_path, mods_path, minecraft_version, active_mod_loader, settings)
         finally:
             if temp_unpinned_mod_files:
                 repinned_mod_files = set_pin_state_for_mod_files(temp_unpinned_mod_files, should_pin=True)
                 if repinned_mod_files:
-                    subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
+                    pack_manager.refresh_index(packwiz_path)
                     print(f"[PackWiz] Re-pinned {len(repinned_mod_files)} pinned mods after update.")
 
         enforce_release_channel_policy(
@@ -1827,7 +1791,7 @@ def run_special_menu_action(settings):
             log_prefix="[Update]",
             allowed_alpha_mod_files=allowed_alpha_mod_files,
         )
-        subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
+        pack_manager.refresh_index(packwiz_path)
         print("[PackWiz] Mods updated.")
 
         updated_disabled_mods = find_updated_disabled_mods(previous_snapshot)
@@ -1836,10 +1800,10 @@ def run_special_menu_action(settings):
             print("[PackWiz] Updated mods that are still disabled: " + ", ".join(updated_disabled_names))
             if input("Enable these updated disabled mods? [N]: ") in ("y", "Y", "yes", "Yes"):
                 enabled_mods = enable_mods_by_files([mod_file for mod_file, _ in updated_disabled_mods])
-                subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
+                pack_manager.refresh_index(packwiz_path)
                 print(f"[PackWiz] Re-enabled {len(enabled_mods)} updated disabled mods.")
     elif settings.refresh_only:
-        subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
+        pack_manager.refresh_index(packwiz_path)
 
 
 def run_release_notes_generation(settings):
@@ -1962,181 +1926,26 @@ def update_crash_assistant_modlist(settings):
         output_file.write(combined_modlist_markdown)
 
 
-def _run_mmc_client_export():
-    """Export the client pack using MMC (CurseForge & Modrinth via mmc_export)."""
-    bootstrap_nogui = False
-    mmc_cache_path = os.path.join(packwiz_path, "mmc-cache")
-    mmc_dotminecraft_path = os.path.join(mmc_cache_path, ".minecraft")
-    mmc_input_path = os.path.join(packwiz_path, "mcc-cache.zip")
-    packwiz_installer_path = os.path.join(git_path, "Modpack-CLI-Tool", "packwiz-installer-bootstrap.jar")
-    mmc_config = os.path.join(packwiz_path, "mmc-export.toml")
+def _run_multi_platform_client_export():
+    """Export the client pack to CurseForge and Modrinth formats natively."""
+    # Generate CurseForge export
+    print("[Export] Generating CurseForge pack...")
+    cf_zip_path = pack_manager.export_cf_pack(packwiz_path, mods_path, packwiz_path, side="client")
+    move(cf_zip_path, os.path.join(export_path, os.path.basename(cf_zip_path)))
+    print("[Export] CurseForge exported.")
 
-    packwiz_side = "client"
-    export_mmc_modrinth = True
-    export_mmc_curseforge = True
-    cleanup_cache = True
-    move_disabled_mods = True
-
-    os.chdir(packwiz_path)
-
-    if move_disabled_mods:
-        disabled_mods_path = os.path.join(mods_path, "disabled")
-        os.makedirs(disabled_mods_path, exist_ok=True)
-        os.chdir(mods_path)
-        for item in os.listdir():
-            if os.path.isdir(item) and item == "disabled":
-                continue
-            if not item.endswith(".toml"):
-                continue
-            try:
-                with open(item, "r", encoding="utf-8") as f:
-                    mod_toml = toml.load(f)
-                if "disabled" in str(mod_toml.get("side", "")).lower():
-                    move(item, disabled_mods_path)
-            except (OSError, UnicodeDecodeError, toml.TomlDecodeError) as e:
-                print(f"move_disabled_mods: Failed to read '{item}': {e}")
-        os.chdir(packwiz_path)
-        subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
-
-    # Ensure mmc-cache exists and is clean
-    try:
-        os.mkdir(mmc_cache_path)
-    except FileExistsError:
-        pass
-    clear_mmc_cache(mmc_cache_path)
-
-    # FIX: proper path join when checking for installer in cache
-    installer_cached = Path(os.path.join(mmc_cache_path, "packwiz-installer.jar"))
-
-    # Run bootstrap to generate the mmc cache
-    if bootstrap_nogui:
-        if installer_cached.is_file():
-            subprocess.call(f"java -jar \"{packwiz_installer_path}\" -s {packwiz_side} \"{os.path.join(packwiz_path, packwiz_manifest)}\" -g --bootstrap-no-update", shell=True)
-        else:
-            subprocess.call(f"java -jar \"{packwiz_installer_path}\" -s {packwiz_side} \"{os.path.join(packwiz_path, packwiz_manifest)}\" -g", shell=True)
-    else:
-        if installer_cached.is_file():
-            subprocess.call(f"java -jar \"{packwiz_installer_path}\" -s {packwiz_side} \"{os.path.join(packwiz_path, packwiz_manifest)}\" --bootstrap-no-update", shell=True)
-        else:
-            subprocess.call(f"java -jar \"{packwiz_installer_path}\" -s {packwiz_side} \"{os.path.join(packwiz_path, packwiz_manifest)}\"", shell=True)
-
-    # Ensure .minecraft exists
-    try:
-        os.mkdir(mmc_dotminecraft_path)
-    except FileExistsError:
-        pass
-
-    # Move override folders into .minecraft
-    move_list = ["shaderpacks", "resourcepacks", "mods", "config", "resources"]
-    for item in os.listdir(os.getcwd()):
-        if item in move_list:
-            move(item, mmc_dotminecraft_path)
-
-    # Keep legacy resources rooted at .minecraft/resources.
-    # If resources stays at mmc-cache root, mmc_export can flatten
-    # assets/minecraft/* into overrides/* (lang, textures, etc.).
-    cache_root_resources = os.path.join(mmc_cache_path, "resources")
-    dotminecraft_resources = os.path.join(mmc_dotminecraft_path, "resources")
-    if os.path.isdir(cache_root_resources):
-        if os.path.isdir(dotminecraft_resources):
-            for entry in os.listdir(cache_root_resources):
-                move(os.path.join(cache_root_resources, entry), dotminecraft_resources)
-            rmtree(cache_root_resources)
-        else:
-            move(cache_root_resources, mmc_dotminecraft_path)
-
-    if move_disabled_mods:
-        os.chdir(disabled_mods_path)
-        retain = [".gitkeep"]
-        try:
-            for item in os.listdir():
-                if item not in retain:
-                    move(item, mods_path)
-        except OSError as e:
-            print(e)
-        os.chdir(packwiz_path)
-
-    # Create the input zip from mmc-cache
-    make_archive("mcc-cache", 'zip', mmc_cache_path)  # produces Packwiz/mcc-cache.zip
-    mmc_input_path = os.path.join(packwiz_path, "mcc-cache.zip")
-
-    # Sanity check: zip must contain instance.cfg for mmc_export
-    with zipfile.ZipFile(mmc_input_path) as zf:
-        if not any(p.endswith("instance.cfg") for p in zf.namelist()):
-            raise RuntimeError(
-                "mcc-cache.zip is missing instance.cfg. The Packwiz bootstrap step likely failed (Java not installed or jar path wrong)."
-            )
-
-    # Export Modrinth using mmc_export
-    if export_mmc_modrinth:
-        print("[MMC] Exporting Modrinth...")
-        cmd = [
-            sys.executable, "-m", "mmc_export",
-            "--input", mmc_input_path,
-            "--format", "Modrinth",
-            "--modrinth-search", "loose",
-            "-o", export_path,
-            "-c", mmc_config,
-            "-v", pack_version,
-            "--scheme", f"{modpack_name}-{minecraft_version}-{{version}}",
-        ]
-        subprocess.run(cmd, check=True)
-        print("[MMC] Modrinth exported.")
-
-    # Export CurseForge using mmc_export (consistent invocation)
-    if export_mmc_curseforge:
-        print("[MMC] Exporting CurseForge...")
-        cmd_cf = [
-            sys.executable, "-m", "mmc_export",
-            "--input", mmc_input_path,
-            "--format", "CurseForge",
-            "-o", export_path,
-            "-c", mmc_config,
-            "-v", pack_version,
-            "--scheme", f"{modpack_name}-{minecraft_version}-{{version}}",
-        ]
-        subprocess.run(cmd_cf, check=True)
-        print("[MMC] CurseForge exported.")
-
-    if cleanup_cache:
-        os.remove("mcc-cache.zip")
-        clear_mmc_cache(mmc_cache_path)
-        print("Cache cleanup finished.")
-
-    os.chdir(packwiz_path)
-    subprocess.call(f"{packwiz_exe_path} refresh", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # Generate Modrinth export
+    print("[Export] Generating Modrinth pack...")
+    mr_zip_path = pack_manager.export_mrpack(packwiz_path, mods_path, packwiz_path, side="client")
+    move(mr_zip_path, os.path.join(export_path, os.path.basename(mr_zip_path)))
+    print("[Export] Modrinth exported.")
 
 
 def _run_server_export():
-    """Export the server pack using Packwiz and assemble the server folder archive."""
-    # Export CF modpack using Packwiz (server side)
-    existing_server_archives = {
-        archive.name: archive.stat().st_mtime
-        for archive in Path(packwiz_path).glob("*.zip")
-    }
-    server_export_code = subprocess.call(f"{packwiz_exe_path} cf export -s server", shell=True)
-    if server_export_code != 0:
-        raise RuntimeError(f"Packwiz server export failed with exit code {server_export_code}.")
-
-    expected_server_zip_name = f"{modpack_name}-Server-{pack_version}.zip"
-    expected_server_zip_path = Path(packwiz_path) / expected_server_zip_name
-    changed_archives = [
-        archive for archive in Path(packwiz_path).glob("*.zip")
-        if archive.name not in existing_server_archives
-        or archive.stat().st_mtime > existing_server_archives[archive.name]
-    ]
-
-    if expected_server_zip_path.exists():
-        server_zip_name = expected_server_zip_name
-    elif changed_archives:
-        server_zip_name = max(changed_archives, key=lambda archive: archive.stat().st_mtime).name
-    else:
-        raise FileNotFoundError(
-            "Could not find the server export zip produced by Packwiz. "
-            "Check Packwiz output for the generated filename."
-        )
-
-    move(server_zip_name, os.path.join(export_path, server_zip_name))
+    """Export the server pack and assemble the server folder archive."""
+    server_zip_path = pack_manager.run_packwiz_export(packwiz_exe_path, packwiz_path, "curseforge")
+    server_zip_name = os.path.basename(server_zip_path)
+    move(server_zip_path, os.path.join(export_path, server_zip_name))
     print(f"[PackWiz] Server exported as {server_zip_name}.")
 
     os.chdir(git_path)
@@ -2236,22 +2045,24 @@ def main():
             update_crash_assistant_modlist(settings)
 
         #----------------------------------------
-        # Export client pack. (CurseForge with Packwiz)
+        # Export client pack. (CurseForge with pack_manager)
         #----------------------------------------
         os.chdir(packwiz_path)
-        subprocess.call(f"{packwiz_exe_path} refresh", shell=True)
+        pack_manager.refresh_index(packwiz_path)
 
-        client_zip_name = f'{modpack_name}-{pack_version}.zip'
-        if settings.export_client and not settings.client_export_use_mmc:
-            subprocess.call(f"{packwiz_exe_path} cf export", shell=True)
-            move(client_zip_name, os.path.join(export_path, client_zip_name))
-            print("[PackWiz] Client exported.")
+        if settings.export_client and not settings.client_export_multi_platform:
+            fmt = str(settings.client_export_format or "curseforge").strip().lower()
+            label = "Modrinth" if fmt == "modrinth" else "CurseForge"
+            print(f"[Export] Generating {label} pack (packwiz)...")
+            client_zip_path = pack_manager.run_packwiz_export(packwiz_exe_path, packwiz_path, fmt)
+            move(client_zip_path, os.path.join(export_path, os.path.basename(client_zip_path)))
+            print(f"[Export] {label} exported.")
 
         #----------------------------------------
-        # Export client pack. (CurseForge & Modrinth with MMC)
+        # Export client pack. (CurseForge & Modrinth — native fingerprint export)
         #----------------------------------------
-        if settings.export_client and settings.client_export_use_mmc:
-            _run_mmc_client_export()
+        if settings.export_client and settings.client_export_multi_platform:
+            _run_multi_platform_client_export()
 
         #----------------------------------------
         # Export server pack
@@ -2267,7 +2078,7 @@ def main():
             print("Temp folder cleanup finished.")
 
         os.chdir(packwiz_path)
-        subprocess.call(f"{packwiz_exe_path} refresh", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        pack_manager.refresh_index(packwiz_path)
 
     else:
         run_special_menu_action(settings)

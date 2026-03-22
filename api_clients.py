@@ -1,12 +1,84 @@
+import base64
 import json
 import os
 import re
+import threading
+import time
 import toml
 import requests
 
 
 MODRINTH_API_BASE = "https://api.modrinth.com/v2"
-CURSEFORGE_API_BASE = "https://www.curseforge.com/api/v1"
+CURSEFORGE_API_BASE = "https://api.curseforge.com/v1"
+
+# Limit concurrent API calls per platform to avoid rate-limit errors.
+# All platform requests go through their respective _*_get() helpers.
+_MODRINTH_SEMAPHORE = threading.Semaphore(8)
+_CURSEFORGE_SEMAPHORE = threading.Semaphore(8)
+
+# Thread-local flag set when a request exhausts all 429 retries.
+_tls = threading.local()
+
+# Default community API key sourced from packwiz (open-source, same approach).
+# Users can override via curseforge_api_key in settings.yml.
+_CF_DEFAULT_KEY = base64.b64decode(
+    "JDJhJDEwJHNBWVhqblU1N0EzSmpzcmJYM3JVdk92UWk2NHBLS3BnQ2VpbGc1TUM1UGNKL0RYTmlGWWxh"
+).decode("utf-8")
+_CF_API_KEY = ""
+
+
+def configure_curseforge_api_key(key):
+    """Override the default CurseForge API key. Call once after loading settings.
+
+    If key is empty the packwiz community default key is used automatically.
+    """
+    global _CF_API_KEY
+    _CF_API_KEY = str(key or "").strip()
+
+
+def _modrinth_get(url, params=None, timeout=20):
+    """GET a Modrinth API URL with concurrency limiting and automatic 429 retry.
+
+    Holds the global semaphore only for the duration of the HTTP call so that
+    retry sleeps do not block other threads from making progress.
+
+    Returns:
+        The ``requests.Response`` object. Callers are responsible for calling
+        ``raise_for_status()`` and checking the status code.
+    """
+    headers = {"User-Agent": "packwiz/packwiz (https://github.com/packwiz/packwiz)"}
+    for attempt in range(4):
+        with _MODRINTH_SEMAPHORE:
+            response = requests.get(url, params=params, timeout=timeout, headers=headers)
+        if response.status_code != 429:
+            return response
+        # X-Ratelimit-Reset is seconds until the window resets (not a Unix timestamp).
+        reset_secs = int(response.headers.get("X-Ratelimit-Reset", 0) or 0)
+        wait = max(1.0, reset_secs) if reset_secs else (2 ** attempt)
+        time.sleep(min(wait, 60))
+    _tls.hit_429 = True
+    return response  # return last response; caller handles non-200 status
+
+
+
+
+def _curseforge_get(url, params=None, timeout=20):
+    """GET the CurseForge official API with concurrency limiting and 429 retry.
+
+    Sends the user-configured API key, or the packwiz community default key
+    when none is configured, as the ``x-api-key`` header required by
+    ``api.curseforge.com``.
+    """
+    headers = {"x-api-key": _CF_API_KEY or _CF_DEFAULT_KEY}
+    for attempt in range(4):
+        with _CURSEFORGE_SEMAPHORE:
+            response = requests.get(url, params=params, timeout=timeout, headers=headers)
+        if response.status_code != 429:
+            return response
+        wait = 2 ** attempt
+        time.sleep(min(wait, 30))
+    _tls.hit_429 = True
+    return response
 
 SUPPORTED_MOD_LOADERS = ("fabric", "quilt", "forge", "neoforge")
 MOD_LOADER_LABELS = {
@@ -94,7 +166,7 @@ def fetch_modrinth_version_by_id(version_id, version_cache):
         return version_cache[version_id]
 
     try:
-        response = requests.get(f"{MODRINTH_API_BASE}/version/{version_id}", timeout=20)
+        response = _modrinth_get(f"{MODRINTH_API_BASE}/version/{version_id}")
         response.raise_for_status()
         version_cache[version_id] = response.json()
     except Exception as ex:
@@ -126,13 +198,12 @@ def fetch_modrinth_project_versions(project_id, game_versions, loaders, project_
 
     versions = []
     try:
-        response = requests.get(
+        response = _modrinth_get(
             f"{MODRINTH_API_BASE}/project/{project_id}/version",
             params={
-                "loaders": json.dumps(loaders),
-                "game_versions": json.dumps(game_versions),
+                **({"loaders": json.dumps(loaders)} if loaders else {}),
+                **({"game_versions": json.dumps(game_versions)} if game_versions else {}),
             },
-            timeout=20,
         )
         response.raise_for_status()
         versions = response.json()
@@ -244,6 +315,7 @@ def apply_modrinth_version_to_mod_toml(mod_toml, version_payload):
     mod_toml["download"]["url"] = download_url
     mod_toml["download"]["hash-format"] = hash_format
     mod_toml["download"]["hash"] = hash_value
+    mod_toml["download"]["file-size"] = int(primary_file.get("size", 0))
     mod_toml.setdefault("update", {}).setdefault("modrinth", {})
     mod_toml["update"]["modrinth"]["version"] = target_version_id
     return True
@@ -456,9 +528,8 @@ def _get_curseforge_file_payload(file_id, project_id, file_cache):
 
     payload = None
     try:
-        response = requests.get(
+        response = _curseforge_get(
             f"{CURSEFORGE_API_BASE}/mods/{normalized_project_id}/files/{normalized_file_id}",
-            timeout=20,
         )
         if response.status_code == 404:
             file_cache[cache_key] = None
@@ -491,14 +562,12 @@ def _get_curseforge_project_files(project_id, target_minecraft_version, project_
         index = 0
         max_pages = 4
         for _ in range(max_pages):
-            response = requests.get(
+            params = {"index": index, "pageSize": page_size}
+            if target_version:
+                params["gameVersion"] = target_version
+            response = _curseforge_get(
                 f"{CURSEFORGE_API_BASE}/mods/{normalized_project_id}/files",
-                params={
-                    "index": index,
-                    "pageSize": page_size,
-                    "gameVersion": target_version,
-                },
-                timeout=20,
+                params=params,
             )
             response.raise_for_status()
             payload = response.json() or {}
@@ -535,7 +604,7 @@ def fetch_modrinth_project_info(project_id, project_info_cache):
         return project_info_cache[key]
     payload = None
     try:
-        response = requests.get(f"{MODRINTH_API_BASE}/project/{key}", timeout=20)
+        response = _modrinth_get(f"{MODRINTH_API_BASE}/project/{key}")
         if response.status_code == 404:
             project_info_cache[key] = None
             return None
@@ -545,6 +614,7 @@ def fetch_modrinth_project_info(project_id, project_info_cache):
         pass
     project_info_cache[key] = payload
     return payload
+
 
 
 def fetch_curseforge_project_info(project_id, project_info_cache):
@@ -559,7 +629,7 @@ def fetch_curseforge_project_info(project_id, project_info_cache):
         return project_info_cache[key]
     payload = None
     try:
-        response = requests.get(f"{CURSEFORGE_API_BASE}/mods/{key}", timeout=20)
+        response = _curseforge_get(f"{CURSEFORGE_API_BASE}/mods/{key}")
         if response.status_code == 404:
             project_info_cache[key] = None
             return None
@@ -569,6 +639,8 @@ def fetch_curseforge_project_info(project_id, project_info_cache):
         pass
     project_info_cache[key] = payload
     return payload
+
+
 
 
 def is_mod_classified_as_library(mod_toml, mr_project_info_cache, cf_project_info_cache):
@@ -864,3 +936,111 @@ def try_retarget_modrinth_mod_to_target(
         or replacement_version_id
     )
     return True, replacement_label
+
+
+# --- Cross-platform search helpers ---
+
+def fetch_curseforge_download_url(project_id, file_id):
+    """Return the direct CDN download URL for a CurseForge file, or None if unavailable."""
+    try:
+        resp = _curseforge_get(
+            f"{CURSEFORGE_API_BASE}/mods/{project_id}/files/{file_id}/download-url",
+        )
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        return (resp.json() or {}).get("data")
+    except Exception:
+        return None
+
+
+
+def _compute_cf_fingerprint(data: bytes) -> int:
+    """Compute the CurseForge murmur2 fingerprint of a file's raw bytes.
+
+    CurseForge strips whitespace bytes (\\t \\n \\r space) before hashing
+    and uses seed=1.  This matches the algorithm used by mmc-export and the
+    official CurseForge launcher.
+    """
+    data = bytes(b for b in data if b not in (9, 10, 13, 32))
+    m = 0x5BD1E995
+    length = len(data)
+    h = (1 ^ length) & 0xFFFFFFFF
+    i = 0
+    while i + 4 <= length:
+        k = int.from_bytes(data[i:i + 4], "little")
+        k = (k * m) & 0xFFFFFFFF
+        k ^= k >> 24
+        k = (k * m) & 0xFFFFFFFF
+        h = (h * m) & 0xFFFFFFFF
+        h ^= k
+        i += 4
+    r = length - i
+    if r >= 3:
+        h ^= data[i + 2] << 16
+    if r >= 2:
+        h ^= data[i + 1] << 8
+    if r >= 1:
+        h ^= data[i]
+        h = (h * m) & 0xFFFFFFFF
+    h ^= h >> 13
+    h = (h * m) & 0xFFFFFFFF
+    h ^= h >> 15
+    return h & 0xFFFFFFFF
+
+
+def fetch_cf_fingerprints_batch(fingerprints):
+    """POST murmur2 fingerprints to CurseForge /fingerprints, return exact matches.
+
+    Sends fingerprints in chunks of 50 to stay within CF API limits.
+
+    Returns:
+        Dict mapping fingerprint (int) → {"project_id": int, "file_id": int}.
+        Fingerprints with no match are absent from the result.
+    """
+    if not fingerprints:
+        return {}
+    fp_list = list(fingerprints)
+    results = {}
+    chunk_size = 50
+    for chunk_start in range(0, len(fp_list), chunk_size):
+        chunk = fp_list[chunk_start:chunk_start + chunk_size]
+        try:
+            resp = requests.post(
+                f"{CURSEFORGE_API_BASE}/fingerprints",
+                json={"fingerprints": chunk},
+                headers={
+                    "x-api-key": _CF_API_KEY or _CF_DEFAULT_KEY,
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+                timeout=30,
+            )
+            if resp.status_code != 200:
+                print(
+                    f"[Export] CF fingerprints API returned HTTP {resp.status_code}: {resp.text[:200]}",
+                    flush=True,
+                )
+                continue
+            data = (resp.json().get("data") or {})
+            # exactFingerprints[i] is the murmur2 value that matched exactMatches[i].
+            # Do NOT use match["id"] — that field contains the project/mod ID, not
+            # the fingerprint.
+            exact_fps = data.get("exactFingerprints", [])
+            exact_matches = data.get("exactMatches", [])
+            for fp, match in zip(exact_fps, exact_matches):
+                f = match.get("file", {})
+                if f.get("id") and f.get("modId"):
+                    results[int(fp)] = {
+                        "project_id": int(f["modId"]),
+                        "file_id": int(f["id"]),
+                    }
+            print(
+                f"[Export] CF fingerprints batch: {len(exact_fps)} matched, "
+                f"{len(data.get('unmatchedFingerprints', []))} unmatched.",
+                flush=True,
+            )
+        except Exception as ex:
+            print(f"[Export] CF fingerprints API error: {ex}", flush=True)
+    return results
+
