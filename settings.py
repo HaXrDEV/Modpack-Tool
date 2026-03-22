@@ -7,7 +7,7 @@ from typing import List, Optional
 
 @dataclass
 class Settings:
-    """Runtime configuration for the Modpack CLI Tool.
+    """Runtime configuration for HaXr's Modpack Tool.
 
     All fields map directly to YAML keys in the settings file and are populated
     by `load_settings`. Boolean flags default to ``False`` unless a safe-on

@@ -1,7 +1,7 @@
 launch_message = """
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 █                           █
-█  HaXr's Modpack CLI Tool  █
+█    HaXr's Modpack Tool    █
 █                           █
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀"""
 
