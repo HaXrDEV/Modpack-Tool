@@ -133,8 +133,17 @@ def determine_server_export():
     return settings.export_server and input("Want to export server pack? [N]: ") in ("y", "Y", "yes", "Yes")
 
 
+def prompt_new_pack_version(context: str = "") -> str:
+    """Prompt for the next modpack version; empty answer means keep the current one."""
+    return input(f"New modpack version{context} [{pack_version}]: ").strip()
+
+
 def ensure_migration_targets(settings):
-    """Prompt for any missing migration targets and validate them against supported loaders.
+    """Prompt for any missing migration targets and the post-migration pack version.
+
+    Loader inputs are validated against the supported loaders. The chosen pack
+    version lands in ``settings.bump_target_version`` (empty keeps the current
+    version).
 
     Args:
         settings: The loaded Settings object; target fields are populated in-place.
@@ -207,6 +216,8 @@ def ensure_migration_targets(settings):
         settings.migration_mod_loader = target_loader
     elif not is_supported_mod_loader(configured_compat_loader):
         settings.migration_mod_loader = target_loader
+
+    settings.bump_target_version = prompt_new_pack_version(" after migration")
 
 
 def get_config_changes_mode_label(settings) -> str:
@@ -347,8 +358,7 @@ Config Changes generator: {config_mode_label}
 
     if choice == "9":
         settings.bump_version_only = True
-        target_version = input(f"New modpack version [{pack_version}]: ").strip()
-        settings.bump_target_version = target_version if target_version else pack_version
+        settings.bump_target_version = prompt_new_pack_version() or pack_version
         return True
 
     if choice == "10":
@@ -2071,6 +2081,10 @@ def main():
                 disable_outdated_mods=settings.migration_disable_incompatible_mods,
                 mod_loader=settings.migration_mod_loader,
             )
+            # Bump after the MC globals update so the changelog template pairs
+            # the new pack version with the new Minecraft version.
+            if settings.bump_target_version:
+                bump_modpack_version(settings.bump_target_version)
 
         #----------------------------------------
         # Download comparison files.

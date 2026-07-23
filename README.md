@@ -141,6 +141,7 @@ When enabled, the tool will:
 1. Update `Packwiz/pack.toml` to the target Minecraft version and selected modloader/version.
 2. Refresh and update mods with Packwiz.
 3. Disable incompatible mods by setting `side = "...(disabled)"` in their `.toml` entries.
+4. Bump the modpack version to the one chosen during migration setup (pressing Enter keeps the current version) and create the matching changelog template.
 
 ## Auto-generated changelog text
 
@@ -178,6 +179,6 @@ If the model call fails or no model is available, the tool does not write `Confi
 
 ## Notable runtime prompts
 
-- Migration actions can prompt for target Minecraft version, modloader, and modloader version if not set in `settings.yml`.
+- Migration actions can prompt for target Minecraft version, modloader, and modloader version if not set in `settings.yml`, and always ask for the new modpack version (Enter keeps the current one).
 - When summary generation is active, the script prompts whether to overwrite existing `Update overview` / `Config Changes` for the current run.
 - Server export includes a manual step where you provide a dragged `mods` folder path from a CurseForge launcher instance built from the just-exported zip.
