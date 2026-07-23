@@ -7,77 +7,63 @@ launch_message = """
 
 import os
 import json
-import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from shutil import rmtree, make_archive, move, copytree
 
 import toml  # pip install toml
-# import yaml  # REMOVE PyYAML
 
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
 from ruamel.yaml.scalarstring import LiteralScalarString
 
 from mdutils.mdutils import MdUtils
-import requests
 
 # Settings
-from settings import Settings, load_settings
+from settings import load_settings
 from api_clients import configure_curseforge_api_key
 import pack_manager
+
+# Standalone-tool config and per-project paths
+from tool_config import (
+    load_tool_config,
+    save_tool_config,
+    register_project,
+    remove_project,
+    find_project,
+    resolve_packwiz_exe,
+    resolve_github_token,
+    resolve_curseforge_key,
+)
+from project_context import (
+    LEGACY_TOOL_DIR_NAME,
+    compute_project_paths,
+    validate_project_root,
+    read_pack_manifest,
+    preflight_project,
+    normalize_drag_drop_path,
+    prompt_yes,
+)
 from api_clients import (
     SUPPORTED_MOD_LOADERS,
-    MOD_LOADER_LABELS,
     is_supported_mod_loader,
     normalize_mod_loader_name,
     get_mod_loader_label,
-    detect_active_mod_loader,
     get_pack_mod_loader_details,
-    infer_release_channel_from_metadata,
     fetch_modrinth_version_by_id,
     fetch_modrinth_project_versions,
     get_modrinth_version_type,
-    get_allowed_update_channels,
     get_alpha_update_policy,
     should_keep_alpha_update,
     select_latest_allowed_modrinth_version,
-    select_modrinth_primary_file,
     apply_modrinth_version_to_mod_toml,
-    extract_loader_hints_from_metadata,
-    extract_minecraft_version_hints_from_metadata,
-    is_target_minecraft_compatible_with_hints,
-    is_target_loader_compatible_with_hints,
-    resolve_target_compatibility,
-    infer_compatibility_from_metadata,
-    is_installed_modrinth_version_compatible,
-    has_modrinth_project_version_for_target,
     _get_curseforge_file_payload,
-    _get_curseforge_project_files,
-    _evaluate_curseforge_file_compatibility,
-    is_installed_curseforge_file_compatible,
-    has_curseforge_project_version_for_target,
     determine_mod_target_compatibility,
-    select_modrinth_replacement_version_for_target,
     try_retarget_modrinth_mod_to_target,
-    fetch_modrinth_project_info,
-    fetch_curseforge_project_info,
     is_mod_classified_as_library,
 )
-from typing import List, Optional
 
 from changelog_helpers import (
     initialize_modlist_label_index,
-    generate_deterministic_update_overview,
-    derive_mod_label_from_config_path,
-    derive_mod_display_label_from_config_path,
-    format_config_filename_as_title,
-    build_config_label_title_prompt,
-    build_config_changes_prompt,
-    generate_config_changes_fallback_from_line_diffs,
-    generate_removed_config_file_bullets,
-    generate_yosbr_default_move_bullets,
-    format_config_change_labels_with_llm,
-    generate_config_changes_with_llm,
     maybe_generate_update_overview,
     maybe_generate_config_changes,
     uses_llm_config_changes,
@@ -88,7 +74,7 @@ from github_downloader import AsyncGitHubDownloader
 import asyncio
 
 # Changelog stuff
-from changelog_factory import ChangelogFactory
+from changelog_factory import ChangelogFactory, changelog_filename
 
 # Markdown Stuff
 import markdown_helper as markdown
@@ -107,31 +93,37 @@ yaml.preserve_quotes = True  # harmless, helps if you ever edit existing YAML
 ############################################################
 # Variables
 
-user_path = os.path.expanduser("~")
-
-# Get the directory containing the script
+# Tool install location — independent of any modpack project.
 script_path = os.path.abspath(__file__)  # Absolute path to the script
-git_path = str(os.path.dirname(os.path.dirname(script_path)))
-
-os.chdir(git_path)
-
-packwiz_path = os.path.join(git_path, "Packwiz")
-serverpack_path = os.path.join(git_path, "Server Pack")
-packwiz_exe_path = os.path.join(user_path, "go", "bin", "packwiz.exe")
+tool_dir = os.path.dirname(script_path)
 packwiz_manifest = "pack.toml"
-bcc_client_config_path = os.path.join(packwiz_path, "config", "bcc.json")
-bcc_server_config_path = os.path.join(serverpack_path, "config", "bcc.json")
-export_path = os.path.join(git_path, "Export")
-tempfolder_path = os.path.join(export_path, "temp")
-temp_mods_path = os.path.join(tempfolder_path, "mods")
-settings_path = os.path.join(git_path, "settings.yml")
-packwiz_mods_path = os.path.join(packwiz_path, "mods")
-prev_release = os.path.join(git_path, "Modpack-CLI-Tool", "prev_release")
-changelog_dir_path = os.path.join(git_path, "Changelogs")
-tempgit_path = os.path.join(git_path, "Modpack-CLI-Tool", "tempgit")
-mods_path = os.path.join(packwiz_path, "mods")
-crash_assistant_config_path = os.path.join(packwiz_path, "config", "crash_assistant", "modlist.json")
-crash_assistant_markdown_path = os.path.join(git_path, "modlist.md")
+
+# Project-scoped globals. None until activate_project() binds them to the
+# active modpack project; rebound on every project switch.
+tool_cfg = None
+git_path = None  # Active project root (historical name kept for call sites)
+packwiz_path = None
+serverpack_path = None
+packwiz_exe_path = None
+bcc_client_config_path = None
+bcc_server_config_path = None
+export_path = None
+tempfolder_path = None
+temp_mods_path = None
+settings_path = None
+prev_release = None
+changelog_dir_path = None
+tempgit_path = None
+mods_path = None
+crash_assistant_config_path = None
+crash_assistant_markdown_path = None
+settings = None
+changelog_factory = None
+pack_version = None
+modpack_name = None
+minecraft_version = None
+active_mod_loader = None
+mod_loader_version = None
 
 ############################################################
 # Functions
@@ -139,15 +131,6 @@ crash_assistant_markdown_path = os.path.join(git_path, "modlist.md")
 def determine_server_export():
     """Determine whether the server pack should be exported or not and return a boolean."""
     return settings.export_server and input("Want to export server pack? [N]: ") in ("y", "Y", "yes", "Yes")
-
-
-def normalize_drag_drop_path(raw_path: str) -> str:
-    """Normalize terminal drag-and-drop paths (often wrapped in quotes)."""
-    cleaned_path = str(raw_path or "").strip()
-    if len(cleaned_path) >= 2 and cleaned_path[0] == cleaned_path[-1] and cleaned_path[0] in ("'", '"'):
-        cleaned_path = cleaned_path[1:-1].strip()
-    cleaned_path = os.path.expanduser(os.path.expandvars(cleaned_path))
-    return os.path.normpath(cleaned_path) if cleaned_path else ""
 
 
 def ensure_migration_targets(settings):
@@ -267,6 +250,8 @@ def configure_actions_via_menu(settings):
 
     print(
         f"""
+Active project: {modpack_name} ({git_path}) | v{pack_version} MC {minecraft_version}
+
 Choose action:
 1) Run configured workflow (settings.yml)
 2) Migration only
@@ -282,6 +267,7 @@ Choose action:
 12) List disabled mods
 13) Add mod
 14) Find orphaned library mods
+P) Switch / manage projects
 0) Exit
 
 Config Changes generator: {config_mode_label}
@@ -292,6 +278,13 @@ Config Changes generator: {config_mode_label}
 
     if choice == "0":
         return False
+
+    if choice.lower() == "p":
+        return "switch_project"
+
+    if choice not in {str(n) for n in range(1, 15)}:
+        print(f"Unknown choice '{choice}'. Falling back to configured workflow.")
+        choice = "1"
 
     # Reset runtime flow toggles before applying chosen mode.
     settings.refresh_only = False
@@ -379,10 +372,7 @@ Config Changes generator: {config_mode_label}
         settings.find_orphaned_libraries_only = True
         return True
 
-    print(f"Unknown choice '{choice}'. Falling back to configured workflow.")
-    settings.export_client = configured_export_client
-    settings.export_server = determine_server_export()
-    prompt_changelog_autogen_overwrite()
+    # Unreachable: the validation above maps unknown choices to "1".
     return True
 
 
@@ -862,8 +852,7 @@ def get_pack_update_constraints():
 
     versions = local_pack_toml.get("versions", {})
     game_version = str(versions.get("minecraft", minecraft_version))
-    loader_order = ("fabric", "quilt", "forge", "neoforge")
-    loaders = [loader for loader in loader_order if versions.get(loader)]
+    loaders = [loader for loader in SUPPORTED_MOD_LOADERS if versions.get(loader)]
     if not loaders:
         loaders = ["fabric"]
     return [game_version], loaders
@@ -1288,19 +1277,14 @@ def disable_incompatible_mods(target_minecraft_version, mod_loader):
             with open(os.path.join(mods_path, f), "r", encoding="utf8") as fh:
                 t = toml.load(fh)
             if "disabled" not in str(t.get("side", "both")):
-                active_toml_files.append(f)
+                active_toml_files.append((f, t))
         except Exception:
             pass
     print(f"[Migration] Checking {len(active_toml_files)} active mods for compatibility with {target_minecraft_version} ({mod_loader})...", flush=True)
-    for i, item in enumerate(active_toml_files, 1):
+    for i, (item, mod_toml) in enumerate(active_toml_files, 1):
         item_path = os.path.join(mods_path, item)
         try:
-            with open(item_path, "r", encoding="utf8") as f:
-                mod_toml = toml.load(f)
             side_value = str(mod_toml.get("side", "both"))
-            if "disabled" in side_value:
-                continue
-
             mod_name = mod_toml.get("name", item)
             print(f"[Migration] [{i}/{len(active_toml_files)}] Checking {mod_name}...", flush=True)
 
@@ -1469,6 +1453,20 @@ def migrate_minecraft_version(
     )
 
 
+def set_bcc_config_version(bcc_path, new_pack_version):
+    """Write ``modpackVersion`` into a BCC config file if it exists."""
+    if not os.path.isfile(bcc_path):
+        return
+    try:
+        with open(bcc_path, "r", encoding="utf8") as f:
+            bcc_json = json.load(f)
+        bcc_json["modpackVersion"] = new_pack_version
+        with open(bcc_path, "w", encoding="utf8") as f:
+            json.dump(bcc_json, f)
+    except Exception as ex:
+        print(f"[Version] Failed updating {bcc_path}: {ex}")
+
+
 def bump_modpack_version(new_pack_version):
     """Update the modpack version in pack.toml and BCC configs, then create a changelog template.
 
@@ -1490,16 +1488,7 @@ def bump_modpack_version(new_pack_version):
         toml.dump(local_pack_toml, f)
 
     for bcc_path in (bcc_client_config_path, bcc_server_config_path):
-        if not os.path.isfile(bcc_path):
-            continue
-        try:
-            with open(bcc_path, "r", encoding="utf8") as f:
-                bcc_json = json.load(f)
-            bcc_json["modpackVersion"] = new_pack_version
-            with open(bcc_path, "w", encoding="utf8") as f:
-                json.dump(bcc_json, f)
-        except Exception as ex:
-            print(f"[Version] Failed updating {bcc_path}: {ex}")
+        set_bcc_config_version(bcc_path, new_pack_version)
 
     pack_version = new_pack_version
     ensure_changelog_yml(pack_version, minecraft_version, active_mod_loader, mod_loader_version)
@@ -1553,7 +1542,7 @@ def ensure_changelog_yml(target_pack_version, target_minecraft_version, target_m
         Absolute path to the changelog YAML file.
     """
     os.makedirs(changelog_dir_path, exist_ok=True)
-    changelog_path = os.path.join(changelog_dir_path, f"{target_pack_version}+{target_minecraft_version}.yml")
+    changelog_path = os.path.join(changelog_dir_path, changelog_filename(target_pack_version, target_minecraft_version))
     loader_label = get_mod_loader_label(target_mod_loader)
     loader_version = str(target_mod_loader_version or "").strip()
     normalized_loader = normalize_mod_loader_name(target_mod_loader)
@@ -1598,7 +1587,7 @@ def download_missing_comparison_files():
         return
 
     if settings.github_auth:
-        github_token = input("Your personal access token: ")
+        github_token = resolve_github_token(tool_cfg) or input("Your personal access token: ")
     else:
         github_token = None
 
@@ -1648,9 +1637,7 @@ def download_missing_comparison_files():
 def run_changelog_auto_generation():
     """Run the configured automatic changelog generation steps (update overview and/or config changes)."""
     os.chdir(git_path)
-    changelog_path = os.path.join(changelog_dir_path, f"{pack_version}+{minecraft_version}.yml")
-    if not os.path.isfile(changelog_path):
-        ensure_changelog_yml(pack_version, minecraft_version, active_mod_loader, mod_loader_version)
+    changelog_path = ensure_changelog_yml(pack_version, minecraft_version, active_mod_loader, mod_loader_version)
 
     diff_payload = changelog_factory.get_current_pack_diff_payload(
         target_version=pack_version,
@@ -1659,7 +1646,7 @@ def run_changelog_auto_generation():
         packwiz_path=packwiz_path,
         migration_mode=bool(settings.migrate_minecraft_version),
     )
-    active_mod_names = parse_active_projects(packwiz_mods_path, "name")
+    active_mod_names = parse_active_projects(mods_path, "name")
     initialize_modlist_label_index(active_mod_names)
     packwiz_config_path = os.path.join(packwiz_path, "config")
 
@@ -1679,51 +1666,167 @@ def clear_stored_repository_data():
         print(f"[RepoData] Cleared: {path}")
 
 ############################################################
-# Start Message
+# Project activation
 
-os.chdir(packwiz_path)
+def load_curseforge_key():
+    """Apply the user's CurseForge API key (tool config or cf-api-key.txt).
 
-with open(packwiz_manifest, "r", encoding="utf-8") as f:
-    pack_toml = toml.load(f)
-pack_version = pack_toml["version"]
-modpack_name = pack_toml["name"]
-minecraft_version = pack_toml["versions"]["minecraft"]
-active_mod_loader, mod_loader_version = get_pack_mod_loader_details(pack_toml)
+    When neither source has a key, the packwiz community default stays in effect.
+    """
+    key = resolve_curseforge_key(tool_cfg)
+    if key:
+        configure_curseforge_api_key(key)
 
-input(f"""{launch_message}
+
+def activate_project(project_root):
+    """Bind all project-scoped globals to the given modpack project root.
+
+    Runs preflight (dirs, settings.yml, gitignore, legacy cache migration),
+    reads pack.toml, loads settings, rebuilds the changelog factory, and
+    leaves the working directory at the project's Packwiz folder — the
+    resting state the workflow functions assume. Persists the project as
+    last-used on success. On failure the previously active project (if any)
+    remains fully intact.
+
+    Returns:
+        True when activation succeeded, False otherwise.
+    """
+    global git_path, packwiz_path, serverpack_path, packwiz_exe_path
+    global bcc_client_config_path, bcc_server_config_path
+    global export_path, tempfolder_path, temp_mods_path, settings_path
+    global prev_release, changelog_dir_path, tempgit_path
+    global mods_path, crash_assistant_config_path, crash_assistant_markdown_path
+    global settings, changelog_factory
+    global pack_version, modpack_name, minecraft_version, active_mod_loader, mod_loader_version
+
+    problems = validate_project_root(project_root)
+    if problems:
+        for problem in problems:
+            print(f"[Project] {problem}")
+        return False
+
+    paths = compute_project_paths(project_root)
+    try:
+        preflight_project(paths, os.path.join(tool_dir, "settings_template.yml"))
+        pack_toml = read_pack_manifest(paths)
+    except RuntimeError as ex:
+        print(f"[Project] {ex}")
+        return False
+
+    git_path = paths.root
+    packwiz_path = paths.packwiz_path
+    serverpack_path = paths.serverpack_path
+    bcc_client_config_path = paths.bcc_client_config_path
+    bcc_server_config_path = paths.bcc_server_config_path
+    export_path = paths.export_path
+    tempfolder_path = paths.tempfolder_path
+    temp_mods_path = paths.temp_mods_path
+    settings_path = paths.settings_path
+    mods_path = paths.mods_path
+    prev_release = paths.prev_release_path
+    changelog_dir_path = paths.changelog_dir_path
+    tempgit_path = paths.tempgit_path
+    crash_assistant_config_path = paths.crash_assistant_config_path
+    crash_assistant_markdown_path = paths.crash_assistant_markdown_path
+
+    packwiz_exe_path = resolve_packwiz_exe(tool_cfg)
+
+    pack_version = pack_toml["version"]
+    modpack_name = pack_toml["name"]
+    minecraft_version = pack_toml["versions"]["minecraft"]
+    active_mod_loader, mod_loader_version = get_pack_mod_loader_details(pack_toml)
+
+    settings = load_settings(settings_path, yaml)
+    changelog_factory = ChangelogFactory(changelog_dir_path, modpack_name, pack_version, settings, yaml)
+
+    os.chdir(packwiz_path)
+
+    print(f"""
+Project: {git_path}
 Modpack: {modpack_name}
 Version: {pack_version}
 Minecraft: {minecraft_version}
-Modloader: {get_mod_loader_label(active_mod_loader)} {mod_loader_version}
+Modloader: {get_mod_loader_label(active_mod_loader)} {mod_loader_version}""")
 
-Press Enter to continue...""")
+    if settings.print_path_debug:
+        print("[DEBUG] " + git_path)
+        print("[DEBUG] " + packwiz_path)
+        print("[DEBUG] " + packwiz_exe_path)
+        print("[DEBUG] " + bcc_client_config_path)
+        print("[DEBUG] " + bcc_server_config_path)
 
-# Load settings.yml with ruamel (instead of yaml.safe_load)
-settings = load_settings(settings_path, yaml)
+    registry_changed = (tool_cfg.last_used_project != git_path
+                        or find_project(tool_cfg, git_path) is None)
+    register_project(tool_cfg, git_path)
+    tool_cfg.last_used_project = git_path
+    if registry_changed:
+        save_tool_config(tool_cfg, yaml)
+    return True
 
-# Load CurseForge API key from cf-api-key.txt if present (gitignored).
-# Falls back to the packwiz community default key when the file is absent.
-_cf_key_path = os.path.join(os.path.dirname(script_path), "cf-api-key.txt")
-try:
-    with open(_cf_key_path, "r", encoding="utf-8") as _f:
-        configure_curseforge_api_key(_f.read().strip())
-except FileNotFoundError:
-    pass
 
-############################################################
-# Print Stuff
+def select_project_interactive():
+    """Project picker: choose, add, or remove registered modpack projects.
 
-if settings.print_path_debug:
-    print("[DEBUG] " + git_path)
-    print("[DEBUG] " + packwiz_path)
-    print("[DEBUG] " + packwiz_exe_path)
-    print("[DEBUG] " + bcc_client_config_path)
-    print("[DEBUG] " + bcc_server_config_path)
+    Returns:
+        The chosen project root, or None if the user chose to exit.
+    """
+    def prompt_for_new_project():
+        while True:
+            raw = input("Path to the modpack project root (drag & drop works, Enter to cancel): ")
+            root = normalize_drag_drop_path(raw)
+            if not root:
+                return None
+            problems = validate_project_root(root)
+            if not problems:
+                register_project(tool_cfg, root)
+                save_tool_config(tool_cfg, yaml)
+                return root
+            for problem in problems:
+                print(f"[Project] {problem}")
 
-############################################################
-# Class Objects
+    # First run from an old embedded install: offer the surrounding repo.
+    if not tool_cfg.projects:
+        legacy_parent = os.path.dirname(tool_dir)
+        if (os.path.basename(tool_dir) == LEGACY_TOOL_DIR_NAME
+                and not validate_project_root(legacy_parent)):
+            if prompt_yes(f"Detected modpack project at '{legacy_parent}'. Register it? [Y]: "):
+                register_project(tool_cfg, legacy_parent)
+                save_tool_config(tool_cfg, yaml)
+                return legacy_parent
+        print("No modpack projects registered yet.")
+        return prompt_for_new_project()
 
-changelog_factory = ChangelogFactory(changelog_dir_path, modpack_name, pack_version, settings, yaml)
+    while True:
+        print("\nRegistered modpack projects:")
+        for index, project in enumerate(tool_cfg.projects, start=1):
+            print(f"{index}) {project.name}  ({project.root})")
+        print("A) Add project")
+        print("R) Remove project")
+        print("0) Exit")
+        choice = input("Selection [1]: ").strip() or "1"
+
+        if choice == "0":
+            return None
+        if choice.lower() == "a":
+            root = prompt_for_new_project()
+            if root:
+                return root
+            continue
+        if choice.lower() == "r":
+            index_raw = input("Number of the project to remove: ").strip()
+            if index_raw.isdigit() and 1 <= int(index_raw) <= len(tool_cfg.projects):
+                removed = tool_cfg.projects[int(index_raw) - 1]
+                remove_project(tool_cfg, removed)
+                save_tool_config(tool_cfg, yaml)
+                print(f"[Project] Removed '{removed.name}' from the registry (files untouched).")
+            else:
+                print("Invalid selection.")
+            if not tool_cfg.projects:
+                return prompt_for_new_project()
+            continue
+        if choice.isdigit() and 1 <= int(choice) <= len(tool_cfg.projects):
+            return tool_cfg.projects[int(choice) - 1].root
+        print(f"Unknown choice '{choice}'.")
 
 ############################################################
 # Main Program
@@ -1806,7 +1909,6 @@ def run_special_menu_action(settings):
 def run_release_notes_generation(settings):
     """Generate CurseForge and Modrinth release-note Markdown files from the current changelog YAML."""
     os.chdir(git_path)
-    changelog_path = os.path.join(git_path, "Changelogs", f"{pack_version}+{minecraft_version}.yml")
     major_minecraft_version = '.'.join(minecraft_version.split('.', 2)[:2])
     md_element_full_changelog = f"**[[Full Changelog]](https://crismpack.net/{modpack_name.lower().split(' ', 1)[0]}/changelogs/{major_minecraft_version}/{minecraft_version}#v{pack_version})**"
     md_element_pre_release = '**This is a pre-release. Here be dragons!**'
@@ -1819,27 +1921,11 @@ def run_release_notes_generation(settings):
         mdFile_CF.new_paragraph(md_element_pre_release)
         mdFile_MR.new_paragraph(md_element_pre_release)
 
-    if not os.path.isfile(changelog_path):
-        print(f"No changelog found for {pack_version}, creating a template...")
-
-        data = CommentedMap()
-        data["Mod loader"] = get_mod_loader_label(active_mod_loader)
-        data["Mod loader version"] = mod_loader_version
-        if normalize_mod_loader_name(active_mod_loader) == "fabric":
-            data["Fabric version"] = mod_loader_version
-        data["Changes/Improvements"] = None
-        data["Bug Fixes"] = None
-        data["Config Changes"] = LiteralScalarString("- : [mod], [Client]")
-
-        with open(changelog_path, "w", encoding="utf-8") as f:
-            yaml.dump(data, f)
+    # Creates the template when missing and syncs loader metadata otherwise.
+    changelog_path = ensure_changelog_yml(pack_version, minecraft_version, active_mod_loader, mod_loader_version)
 
     with open(changelog_path, "r", encoding="utf-8") as f:
         changelog_yml = yaml.load(f) or {}
-
-    if apply_loader_metadata_to_changelog(changelog_yml, active_mod_loader, mod_loader_version):
-        with open(changelog_path, "w", encoding="utf-8") as f:
-            yaml.dump(changelog_yml, f)
 
     try:
         update_overview = changelog_yml['Update overview']
@@ -1896,18 +1982,9 @@ def update_publish_workflow(settings):
 def update_bcc_versions(settings):
     """Write the current pack_version into the BCC client and/or server config JSON files."""
     if settings.export_client:
-        os.chdir(packwiz_path)
-        with open(bcc_client_config_path, "r", encoding="utf-8") as f:
-            bcc_json = json.load(f)
-        bcc_json["modpackVersion"] = pack_version
-        with open(bcc_client_config_path, "w") as f:
-            json.dump(bcc_json, f)
+        set_bcc_config_version(bcc_client_config_path, pack_version)
     if settings.export_server:
-        with open(bcc_server_config_path, "r", encoding="utf-8") as f:
-            bcc_json = json.load(f)
-        bcc_json["modpackVersion"] = pack_version
-        with open(bcc_server_config_path, "w") as f:
-            json.dump(bcc_json, f)
+        set_bcc_config_version(bcc_server_config_path, pack_version)
 
 
 def update_crash_assistant_modlist(settings):
@@ -2081,12 +2158,41 @@ def main():
         run_special_menu_action(settings)
 
 
+def select_and_activate_project():
+    """Run the picker until a project activates.
+
+    Returns:
+        True once a project is active, False if the user chose to exit.
+    """
+    while True:
+        root = select_project_interactive()
+        if root is None:
+            return False
+        if activate_project(root):
+            return True
+
+
 if __name__ == "__main__":
     try:
+        print(launch_message)
+        tool_cfg = load_tool_config(yaml)
+        load_curseforge_key()
+
+        # Activate the last-used project, falling back to the picker.
+        last_used = tool_cfg.last_used_project
+        if not (last_used and activate_project(last_used)) and not select_and_activate_project():
+            print("No project selected. Exiting.")
+            exit(0)
+
         while True:
-            if not configure_actions_via_menu(settings):
+            menu_result = configure_actions_via_menu(settings)
+            if menu_result is False:
                 print("No action selected. Exiting.")
                 break
+            if menu_result == "switch_project":
+                # Cancelling the picker keeps the current project active.
+                select_and_activate_project()
+                continue
             print("")
             try:
                 main()

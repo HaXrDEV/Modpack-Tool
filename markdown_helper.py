@@ -7,10 +7,8 @@ def remove_bracketed_text(input_str):
     return re.sub(pattern, '', input_str).strip()
 
 
-def codify_bracketed_text(input_str, keep_brackets=False):
+def codify_bracketed_text(input_str):
     """Format square-bracketed text as Markdown code."""
-    if keep_brackets:
-        return re.sub(r'(\[)([^\]]+)(\])', r'`\1\2\3`', input_str)
     return re.sub(r'(?<!\\)\[([^\]]+)\]', r'`\1`', input_str)
 
 

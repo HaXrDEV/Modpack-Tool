@@ -66,6 +66,52 @@ def _format_name_list(names):
     return f"{', '.join(quoted[:-1])} & {quoted[-1]}"
 
 
+def _lookup_label_in_index(exact_keys, loose_keys):
+    """Two-phase mod-label lookup shared by the display-label resolvers.
+
+    Phase 1 tries each key in ``exact_keys`` against the normalized label
+    index. Phase 2 runs a containment-scoring scan over all index entries for
+    each key in ``loose_keys`` (longest common normalized substring wins,
+    minimum length 6 to suppress false positives).
+
+    Returns:
+        The resolved display label, or ``None`` when nothing matches.
+    """
+    label_index = _load_modlist_label_index()
+    index = label_index.get("index", {})
+    entries = label_index.get("entries", [])
+
+    for key in exact_keys:
+        if key and key in index:
+            return index[key]
+
+    tried = set()
+    for lookup_key in loose_keys:
+        if not lookup_key or lookup_key in tried:
+            continue
+        tried.add(lookup_key)
+        best_name = None
+        best_score = 0
+        for mod_name in entries:
+            alias_key = _normalize_lookup_key(mod_name)
+            if not alias_key:
+                continue
+            # Exact match on the normalized key — return immediately.
+            if lookup_key == alias_key:
+                return mod_name
+            # Containment in either direction qualifies as a partial match;
+            # the shorter key's length scores the specificity of the overlap.
+            if lookup_key in alias_key or alias_key in lookup_key:
+                score = min(len(lookup_key), len(alias_key))
+                if score > best_score:
+                    best_score = score
+                    best_name = mod_name
+        if best_name and best_score >= 6:
+            return best_name
+
+    return None
+
+
 def _resolve_mod_display_label(name: str) -> str:
     raw_name = str(name or "").strip()
     if not raw_name:
@@ -76,38 +122,11 @@ def _resolve_mod_display_label(name: str) -> str:
     base_name = re.sub(r"\s*\[[^\]]+\]\s*$", "", base_name).strip()
     base_name = re.sub(r"\s*-\s*$", "", base_name).strip() or base_name
 
-    label_index = _load_modlist_label_index()
-    index = label_index.get("index", {})
-    entries = label_index.get("entries", [])
-
-    candidate_keys = [
-        _normalize_lookup_key(base_name),
-        _normalize_lookup_key(raw_name),
-    ]
-    for key in candidate_keys:
-        if key and key in index:
-            return index[key]
-
-    # Loose fallback: containment match on normalized names.
-    base_key = _normalize_lookup_key(base_name)
-    if base_key:
-        best_name = None
-        best_score = 0
-        for mod_name in entries:
-            alias_key = _normalize_lookup_key(mod_name)
-            if not alias_key:
-                continue
-            if base_key == alias_key:
-                return mod_name
-            if base_key in alias_key or alias_key in base_key:
-                score = min(len(base_key), len(alias_key))
-                if score > best_score:
-                    best_score = score
-                    best_name = mod_name
-        if best_name and best_score >= 6:
-            return best_name
-
-    return base_name
+    resolved = _lookup_label_in_index(
+        exact_keys=[_normalize_lookup_key(base_name), _normalize_lookup_key(raw_name)],
+        loose_keys=[_normalize_lookup_key(base_name)],
+    )
+    return resolved or base_name
 
 
 def _dedupe_preserve_order(items):
@@ -247,15 +266,7 @@ def generate_deterministic_update_overview(diff_payload, migration_mode=False) -
         lines.append("Maintenance update.")
 
     # Keep stable order but remove accidental duplicates.
-    unique_lines = []
-    seen = set()
-    for line in lines:
-        key = line.strip().lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        unique_lines.append(line)
-    return unique_lines
+    return _dedupe_preserve_order(lines)
 
 
 def _normalize_llm_text_to_bullets(raw_text: str, max_lines: int):
@@ -273,7 +284,7 @@ def _normalize_llm_text_to_bullets(raw_text: str, max_lines: int):
 
 
 def _normalize_config_llm_bullets(raw_text: str, max_lines: int):
-    normalized = _normalize_llm_text_to_bullets(raw_text, max_lines=max(max_lines * 2, max_lines))
+    normalized = _normalize_llm_text_to_bullets(raw_text, max_lines=max_lines * 2)
     valid = []
     invalid_count = 0
     required_suffix_pattern = re.compile(r"\[[^\[\]]+\]\.?$")
@@ -391,54 +402,19 @@ def derive_mod_display_label_from_config_path(path: str) -> str:
     parent = normalized_parts[-2] if len(normalized_parts) > 1 else ""
     top_folder = normalized_parts[0] if len(normalized_parts) > 1 else ""
 
-    label_index = _load_modlist_label_index()
-    index = label_index.get("index", {})
-    entries = label_index.get("entries", [])
-
-    candidate_keys = [
-        _normalize_lookup_key(top_folder),
-        _normalize_lookup_key(stem),
-        _normalize_lookup_key(filename),
-        _normalize_lookup_key(parent),
-    ]
-    for key in candidate_keys:
-        if key and key in index:
-            return index[key]
-
-    # Loose fallback: match by containment on normalized keys.
-    # Build the list of lookup keys to try, prioritising the top-level folder
-    # (most likely to match the mod name) before the filename stem.
-    loose_keys = []
-    top_folder_key = _normalize_lookup_key(top_folder)
-    if top_folder_key:
-        loose_keys.append(top_folder_key)
-    stem_key = _normalize_lookup_key(stem)
-    if stem_key and stem_key not in loose_keys:
-        loose_keys.append(stem_key)
-
-    for lookup_key in loose_keys:
-        best_name = None
-        best_score = 0
-        for mod_name in entries:
-            alias_key = _normalize_lookup_key(mod_name)
-            if not alias_key:
-                continue
-            # Exact match on the normalized key — return immediately.
-            if lookup_key == alias_key:
-                return mod_name
-            # Containment in either direction qualifies as a partial match.
-            if lookup_key in alias_key or alias_key in lookup_key:
-                # Score is the length of the shorter key: longer overlap = more
-                # specific match.  This prefers "sodium" over "na" when both
-                # are substrings of the lookup key.
-                score = min(len(lookup_key), len(alias_key))
-                if score > best_score:
-                    best_score = score
-                    best_name = mod_name
-        # Require a minimum overlap length of 6 characters to avoid spurious
-        # matches from very short or generic tokens.
-        if best_name and best_score >= 6:
-            return best_name
+    # The top-level folder is most likely to match the mod name, so it leads
+    # both the exact and the loose candidate lists.
+    resolved = _lookup_label_in_index(
+        exact_keys=[
+            _normalize_lookup_key(top_folder),
+            _normalize_lookup_key(stem),
+            _normalize_lookup_key(filename),
+            _normalize_lookup_key(parent),
+        ],
+        loose_keys=[_normalize_lookup_key(top_folder), _normalize_lookup_key(stem)],
+    )
+    if resolved:
+        return resolved
 
     if top_folder:
         return format_config_filename_as_title(top_folder)
@@ -453,8 +429,10 @@ def _build_config_label_maps(diff_payload):
     stem_to_label = {}
     alias_to_label = {}
 
-    for entry in line_diffs:
-        file_path = str(entry.get("path", "")).strip()
+    label_paths = [str(entry.get("path", "")).strip() for entry in line_diffs]
+    label_paths += [str(move.get("to", "")).strip() for move in moved_to_yosbr]
+
+    for file_path in label_paths:
         if not file_path:
             continue
 
@@ -475,60 +453,32 @@ def _build_config_label_maps(diff_payload):
         if resolved_label:
             alias_to_label[resolved_label.strip().lower()] = resolved_label
 
-    for move in moved_to_yosbr:
-        move_to_path = str(move.get("to", "")).strip()
-        if not move_to_path:
-            continue
-        config_filename = derive_mod_label_from_config_path(move_to_path)
-        stem = os.path.splitext(config_filename)[0].strip().lower()
-        title_label = format_config_filename_as_title(config_filename)
-        resolved_label = derive_mod_display_label_from_config_path(move_to_path)
-
-        if stem and resolved_label:
-            stem_to_label[stem] = resolved_label
-
-        if config_filename:
-            alias_to_label[config_filename.strip().lower()] = resolved_label
-        if stem:
-            alias_to_label[stem] = resolved_label
-        if title_label:
-            alias_to_label[title_label.strip().lower()] = resolved_label
-        if resolved_label:
-            alias_to_label[resolved_label.strip().lower()] = resolved_label
-
     return stem_to_label, alias_to_label
 
 
-def _normalize_config_change_labels(text: str, diff_payload) -> str:
-    stem_to_label, _ = _build_config_label_maps(diff_payload)
-
-    if not stem_to_label:
+def _rewrite_bracket_labels(text: str, label_map) -> str:
+    """Rewrite ``[Label]`` occurrences whose lowercased label is in label_map."""
+    if not label_map:
         return str(text or "")
 
     def _replace_label(match):
         label = str(match.group(1) or "").strip()
-        lowered = label.lower()
-        if lowered in stem_to_label:
-            return f"[{stem_to_label[lowered]}]"
-        return match.group(0)
-
-    return re.sub(r"\[([^\]]+)\]", _replace_label, str(text or ""))
-
-
-def _normalize_config_change_title_labels(text: str, diff_payload) -> str:
-    _, alias_to_label = _build_config_label_maps(diff_payload)
-    if not alias_to_label:
-        return str(text or "")
-
-    def _replace_label(match):
-        label = str(match.group(1) or "").strip()
-        lowered = label.lower()
-        resolved_label = alias_to_label.get(lowered)
+        resolved_label = label_map.get(label.lower())
         if resolved_label:
             return f"[{resolved_label}]"
         return match.group(0)
 
     return re.sub(r"\[([^\]]+)\]", _replace_label, str(text or ""))
+
+
+def _normalize_config_change_labels(text: str, diff_payload) -> str:
+    stem_to_label, _ = _build_config_label_maps(diff_payload)
+    return _rewrite_bracket_labels(text, stem_to_label)
+
+
+def _normalize_config_change_title_labels(text: str, diff_payload) -> str:
+    _, alias_to_label = _build_config_label_maps(diff_payload)
+    return _rewrite_bracket_labels(text, alias_to_label)
 
 
 def _apply_yosbr_default_wording(text: str, diff_payload) -> str:
@@ -670,7 +620,6 @@ def _normalize_yosbr_move_bullet_wording(bullets: List[str], diff_payload) -> Li
         if not line:
             continue
         line_lower = line.lower()
-        replaced = False
 
         for from_lower, meta in move_map.items():
             if from_lower not in line_lower:
@@ -688,10 +637,9 @@ def _normalize_yosbr_move_bullet_wording(bullets: List[str], diff_payload) -> Li
                 line_body = f"{line_body} (YOSBR)"
 
             line = f"{line_body}{label_suffix}"
-            replaced = True
             break
 
-        normalized.append(line if replaced else line)
+        normalized.append(line)
 
     return normalized
 
@@ -1335,7 +1283,7 @@ def generate_yosbr_default_move_bullets(diff_payload, max_lines=8) -> List[str]:
     return bullets
 
 
-def format_config_change_labels_with_llm(text: str, diff_payload, settings, packwiz_config_path="") -> Optional[str]:
+def format_config_change_labels_with_llm(text: str, diff_payload, settings) -> Optional[str]:
     """Post-process config-change bullets by asking the LLM to fix bracket labels.
 
     Sends ``text`` to the configured Ollama model with a label-rewriting prompt
@@ -1345,7 +1293,6 @@ def format_config_change_labels_with_llm(text: str, diff_payload, settings, pack
         text: Bullet text with potentially incorrect bracket labels.
         diff_payload: Structured diff dict used to build the label mapping prompt.
         settings: Settings object with Ollama connection and model parameters.
-        packwiz_config_path: Unused here; accepted for call-site consistency.
 
     Returns:
         Corrected bullet text, or ``None`` if the provider is not Ollama or all
@@ -1536,7 +1483,7 @@ def _generate_config_change_item_with_llm(item_payload, settings, max_lines: int
             done_reason = str(response_json.get("done_reason", "") or "").strip().lower()
             if bullet_lines and invalid_count == 0:
                 normalized = _normalize_config_change_labels("\n".join(bullet_lines), item_payload)
-                titled = format_config_change_labels_with_llm(normalized, item_payload, settings, packwiz_config_path=packwiz_config_path)
+                titled = format_config_change_labels_with_llm(normalized, item_payload, settings)
                 if titled:
                     llm_text = _apply_yosbr_default_wording(
                         _normalize_config_change_title_labels(titled, item_payload),

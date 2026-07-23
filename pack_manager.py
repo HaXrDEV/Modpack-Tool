@@ -30,11 +30,63 @@ def _write_mod_toml(item_path, mod_toml):
         toml.dump(mod_toml, f)
 
 
+# Packwiz metadata files that must never be bundled as pack overrides.
+_META_SKIP = {"pack.toml", "index.toml", ".packwizignore"}
+
+
+def _load_pack_data(packwiz_path):
+    """Parse and return the pack.toml of a packwiz project as a dict."""
+    with open(os.path.join(packwiz_path, "pack.toml"), "r", encoding="utf-8") as f:
+        return toml.load(f)
+
+
+def _collect_override_entries(packwiz_path):
+    """Collect non-mod files to bundle as pack overrides.
+
+    Walks the packwiz tree skipping dot-directories, packwiz metadata,
+    ``.pw.toml`` mod entries, the ``mods/`` folder, and previously exported
+    pack archives.
+
+    Returns:
+        List of ``(relative_path, full_path)`` tuples with forward-slash
+        relative paths.
+    """
+    override_entries = []
+    for dirpath, dirnames, filenames in os.walk(packwiz_path):
+        dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
+        for filename in sorted(filenames):
+            full_path = os.path.join(dirpath, filename)
+            rel = os.path.relpath(full_path, packwiz_path).replace("\\", "/")
+            if rel in _META_SKIP or rel.endswith(".pw.toml") or rel.startswith("mods/"):
+                continue
+            if rel.endswith(".zip") or rel.endswith(".mrpack"):
+                continue
+            override_entries.append((rel, full_path))
+    return override_entries
+
+
 def _print_packwiz(text):
     """Print each non-empty line from packwiz output with a [PackWiz] prefix."""
     for line in text.splitlines():
         if line.strip():
             print(f"[PackWiz] {line}", flush=True)
+
+
+def _run_packwiz(packwiz_exe, packwiz_path, *args):
+    """Run a packwiz subcommand in the pack directory and echo its output.
+
+    Returns:
+        The ``subprocess.CompletedProcess``; callers apply their own
+        return-code policy.
+    """
+    result = subprocess.run(
+        [packwiz_exe, *args],
+        cwd=packwiz_path,
+        capture_output=True,
+        text=True,
+    )
+    _print_packwiz(result.stdout)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -56,8 +108,6 @@ def run_packwiz_export(packwiz_exe, packwiz_path, export_format="curseforge"):
         RuntimeError: if packwiz exits with a non-zero return code.
         FileNotFoundError: if the expected output file is missing after export.
     """
-    import subprocess
-
     ext = ".mrpack" if export_format == "modrinth" else ".zip"
 
     # Snapshot existing output files before running so we can detect the new one.
@@ -66,13 +116,7 @@ def run_packwiz_export(packwiz_exe, packwiz_path, export_format="curseforge"):
         if f.endswith(ext) and os.path.isfile(os.path.join(packwiz_path, f))
     }
 
-    result = subprocess.run(
-        [packwiz_exe, export_format, "export"],
-        cwd=packwiz_path,
-        capture_output=True,
-        text=True,
-    )
-    _print_packwiz(result.stdout)
+    result = _run_packwiz(packwiz_exe, packwiz_path, export_format, "export")
     if result.returncode != 0:
         raise RuntimeError(
             f"packwiz {export_format} export failed:\n{result.stderr.strip()}"
@@ -101,13 +145,7 @@ def refresh_index(packwiz_exe, packwiz_path):
         packwiz_exe: Absolute path to the packwiz executable.
         packwiz_path: Absolute path to the packwiz directory (contains pack.toml).
     """
-    result = subprocess.run(
-        [packwiz_exe, "refresh"],
-        cwd=packwiz_path,
-        capture_output=True,
-        text=True,
-    )
-    _print_packwiz(result.stdout)
+    result = _run_packwiz(packwiz_exe, packwiz_path, "refresh")
     if result.returncode != 0:
         raise RuntimeError(f"packwiz refresh failed:\n{result.stderr.strip()}")
 
@@ -154,13 +192,7 @@ def update_single_mod(packwiz_exe, packwiz_path, item_path):
     slug = os.path.basename(item_path)
     if slug.endswith(".pw.toml"):
         slug = slug[:-len(".pw.toml")]
-    result = subprocess.run(
-        [packwiz_exe, "update", slug, "-y"],
-        cwd=packwiz_path,
-        capture_output=True,
-        text=True,
-    )
-    _print_packwiz(result.stdout)
+    result = _run_packwiz(packwiz_exe, packwiz_path, "update", slug, "-y")
     return result.returncode == 0
 
 
@@ -186,13 +218,7 @@ def update_all_mods(packwiz_exe, packwiz_path, mods_path):
         except Exception:
             pass
     print(f"[Update] Updating mods ({pinned_count} pinned, skipped)...", flush=True)
-    result = subprocess.run(
-        [packwiz_exe, "update", "--all", "-y"],
-        cwd=packwiz_path,
-        capture_output=True,
-        text=True,
-    )
-    _print_packwiz(result.stdout)
+    _run_packwiz(packwiz_exe, packwiz_path, "update", "--all", "-y")
     refresh_index(packwiz_exe, packwiz_path)
 
 
@@ -211,13 +237,7 @@ def add_mod_from_modrinth(packwiz_exe, packwiz_path, identifier):
     Raises:
         RuntimeError: If packwiz exits with a non-zero return code.
     """
-    result = subprocess.run(
-        [packwiz_exe, "modrinth", "add", identifier],
-        cwd=packwiz_path,
-        capture_output=True,
-        text=True,
-    )
-    _print_packwiz(result.stdout)
+    result = _run_packwiz(packwiz_exe, packwiz_path, "modrinth", "add", identifier)
     if result.returncode != 0:
         raise RuntimeError(f"packwiz modrinth add failed for '{identifier}'")
 
@@ -233,13 +253,7 @@ def add_mod_from_curseforge(packwiz_exe, packwiz_path, identifier):
     Raises:
         RuntimeError: If packwiz exits with a non-zero return code.
     """
-    result = subprocess.run(
-        [packwiz_exe, "curseforge", "add", identifier],
-        cwd=packwiz_path,
-        capture_output=True,
-        text=True,
-    )
-    _print_packwiz(result.stdout)
+    result = _run_packwiz(packwiz_exe, packwiz_path, "curseforge", "add", identifier)
     if result.returncode != 0:
         raise RuntimeError(f"packwiz curseforge add failed for '{identifier}'")
 
@@ -320,9 +334,7 @@ def export_cf_pack(packwiz_path, mods_path, output_dir, side="client"):
     Returns:
         Absolute path to the created zip file.
     """
-    pack_toml_path = os.path.join(packwiz_path, "pack.toml")
-    with open(pack_toml_path, "r", encoding="utf-8") as f:
-        pack_data = toml.load(f)
+    pack_data = _load_pack_data(packwiz_path)
 
     pack_name = pack_data.get("name", "modpack")
     pack_version = pack_data.get("version", "0.0.0")
@@ -405,22 +417,21 @@ def export_cf_pack(packwiz_path, mods_path, output_dir, side="client"):
     # -------------------------------------------------------------------------
     # Fingerprint + batch CF lookup
     # -------------------------------------------------------------------------
-    fp_to_fname = {}
+    fname_to_fp = {}
     for entry in need_download:
         fname = entry["filename"]
         if fname in downloaded:
-            fp = _compute_cf_fingerprint(downloaded[fname])
-            fp_to_fname[fp] = fname
+            fname_to_fp[fname] = _compute_cf_fingerprint(downloaded[fname])
 
     cf_matches = {}
-    if fp_to_fname:
-        sample_fp, sample_fname = next(iter(fp_to_fname.items()))
+    if fname_to_fp:
+        sample_fname, sample_fp = next(iter(fname_to_fp.items()))
         print(
             f"[Export] Sample fingerprint: {sample_fname} → {sample_fp}",
             flush=True,
         )
-        print(f"[Export] Looking up {len(fp_to_fname)} fingerprint(s) on CurseForge...", flush=True)
-        cf_matches = fetch_cf_fingerprints_batch(list(fp_to_fname.keys()))
+        print(f"[Export] Looking up {len(fname_to_fp)} fingerprint(s) on CurseForge...", flush=True)
+        cf_matches = fetch_cf_fingerprints_batch(list(fname_to_fp.values()))
 
     # Split fingerprinted mods into manifest entries vs jar overrides
     cf_files = list(cf_direct)
@@ -431,8 +442,7 @@ def export_cf_pack(packwiz_path, mods_path, output_dir, side="client"):
         jar = downloaded.get(fname)
         if jar is None:
             continue
-        fp = _compute_cf_fingerprint(jar)
-        match = cf_matches.get(fp)
+        match = cf_matches.get(fname_to_fp[fname])
         if match:
             cf_files.append({
                 "projectID": match["project_id"],
@@ -469,23 +479,7 @@ def export_cf_pack(packwiz_path, mods_path, output_dir, side="client"):
     # -------------------------------------------------------------------------
     # Collect non-mod override files (configs, resourcepacks, etc.)
     # -------------------------------------------------------------------------
-    _meta_skip = {"pack.toml", "index.toml", ".packwizignore"}
-    override_entries = []
-
-    for dirpath, dirnames, filenames in os.walk(packwiz_path):
-        dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
-        for filename in sorted(filenames):
-            full_path = os.path.join(dirpath, filename)
-            rel = os.path.relpath(full_path, packwiz_path).replace("\\", "/")
-            if rel in _meta_skip:
-                continue
-            if rel.endswith(".pw.toml"):
-                continue
-            if rel.startswith("mods/"):
-                continue
-            if rel.endswith(".zip") or rel.endswith(".mrpack"):
-                continue
-            override_entries.append((rel, full_path))
+    override_entries = _collect_override_entries(packwiz_path)
 
     # -------------------------------------------------------------------------
     # Write ZIP
@@ -528,9 +522,7 @@ def export_mrpack(packwiz_path, mods_path, output_dir, side="client"):
     Returns:
         Absolute path to the created .mrpack file.
     """
-    pack_toml_path = os.path.join(packwiz_path, "pack.toml")
-    with open(pack_toml_path, "r", encoding="utf-8") as f:
-        pack_data = toml.load(f)
+    pack_data = _load_pack_data(packwiz_path)
 
     pack_name = pack_data.get("name", "modpack")
     pack_version = pack_data.get("version", "0.0.0")
@@ -615,19 +607,7 @@ def export_mrpack(packwiz_path, mods_path, output_dir, side="client"):
     zip_name = f"{pack_name}-{mc_version}-{pack_version}.mrpack"
     zip_path = os.path.join(output_dir, zip_name)
 
-    _meta_skip = {"pack.toml", "index.toml", ".packwizignore"}
-    override_entries = []
-    for dirpath, dirnames, filenames in os.walk(packwiz_path):
-        dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
-        for filename_entry in sorted(filenames):
-            full_path = os.path.join(dirpath, filename_entry)
-            rel = os.path.relpath(full_path, packwiz_path).replace("\\", "/")
-            if rel in _meta_skip or rel.endswith(".pw.toml") or rel.startswith("mods/"):
-                continue
-            # Skip previously exported pack zips sitting in packwiz_path
-            if rel.endswith(".zip") or rel.endswith(".mrpack"):
-                continue
-            override_entries.append((rel, full_path))
+    override_entries = _collect_override_entries(packwiz_path)
 
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("modrinth.index.json", json.dumps(index, indent=2))

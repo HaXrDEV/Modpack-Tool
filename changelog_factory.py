@@ -13,6 +13,16 @@ import requests
 from datetime import datetime
 from urllib.parse import quote
 
+
+def changelog_filename(version, mc_version):
+    """Build the canonical changelog filename for a pack version.
+
+    The inverse of ``ChangelogFactory.parse_changelog_filename`` — keep the
+    two in sync.
+    """
+    return f"{version}+{mc_version}.yml"
+
+
 class ChangelogFactory:
     """Generates and compares modpack changelogs from YAML changelog files and packwiz TOML data.
 
@@ -27,6 +37,7 @@ class ChangelogFactory:
         self.settings = settings
         self.yaml = yaml_instance
         self._missing_key_warnings = set()
+        self._parsed_changelog_cache = {}
         
     def get_changelog_value(self, changelog_yml, key):
         """Read a single key from a YAML changelog file, with deduplicated warnings.
@@ -43,8 +54,13 @@ class ChangelogFactory:
         if changelog_yml and changelog_yml.endswith(('.yml', '.yaml')):
             file_path = os.path.join(self.changelog_dir, changelog_yml)
             try:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    changelog_data = self.yaml.load(f) or {}
+                # Cache parsed files: callers read many keys from the same YAML.
+                if file_path in self._parsed_changelog_cache:
+                    changelog_data = self._parsed_changelog_cache[file_path]
+                else:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        changelog_data = self.yaml.load(f) or {}
+                    self._parsed_changelog_cache[file_path] = changelog_data
                 return changelog_data[key]
             except YAMLError as e:
                 print(f"Error parsing {file_path}: {e}")
@@ -74,27 +90,15 @@ class ChangelogFactory:
                   ``'modified'`` is a list of ``(name, before, after)`` tuples where
                   *before* and *after* describe the filename or hash that changed.
         """
-        # Initialize dictionaries to store TOML data
-        toml_data_1 = {}
-        toml_data_2 = {}
-        
-        def local_load_toml_files_from_dir(input_dir, output_dict):
-            for filename in os.listdir(input_dir):
-                if not filename.endswith(".toml"):
-                    continue
+        def local_filter_enabled(loaded):
+            return {
+                filename: mod_toml
+                for filename, mod_toml in loaded.items()
+                if str(mod_toml.get("side", "both")) in ("both", "client", "server")
+            }
 
-                filepath = os.path.join(input_dir, filename)
-                try:
-                    with open(filepath, "r", encoding="utf8") as f:
-                        mod_toml = toml.load(f)
-                    side = str(mod_toml.get("side", "both"))
-                    if side in ("both", "client", "server"):
-                        output_dict[filename] = mod_toml
-                except (OSError, toml.TomlDecodeError) as ex:
-                    print(ex)
-
-        local_load_toml_files_from_dir(dir1, toml_data_1)
-        local_load_toml_files_from_dir(dir2, toml_data_2)
+        toml_data_1 = local_filter_enabled(self._load_toml_dir(dir1))
+        toml_data_2 = local_filter_enabled(self._load_toml_dir(dir2))
 
         # Prepare to store results
         results = {
@@ -174,7 +178,13 @@ class ChangelogFactory:
 
         return results
 
-    def _extract_version_and_mc_from_filename(self, changelog_filename):
+    def parse_changelog_filename(self, changelog_filename):
+        """Return ``(version, mc_version)`` parsed from a changelog filename.
+
+        Expected filename format: ``<version>+<mc_version>.yml`` (the inverse
+        of the module-level ``changelog_filename``).  Returns ``(None, None)``
+        when the format does not match.
+        """
         base_name = os.path.splitext(os.path.basename(str(changelog_filename or "")))[0]
         version_part, has_sep, mc_part = base_name.partition("+")
         version_part = str(version_part or "").strip()
@@ -182,15 +192,6 @@ class ChangelogFactory:
         if not has_sep or not version_part or not mc_part:
             return None, None
         return version_part, mc_part
-
-    def parse_changelog_filename(self, changelog_filename):
-        """Return ``(version, mc_version)`` parsed from a changelog filename.
-
-        Delegates to ``_extract_version_and_mc_from_filename``.  Expected
-        filename format: ``<version>+<mc_version>.yml``.  Returns
-        ``(None, None)`` when the format does not match.
-        """
-        return self._extract_version_and_mc_from_filename(changelog_filename)
 
     def _resolve_compare_version_path(self, tempgit_path, version, mc_version):
         combined_path = os.path.join(tempgit_path, f"{version}+{mc_version}")
@@ -221,7 +222,7 @@ class ChangelogFactory:
         for changelog in os.listdir(self.changelog_dir):
             if not changelog.endswith((".yml", ".yaml")):
                 continue
-            current_version, changelog_mc_version = self._extract_version_and_mc_from_filename(changelog)
+            current_version, changelog_mc_version = self.parse_changelog_filename(changelog)
             if not current_version or not changelog_mc_version:
                 continue
             version_candidates.append((str(current_version), str(changelog_mc_version)))
@@ -552,8 +553,12 @@ class ChangelogFactory:
             "moved_to_yosbr": moved_to_yosbr,
         }
 
-    def _load_toml_state(self, input_dir):
-        state = {}
+    def _load_toml_dir(self, input_dir):
+        """Parse every .toml file in a directory. Returns {filename: parsed_dict}.
+
+        Unparseable files are reported and skipped.
+        """
+        loaded = {}
         for filename in os.listdir(input_dir):
             if not filename.endswith(".toml"):
                 continue
@@ -562,7 +567,15 @@ class ChangelogFactory:
                 continue
             try:
                 with open(filepath, "r", encoding="utf8") as f:
-                    mod_toml = toml.load(f)
+                    loaded[filename] = toml.load(f)
+            except (OSError, toml.TomlDecodeError) as ex:
+                print(ex)
+        return loaded
+
+    def _load_toml_state(self, input_dir):
+        state = {}
+        for filename, mod_toml in self._load_toml_dir(input_dir).items():
+            try:
                 side_raw = str(mod_toml.get("side", "both")).strip()
                 state[filename] = {
                     "name": markdown.remove_bracketed_text(mod_toml.get("name", filename)),
@@ -613,14 +626,6 @@ class ChangelogFactory:
             "newly_added": unique_sorted(newly_added),
             "reenabled_from_disabled": unique_sorted(reenabled_from_disabled),
         }
-
-    def sort_versions(self, version_list):
-        """
-        Sort versions according to semantic versioning rules, handling post-releases correctly.
-        Returns list in descending order (newest first).
-        """
-        return sorted(version_list, key=lambda x: version_helper.parse(self.normalize_version(str(x))), reverse=True)
-
 
     def normalize_version(self, version_str):
         """
@@ -702,28 +707,24 @@ class ChangelogFactory:
             print("No version data available.")
             return None
 
+        def local_version_info(version):
+            return {
+                "name": version["name"],
+                "version_number": version["version_number"],
+                "date_published": version["date_published"],
+                "download_url": version["files"][0]["url"] if version["files"] else None,
+                "changelog": version["changelog"]
+            }
+
         if version_number:
             for version in versions:
                 if version["version_number"] == version_number:
-                    return {
-                        "name": version["name"],
-                        "version_number": version["version_number"],
-                        "date_published": version["date_published"],
-                        "download_url": version["files"][0]["url"] if version["files"] else None,
-                        "changelog": version["changelog"]
-                    }
+                    return local_version_info(version)
             print(f"Version {version_number} not found.")
             return None
 
         # Find the latest version by date_published
-        latest_version = max(versions, key=lambda v: v["date_published"])
-        return {
-            "name": latest_version["name"],
-            "version_number": latest_version["version_number"],
-            "date_published": latest_version["date_published"],
-            "download_url": latest_version["files"][0]["url"] if latest_version["files"] else None,
-            "changelog": latest_version["changelog"]
-        }
+        return local_version_info(max(versions, key=lambda v: v["date_published"]))
 
     def build_markdown_changelog(self, repo_owner, repo_name, tempgit_path, packwiz_path, file_name="CHANGELOG", repo_branch="main", mc_version=None):
         """Generate a full Markdown changelog file from all YAML changelog entries.
@@ -746,6 +747,10 @@ class ChangelogFactory:
         """
         mdFile = MdUtils(file_name)
 
+        # Changelog YAMLs may have been rewritten (auto-generation, version
+        # bumps) since the last build; the cache is only valid within one build.
+        self._parsed_changelog_cache.clear()
+
         changelog_files = os.listdir(self.changelog_dir)
         modrinth_versions = self.fetch_modrinth_versions(self.modpack_name)
         
@@ -753,7 +758,7 @@ class ChangelogFactory:
         version_file_pairs = []
         for changelog in changelog_files:
             if changelog.endswith(('.yml', '.yaml')):
-                ver, mc_ver = self._extract_version_and_mc_from_filename(changelog)
+                ver, mc_ver = self.parse_changelog_filename(changelog)
                 if not ver or not mc_ver:
                     continue
                 version_file_pairs.append((changelog, str(ver), str(mc_ver)))
@@ -774,12 +779,14 @@ class ChangelogFactory:
             reverse=True
         )
         
-        changelog_list = list(sorted_pairs)
+        changelog_list = sorted_pairs
 
+        # The latest published Modrinth version never changes within one build.
+        latest_modrinth_info = self.extract_modrinth_version_info(modrinth_versions)
+        latest_modrinth_version_number = (
+            latest_modrinth_info.get("version_number") if latest_modrinth_info else None
+        )
 
-
-
-        # Iterate over the list with an index using enumerate
         mdFile.new_paragraph(f"##### {self.modpack_name}")
 
         if mc_version:
@@ -842,7 +849,6 @@ class ChangelogFactory:
                     )
                     next_version_mods_path = os.path.join(next_version_path, "mods")
                     next_version_resourcepacks_path = os.path.join(next_version_path, "resourcepacks")
-                    print(f"[DEBUG] {next_version_path} + {version_path}")
 
                 if str(version) != str(self.modpack_version) and next_version:
                     mod_differences = self.compare_toml_files(next_version_mods_path, version_mods_path)
@@ -863,13 +869,7 @@ class ChangelogFactory:
                     added_resourcepacks = resourcepack_differences['added']
                     removed_resourcepacks = resourcepack_differences['removed']
                     modified_resourcepacks = resourcepack_differences['modified']
-                
-                latest_modrinth_version_info = self.extract_modrinth_version_info(modrinth_versions)
-                if latest_modrinth_version_info:
-                    latest_modrinth_version_number = latest_modrinth_version_info['version_number']
-                else:
-                    latest_modrinth_version_number = None
-                
+
                 date_only = None
                 try:
                     current_modrinth_version_info = self.extract_modrinth_version_info(modrinth_versions, version)
@@ -889,12 +889,11 @@ class ChangelogFactory:
                     else:
                         mdFile.new_paragraph(f"## {version} <a href='#{version}' id='{version}'></a>")
 
-                
+
                 if date_only:
                     mdFile.new_paragraph(f"<a href='https://github.com/{repo_owner}/{repo_name}/blob/{repo_branch}/Changelogs/changelog_mods_{version}.md'><Badge type='tip' text='Mod Updates'/></a><Badge type='info' text='{loader_badge_text}'/><Badge type='info' text='{date_only}'/>")
                 else:
                     mdFile.new_paragraph(f"<a href='https://github.com/{repo_owner}/{repo_name}/blob/{repo_branch}/Changelogs/changelog_mods_{version}.md'><Badge type='tip' text='Mod Updates'/></a><Badge type='info' text='{loader_badge_text}'/>")
-                # mdFile.new_paragraph(f"*{date_only}* | *Fabric Loader {fabric_loader}* | *[Mod Updates](https://github.com/{repo_owner}/{repo_name}/blob/{repo_branch}/Changelogs/changelog_mods_{version}.md)*")
 
                 # Show comparison note when crossing to a previous MC line.
                 if (

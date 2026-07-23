@@ -16,15 +16,18 @@ CURSEFORGE_API_BASE = "https://api.curseforge.com/v1"
 _MODRINTH_SEMAPHORE = threading.Semaphore(8)
 _CURSEFORGE_SEMAPHORE = threading.Semaphore(8)
 
-# Thread-local flag set when a request exhausts all 429 retries.
-_tls = threading.local()
-
 # Default community API key sourced from packwiz (open-source, same approach).
-# Users can override via curseforge_api_key in settings.yml.
+# Users can override via a cf-api-key.txt file next to the tool scripts
+# (read at startup by modpack_export.load_curseforge_key).
 _CF_DEFAULT_KEY = base64.b64decode(
     "JDJhJDEwJHNBWVhqblU1N0EzSmpzcmJYM3JVdk92UWk2NHBLS3BnQ2VpbGc1TUM1UGNKL0RYTmlGWWxh"
 ).decode("utf-8")
 _CF_API_KEY = ""
+
+
+def _cf_headers():
+    """Headers for api.curseforge.com requests (user key or community default)."""
+    return {"x-api-key": _CF_API_KEY or _CF_DEFAULT_KEY}
 
 
 def configure_curseforge_api_key(key):
@@ -56,7 +59,6 @@ def _modrinth_get(url, params=None, timeout=20):
         reset_secs = int(response.headers.get("X-Ratelimit-Reset", 0) or 0)
         wait = max(1.0, reset_secs) if reset_secs else (2 ** attempt)
         time.sleep(min(wait, 60))
-    _tls.hit_429 = True
     return response  # return last response; caller handles non-200 status
 
 
@@ -69,7 +71,7 @@ def _curseforge_get(url, params=None, timeout=20):
     when none is configured, as the ``x-api-key`` header required by
     ``api.curseforge.com``.
     """
-    headers = {"x-api-key": _CF_API_KEY or _CF_DEFAULT_KEY}
+    headers = _cf_headers()
     for attempt in range(4):
         with _CURSEFORGE_SEMAPHORE:
             response = requests.get(url, params=params, timeout=timeout, headers=headers)
@@ -77,7 +79,6 @@ def _curseforge_get(url, params=None, timeout=20):
             return response
         wait = 2 ** attempt
         time.sleep(min(wait, 30))
-    _tls.hit_429 = True
     return response
 
 SUPPORTED_MOD_LOADERS = ("fabric", "quilt", "forge", "neoforge")
@@ -1010,7 +1011,7 @@ def fetch_cf_fingerprints_batch(fingerprints):
                 f"{CURSEFORGE_API_BASE}/fingerprints",
                 json={"fingerprints": chunk},
                 headers={
-                    "x-api-key": _CF_API_KEY or _CF_DEFAULT_KEY,
+                    **_cf_headers(),
                     "Content-Type": "application/json",
                     "Accept": "application/json",
                 },

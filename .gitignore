@@ -4,6 +4,7 @@ prev_release
 tempgit
 gh-token.txt
 cf-api-key.txt
+tool_config.yml
 .claude
 
 # Byte-compiled / optimized / DLL files

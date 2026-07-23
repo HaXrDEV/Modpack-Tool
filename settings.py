@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List
 
 
 ############################################################
@@ -68,9 +68,6 @@ class Settings:
     client_export_format: str = "curseforge"
     alpha_update_policy: str = "prompt"
     bump_target_version: str = ""
-    auto_summary_provider: str = "ollama"
-    auto_summary_model: str = "qwen3:4b-instruct"
-    auto_summary_endpoint: str = "http://127.0.0.1:11434/api/generate"
     auto_config_provider: str = "ollama"
     auto_config_model: str = "qwen3:4b-instruct"
     auto_config_endpoint: str = "http://127.0.0.1:11434/api/generate"
@@ -78,10 +75,8 @@ class Settings:
     comparison_files_versioned_root_min_version: str = "4.0.0-beta.3"
     comparison_files_versioned_root_max_version: str = "4.4.0-beta.1"
 
-    # List settings
+    # List and numeric settings
     server_mods_remove_list: List[str] = None
-    auto_summary_timeout_seconds: int = 45
-    auto_summary_max_items: int = 8
     auto_config_timeout_seconds: int = 45
     auto_config_temperature: float = 0.25
     auto_config_max_items: int = 20
@@ -154,10 +149,21 @@ def load_settings(settings_path: str, yaml_instance) -> "Settings":
     # overwriting an explicitly set new key.
     _legacy_renames = {
         "client_export_use_mmc": "client_export_multi_platform",
+        "download_compare_files": "download_comparison_files",
     }
     for old_key, new_key in _legacy_renames.items():
         if old_key in settings_yml and new_key not in settings_yml:
             settings_yml[new_key] = settings_yml.pop(old_key)
+    # Obsolete keys from removed features: drop silently instead of warning.
+    _obsolete_keys = (
+        "auto_summary_provider",
+        "auto_summary_model",
+        "auto_summary_endpoint",
+        "auto_summary_timeout_seconds",
+        "auto_summary_max_items",
+    )
+    for old_key in _obsolete_keys:
+        settings_yml.pop(old_key, None)
     s = Settings()
     update_settings_from_dict(s, settings_yml)
     return s

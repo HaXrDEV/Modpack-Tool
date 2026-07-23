@@ -8,12 +8,12 @@ create_release_notes: True
 server_mods_remove_list: []
 print_path_debug: True
 update_publish_workflow: True
-download_compare_files: True
+download_comparison_files: True
 generate_primary_changelog: True
 generate_mods_changelog: True
 # Legacy compatibility preset. If True, missing modular flags below are auto-enabled.
 breakneck_fixes: False
-client_export_use_mmc: False
+client_export_multi_platform: False
 show_export_mode_notice: False
 changelog_template_use_overview_layout: False
 changelog_include_compare_notice: False

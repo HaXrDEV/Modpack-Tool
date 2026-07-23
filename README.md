@@ -11,15 +11,37 @@ Requires Python 3.11
 - [packwiz](https://github.com/packwiz/packwiz) — used to manage the mod metadata format and pack index. The CurseForge community API key bundled in this tool is sourced from the packwiz project.
 - [mmc-export](https://github.com/RozeFound/mmc-export) — the fingerprint-based CurseForge export (murmur2 hash resolution via `/v1/fingerprints`) is based on the approach used by mmc-export.
 
-## Current behavior
+## Standalone tool with switchable projects
 
-The script (`Modpack-Export.py`) assumes this repo layout:
+The tool is a standalone program: clone this repository anywhere and register one or more modpack projects with it. It no longer needs to live inside a modpack repository.
 
-- `../settings.yml` (next to `Packwiz`, `Changelogs`, `Export`, `Server Pack`)
-- `../Packwiz/pack.toml`
-- `packwiz.exe` at `%USERPROFILE%\go\bin\packwiz.exe`
+To launch, run `run_modpack_tool.bat` at the repo root (double-click or from a terminal). It creates the `venv` on first run, re-installs dependencies whenever `requirements.txt` changes, and starts the tool. To update the tool itself, `git pull` and launch again.
 
-If these paths do not match your setup, the workflow will fail.
+A **modpack project** is a folder containing:
+
+- `Packwiz/pack.toml` (required — this is how a project is recognized)
+- `settings.yml` (created from the template on first activation if missing)
+- `Changelogs/`, `Export/`, `Server Pack/` (created automatically where safe)
+
+On first launch the tool asks for a project path (drag & drop works). After that it remembers your projects and re-opens the last-used one automatically. Use `P)` in the action menu to switch between projects or add/remove them.
+
+Tool-level state lives in `tool_config.yml` next to the scripts (gitignored):
+
+```yaml
+last_used_project: C:\path\to\MyPack
+packwiz_exe_path: ""   # optional override; empty uses %USERPROFILE%\go\bin\packwiz.exe
+github_token: ""       # optional; empty falls back to gh-token.txt, then a prompt
+curseforge_api_key: "" # optional; empty falls back to cf-api-key.txt, then the packwiz community key
+projects:
+  - name: MyPack
+    root: C:\path\to\MyPack
+```
+
+Per-project working data (comparison snapshots, previous releases) is stored in a `.modpack-tool/` folder at each project root. The tool adds `.modpack-tool/` to the project's `.gitignore` automatically.
+
+### Migrating from an embedded install
+
+If a project still has the old embedded layout (`<project>/Modpack-CLI-Tool/` with `tempgit`/`prev_release` data inside), the tool offers a one-time move of that data into `.modpack-tool/` when the project is first activated. Running the tool from inside an old embedded clone also auto-detects the surrounding modpack repo and offers to register it.
 
 ## Action menu
 
@@ -39,6 +61,7 @@ At startup, the tool shows an action menu so you can choose what to run for this
 - `12)` List disabled mods
 - `13)` Add mod
 - `14)` Find orphaned library mods
+- `P)` Switch / manage projects
 - `0)` Exit
 
 ## Export
