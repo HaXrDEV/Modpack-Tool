@@ -75,7 +75,7 @@ from github_downloader import AsyncGitHubDownloader
 import asyncio
 
 # Changelog stuff
-from changelog_factory import ChangelogFactory, changelog_filename
+from changelog_factory import ChangelogFactory, changelog_filename, changelog_stem
 
 # Version scheme helpers
 from pack_version import (
@@ -1653,7 +1653,7 @@ def download_missing_comparison_files():
             if not version or not tag_mc_ver:
                 print(f"[Changelog] Skipping invalid changelog filename format: {changelog}")
                 continue
-            version_path = os.path.join(tempgit_path, f"{version}+{tag_mc_ver}")
+            version_path = os.path.join(tempgit_path, changelog_stem(version, tag_mc_ver))
             missing_compare_data = (
                 not os.path.isdir(os.path.join(version_path, "mods"))
                 or not os.path.isdir(os.path.join(version_path, "resourcepacks"))
@@ -1700,7 +1700,7 @@ def write_release_data(diff_payload=None):
     # sync is a clean directory copy separate from the authored YAML.
     data_dir = os.path.join(changelog_dir_path, "data")
     os.makedirs(data_dir, exist_ok=True)
-    data_path = os.path.join(data_dir, f"{pack_version}+{minecraft_version}.json")
+    data_path = os.path.join(data_dir, changelog_filename(pack_version, minecraft_version, ext="json"))
     released = date.today().isoformat()
     if os.path.isfile(data_path):
         try:

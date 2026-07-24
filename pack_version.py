@@ -121,6 +121,13 @@ def format_version_anchor(version_str) -> str:
     return version if "v" in version else f"v{version}"
 
 
+def _bump_release(release_text):
+    """Increment the last numeric component of a release string ("1.6" -> "1.7")."""
+    parts = release_text.split(".")
+    parts[-1] = str(int(parts[-1]) + 1)
+    return ".".join(parts)
+
+
 def suggest_next_release(current_version):
     """Suggest the next MC-scheme version, or None for non-scheme versions.
 
@@ -135,9 +142,7 @@ def suggest_next_release(current_version):
     if pre != _FINAL_PRE:
         return base
     mc_text, _, release_text = base.partition("-")
-    release_parts = release_text.split(".")
-    release_parts[-1] = str(int(release_parts[-1]) + 1)
-    return f"{mc_text}-{'.'.join(release_parts)}"
+    return f"{mc_text}-{_bump_release(release_text)}"
 
 
 def minecraft_content_key(mc_version) -> str:
@@ -161,14 +166,16 @@ def minecraft_content_key(mc_version) -> str:
 def suggest_migration_version(target_mc, current_version=None) -> str:
     """Suggest the pack version to release after migrating to ``target_mc``.
 
-    The version tracks the content update, not the exact Minecraft version: a
-    patch within the same content update (``26.1`` -> ``26.1.1``) continues the
-    current line (next release), while a new content update (``26.1`` -> ``26.2``)
-    resets to ``<content-key>-1.0``.
+    The version's prefix is the exact Minecraft version (so a patch is visible,
+    e.g. ``26.1.1-1.2``), while the release counter tracks the content update: a
+    patch within the same content update continues the current line, and a new
+    content update resets to ``1.0``.
     """
-    key = minecraft_content_key(target_mc)
-    if current_version and is_mc_prefixed_version(current_version):
-        current_content_key = minecraft_content_key(str(current_version).partition("-")[0])
-        if current_content_key == key:
-            return suggest_next_release(current_version)
-    return f"{key}-1.0"
+    target = str(target_mc or "").strip()
+    key = minecraft_content_key(target)
+    current = str(current_version or "").strip()
+    if current and is_mc_prefixed_version(current):
+        if minecraft_content_key(current.partition("-")[0]) == key:
+            release_text = _split_pre_tag(current)[0].partition("-")[2]
+            return f"{target}-{_bump_release(release_text)}"
+    return f"{target}-1.0"

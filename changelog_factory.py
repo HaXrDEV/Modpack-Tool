@@ -8,19 +8,37 @@ from mdutils.mdutils import MdUtils
 import re
 import toml
 import markdown_helper as markdown
-from pack_version import parse_pack_version_key, format_version_anchor, is_prerelease, minecraft_content_key
+from pack_version import (
+    parse_pack_version_key,
+    format_version_anchor,
+    is_prerelease,
+    is_mc_prefixed_version,
+    minecraft_content_key,
+)
 import requests
 from datetime import datetime
 from urllib.parse import quote
 
 
-def changelog_filename(version, mc_version):
+def changelog_stem(version, mc_version):
+    """Filename/snapshot stem for a release.
+
+    An MC-scheme version already embeds the Minecraft version, so it stands
+    alone (``26.1.1-1.2``); a legacy version appends the Minecraft version
+    (``4.11.1+1.21.11``) since it carries none itself.
+    """
+    if is_mc_prefixed_version(version):
+        return str(version)
+    return f"{version}+{mc_version}"
+
+
+def changelog_filename(version, mc_version, ext="yml"):
     """Build the canonical changelog filename for a pack version.
 
     The inverse of ``ChangelogFactory.parse_changelog_filename`` — keep the
     two in sync.
     """
-    return f"{version}+{mc_version}.yml"
+    return f"{changelog_stem(version, mc_version)}.{ext}"
 
 
 class ChangelogFactory:
@@ -181,24 +199,30 @@ class ChangelogFactory:
     def parse_changelog_filename(self, changelog_filename):
         """Return ``(version, mc_version)`` parsed from a changelog filename.
 
-        Expected filename format: ``<version>+<mc_version>.yml`` (the inverse
-        of the module-level ``changelog_filename``).  Returns ``(None, None)``
-        when the format does not match.
+        Handles both forms produced by ``changelog_filename``: a legacy
+        ``<version>+<mc_version>.yml`` (split on ``+``) and an MC-scheme
+        ``<version>.yml`` where the Minecraft version is embedded in the
+        version prefix. Returns ``(None, None)`` when neither matches.
         """
         base_name = os.path.splitext(os.path.basename(str(changelog_filename or "")))[0]
-        version_part, has_sep, mc_part = base_name.partition("+")
-        version_part = str(version_part or "").strip()
-        mc_part = str(mc_part or "").strip()
-        if not has_sep or not version_part or not mc_part:
-            return None, None
-        return version_part, mc_part
+        if "+" in base_name:
+            version_part, _, mc_part = base_name.partition("+")
+            version_part = version_part.strip()
+            mc_part = mc_part.strip()
+            return (version_part, mc_part) if version_part and mc_part else (None, None)
+        if is_mc_prefixed_version(base_name):
+            return base_name, base_name.partition("-")[0]
+        return None, None
 
     def _resolve_compare_version_path(self, tempgit_path, version, mc_version):
-        combined_path = os.path.join(tempgit_path, f"{version}+{mc_version}")
-        legacy_path = os.path.join(tempgit_path, str(version))
-        if os.path.isdir(combined_path):
-            return combined_path
-        return legacy_path
+        # Prefer the canonical stem; fall back to the legacy tagged/bare forms.
+        # dict.fromkeys dedupes: the stem coincides with one fallback per scheme.
+        stem = changelog_stem(version, mc_version)
+        for name in dict.fromkeys((stem, f"{version}+{mc_version}", str(version))):
+            candidate = os.path.join(tempgit_path, name)
+            if os.path.isdir(candidate):
+                return candidate
+        return os.path.join(tempgit_path, stem)
 
     def get_previous_version_for_mc(self, target_version, mc_version, migration_mode=False):
         """Find the most recent changelog version that precedes ``target_version``.
