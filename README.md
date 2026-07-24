@@ -7,14 +7,14 @@ Requires Python 3.11.
 
 ## Credits
 
-- [packwiz](https://github.com/packwiz/packwiz) — mod metadata and pack format; the bundled CurseForge community API key is sourced from packwiz.
-- [mmc-export](https://github.com/RozeFound/mmc-export) — the fingerprint-based CurseForge export (murmur2 via `/v1/fingerprints`) follows its approach.
+- [packwiz](https://github.com/packwiz/packwiz): mod metadata and pack format; the bundled CurseForge community API key is sourced from packwiz.
+- [mmc-export](https://github.com/RozeFound/mmc-export): the fingerprint-based CurseForge export (murmur2 via `/v1/fingerprints`) follows its approach.
 
 ## Setup
 
 Clone anywhere and run `run_modpack_tool.bat` (creates the `venv`, reinstalls deps when `requirements.txt` changes, then launches). Update with `git pull`.
 
-The tool manages one or more **modpack projects** — a folder containing `Packwiz/pack.toml` (required; how a project is recognized) and `settings.yml` (auto-created from the template). `Changelogs/`, `Export/`, and `Server Pack/` are created as needed. First launch asks for a project path (drag & drop works); after that it reopens the last-used one. `P)` in the menu switches, adds, or removes projects.
+The tool manages one or more **modpack projects**. A project is a folder containing `Packwiz/pack.toml` (required; how a project is recognized) and `settings.yml` (auto-created from the template). `Changelogs/`, `Export/`, and `Server Pack/` are created as needed. First launch asks for a project path (drag & drop works); after that it reopens the last-used one. `P)` in the menu switches, adds, or removes projects.
 
 Tool state lives in `tool_config.yml` (gitignored) beside the scripts:
 
@@ -38,15 +38,15 @@ Every `settings.yml` flag is documented inline in [`settings_template.yml`](sett
 ## Export
 
 - **Client** (`client_export_multi_platform`): `false` (default) delegates to `packwiz {client_export_format} export` (`curseforge`/`modrinth`). `true` natively builds both a CurseForge `.zip` and a Modrinth `.mrpack`, resolving mods by murmur2 fingerprint; anything unresolved on CurseForge is bundled as a JAR override.
-- **Server**: one manual step — build a CurseForge-launcher instance from the exported zip, then drag its `mods` folder into the terminal; the tool filters those into the server pack.
+- **Server**: one manual step. Build a CurseForge-launcher instance from the exported zip, then drag its `mods` folder into the terminal; the tool filters those into the server pack.
 
 ## Minecraft migration (`migrate_minecraft_version`)
 
-Updates `pack.toml` to the target MC version and loader, refreshes and updates mods, disables incompatible ones, then bumps the version (prompted — Enter keeps the current one) and creates the matching changelog template. Targets are prompted if not set in `settings.yml`.
+Updates `pack.toml` to the target MC version and loader, refreshes and updates mods, disables incompatible ones, then bumps the version (prompted; Enter keeps the current one) and creates the matching changelog template. Targets are prompted if not set in `settings.yml`.
 
 ## Versioning
 
-By default the version in `pack.toml` is used as-is. Set `mc_prefixed_versions: True` for versions that embed the Minecraft version — `<mc>-<release>` (e.g. `26.2-1.0`), where the release resets per MC version and pre-releases append a tag and sort first (`26.2-1.0-beta.1` < `26.2-1.0`; `beta`/`alpha`/`rc` drive release-type detection). The flag only changes prompt defaults; sorting and rendering handle mixed histories automatically and never crash on a malformed version.
+By default the version in `pack.toml` is used as-is. Set `mc_prefixed_versions: True` for versions that embed the Minecraft version as `<mc>-<release>` (e.g. `26.2-1.0`), where the release resets per MC version and pre-releases append a tag and sort first (`26.2-1.0-beta.1` < `26.2-1.0`; `beta`/`alpha`/`rc` drive release-type detection). The flag only changes prompt defaults; sorting and rendering handle mixed histories automatically and never crash on a malformed version.
 
 ## Changelogs
 
@@ -54,7 +54,7 @@ Each release has an authored `Changelogs/<version>+<mc>.yml`; the tool also emit
 
 Optional auto-fill during export:
 
-- `auto_generate_update_overview` — deterministic `Update overview` from the local diff.
-- `auto_generate_config_changes` — `Config Changes` via a local Ollama model (`auto_config_model` / `auto_config_endpoint`, …); skipped with a notice if unavailable.
+- `auto_generate_update_overview`: deterministic `Update overview` from the local diff.
+- `auto_generate_config_changes`: `Config Changes` via a local Ollama model (`auto_config_model` / `auto_config_endpoint`, etc.); skipped with a notice if unavailable.
 
 `*_overwrite_existing` flags control whether existing sections are replaced.
