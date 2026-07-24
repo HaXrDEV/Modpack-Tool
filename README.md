@@ -1,197 +1,60 @@
 ![header](https://capsule-render.vercel.app/api?type=waving&height=250&color=timeGradient&text=HaXr%27s%20Modpack%20Tool&fontAlignY=46&animation=fadeIn)
 
-Requires Python 3.11
+Requires Python 3.11.
 
 > [!WARNING]
-> This tool is made for the sole purpose of automating stuff when i develop my modpacks. It is therefore not made to be user friendly or flexible in any way as it requires a very specific workflow to function.
-> Long story short, i do not recommend that anyone else uses this tool due to those reasons.
+> A personal tool for automating my own modpack development. It expects a very specific workflow and isn't meant for general use.
 
 ## Credits
 
-- [packwiz](https://github.com/packwiz/packwiz) — used to manage the mod metadata format and pack index. The CurseForge community API key bundled in this tool is sourced from the packwiz project.
-- [mmc-export](https://github.com/RozeFound/mmc-export) — the fingerprint-based CurseForge export (murmur2 hash resolution via `/v1/fingerprints`) is based on the approach used by mmc-export.
+- [packwiz](https://github.com/packwiz/packwiz) — mod metadata and pack format; the bundled CurseForge community API key is sourced from packwiz.
+- [mmc-export](https://github.com/RozeFound/mmc-export) — the fingerprint-based CurseForge export (murmur2 via `/v1/fingerprints`) follows its approach.
 
-## Standalone tool with switchable projects
+## Setup
 
-The tool is a standalone program: clone this repository anywhere and register one or more modpack projects with it. It no longer needs to live inside a modpack repository.
+Clone anywhere and run `run_modpack_tool.bat` (creates the `venv`, reinstalls deps when `requirements.txt` changes, then launches). Update with `git pull`.
 
-To launch, run `run_modpack_tool.bat` at the repo root (double-click or from a terminal). It creates the `venv` on first run, re-installs dependencies whenever `requirements.txt` changes, and starts the tool. To update the tool itself, `git pull` and launch again.
+The tool manages one or more **modpack projects** — a folder containing `Packwiz/pack.toml` (required; how a project is recognized) and `settings.yml` (auto-created from the template). `Changelogs/`, `Export/`, and `Server Pack/` are created as needed. First launch asks for a project path (drag & drop works); after that it reopens the last-used one. `P)` in the menu switches, adds, or removes projects.
 
-A **modpack project** is a folder containing:
-
-- `Packwiz/pack.toml` (required — this is how a project is recognized)
-- `settings.yml` (created from the template on first activation if missing)
-- `Changelogs/`, `Export/`, `Server Pack/` (created automatically where safe)
-
-On first launch the tool asks for a project path (drag & drop works). After that it remembers your projects and re-opens the last-used one automatically. Use `P)` in the action menu to switch between projects or add/remove them.
-
-Tool-level state lives in `tool_config.yml` next to the scripts (gitignored):
+Tool state lives in `tool_config.yml` (gitignored) beside the scripts:
 
 ```yaml
 last_used_project: C:\path\to\MyPack
-packwiz_exe_path: ""   # optional override; empty uses %USERPROFILE%\go\bin\packwiz.exe
-github_token: ""       # optional; empty falls back to gh-token.txt, then a prompt
-curseforge_api_key: "" # optional; empty falls back to cf-api-key.txt, then the packwiz community key
+packwiz_exe_path: ""   # empty → %USERPROFILE%\go\bin\packwiz.exe
+github_token: ""       # empty → gh-token.txt, then a prompt
+curseforge_api_key: "" # empty → cf-api-key.txt, then the packwiz community key
 projects:
-  - name: MyPack
-    root: C:\path\to\MyPack
+  - { name: MyPack, root: C:\path\to\MyPack }
 ```
 
-Per-project working data (comparison snapshots, previous releases) is stored in a `.modpack-tool/` folder at each project root. The tool adds `.modpack-tool/` to the project's `.gitignore` automatically.
+Per-project cache (comparison snapshots, previous releases) lives in a gitignored `.modpack-tool/` at the project root. An old embedded install (`<project>/Modpack-CLI-Tool/`) is auto-detected and migrated on first activation.
 
-### Migrating from an embedded install
-
-If a project still has the old embedded layout (`<project>/Modpack-CLI-Tool/` with `tempgit`/`prev_release` data inside), the tool offers a one-time move of that data into `.modpack-tool/` when the project is first activated. Running the tool from inside an old embedded clone also auto-detects the surrounding modpack repo and offers to register it.
+Every `settings.yml` flag is documented inline in [`settings_template.yml`](settings_template.yml).
 
 ## Action menu
 
-At startup, the tool shows an action menu so you can choose what to run for this session:
-
-- `1)` Run configured workflow (settings.yml)
-- `2)` Migration only
-- `3)` Export client only
-- `4)` Export server only
-- `5)` Migration + export client
-- `6)` Migration + export client + server
-- `7)` Refresh only
-- `8)` Update mods only
-- `9)` Bump modpack version only
-- `10)` Clear stored repository data
-- `11)` Generate changelog summary only
-- `12)` List disabled mods
-- `13)` Add mod
-- `14)` Find orphaned library mods
-- `P)` Switch / manage projects
-- `0)` Exit
+`1` configured workflow · `2` migration · `3` export client · `4` export server · `5` migration + client · `6` migration + client + server · `7` refresh · `8` update mods · `9` bump version · `10` clear cache · `11` changelog summary · `12` list disabled · `13` add mod · `14` find orphaned libraries · `P` manage projects · `0` exit
 
 ## Export
 
-### Client export
+- **Client** (`client_export_multi_platform`): `false` (default) delegates to `packwiz {client_export_format} export` (`curseforge`/`modrinth`). `true` natively builds both a CurseForge `.zip` and a Modrinth `.mrpack`, resolving mods by murmur2 fingerprint; anything unresolved on CurseForge is bundled as a JAR override.
+- **Server**: one manual step — build a CurseForge-launcher instance from the exported zip, then drag its `mods` folder into the terminal; the tool filters those into the server pack.
 
-The client export is controlled by `client_export_multi_platform` in `settings.yml`:
+## Minecraft migration (`migrate_minecraft_version`)
 
-- **`false`** (default) — generates a CurseForge zip only, delegating to `packwiz cf export`.
-- **`true`** — generates both a CurseForge zip and a Modrinth `.mrpack` using the native fingerprint-based exporter.
+Updates `pack.toml` to the target MC version and loader, refreshes and updates mods, disables incompatible ones, then bumps the version (prompted — Enter keeps the current one) and creates the matching changelog template. Targets are prompted if not set in `settings.yml`.
 
-#### Single-platform export (`client_export_multi_platform: false`)
+## Versioning
 
-Calls `packwiz {format} export` via subprocess. The target format is controlled by `client_export_format` in `settings.yml`:
+By default the version in `pack.toml` is used as-is. Set `mc_prefixed_versions: True` for versions that embed the Minecraft version — `<mc>-<release>` (e.g. `26.2-1.0`), where the release resets per MC version and pre-releases append a tag and sort first (`26.2-1.0-beta.1` < `26.2-1.0`; `beta`/`alpha`/`rc` drive release-type detection). The flag only changes prompt defaults; sorting and rendering handle mixed histories automatically and never crash on a malformed version.
 
-- `curseforge` (default) — produces a CurseForge `.zip`
-- `modrinth` — produces a Modrinth `.mrpack`
+## Changelogs
 
-Packwiz handles manifest generation and propagates `side` metadata from each mod's `.pw.toml` into the manifest `required` flags. The output file is moved to the Export directory.
+Each release has an authored `Changelogs/<version>+<mc>.yml`; the tool also emits a presentation-free `Changelogs/data/<version>+<mc>.json` for the wiki to render. When migrating to a new MC version, keep only the previous version's changelog in the repo so the tool compares the first new release against it.
 
-#### Multi-platform export (`client_export_multi_platform: true`)
+Optional auto-fill during export:
 
-Uses the native fingerprint-based exporter:
+- `auto_generate_update_overview` — deterministic `Update overview` from the local diff.
+- `auto_generate_config_changes` — `Config Changes` via a local Ollama model (`auto_config_model` / `auto_config_endpoint`, …); skipped with a notice if unavailable.
 
-**CurseForge:** Mods are resolved using a two-path strategy:
-
-1. **Fast path** — mods already tracked with `[update.curseforge]` metadata use their stored project-id and file-id directly.
-2. **Fingerprint path** — mods tracked via Modrinth (or direct URL) are downloaded in parallel, their CurseForge murmur2 fingerprint is computed, and a single batch POST to the CF `/v1/fingerprints` API resolves their project-id and file-id. This mirrors the approach used by mmc-export.
-
-Mods whose fingerprint is not found on CurseForge (MR-exclusive mods, or mods whose Modrinth and CF JARs differ) are bundled as JAR overrides.
-
-**Modrinth:** Mods with `[update.modrinth]` metadata are listed in `modrinth.index.json` directly (no download needed). CurseForge-only mods are downloaded from CF and bundled as overrides.
-
-### Server export
-
-Server export still requires a manual step: after the CurseForge zip is generated, you are prompted to create a new instance in the CurseForge launcher from that zip and drag its `mods` folder path into the terminal. The tool then copies and filters those mods into the server pack.
-
-## Legacy comparison workflow
-
-When migrating to a new Minecraft version (*For example, going from 1.21.3 to 1.21.4*), make sure to leave only the last changelog in the repository from the previous version like seen below.
-This is due to the program reading the files and thereby being able to recognize that it should compare the first new version to that old one.
-This comparison-note behavior is controlled by `changelog_include_compare_notice`.
-
-![1736264492349](image/README/1736264492349.png)
-
-### Modular compatibility settings
-
-The previous `breakneck_fixes` switch has been split into focused settings:
-
-- `client_export_multi_platform`: Generate both CurseForge and Modrinth packs natively (fingerprint-based resolution). When `false`, a single pack is produced via packwiz using `client_export_format`.
-- `client_export_format`: Target format for single-platform export (`curseforge` or `modrinth`). Default: `curseforge`. Ignored when `client_export_multi_platform` is `true`.
-- `show_export_mode_notice`: Show a confirmation prompt when export actions are enabled.
-- `changelog_template_use_overview_layout`: Create new changelog files with `Update overview` + block-style `Config Changes` template.
-- `changelog_include_compare_notice`: Add the "comparison to previous version" info box in generated markdown changelog files.
-- `comparison_files_use_versioned_packwiz_root`: Enables version-ranged comparison download roots.
-- `comparison_files_versioned_root_pattern`: Root format when the version range matches (supports `{mc_version}` and `{version}`).
-- `comparison_files_versioned_root_min_version` / `comparison_files_versioned_root_max_version`: Inclusive version range for the custom comparison root.
-
-`breakneck_fixes` is still accepted as a legacy compatibility preset; when set to `true`, it auto-enables the modular flags above unless they are already defined.
-
-## Automated Minecraft migration
-
-You can enable automated migration in `settings.yml`:
-
-- `migrate_minecraft_version`: Enables the migration flow.
-- `migration_target_minecraft`: Target Minecraft version.
-- `migration_target_mod_loader`: Optional target loader (`fabric`, `quilt`, `forge`, `neoforge`). Defaults to current loader.
-- `migration_target_mod_loader_version`: Target version for the selected loader. Required when switching loaders.
-- `migration_target_fabric`: Legacy alias for Fabric loader version (still supported).
-- `migration_mod_loader`: Loader used for compatibility checks (normally auto-aligned to target loader).
-- `alpha_update_policy`: `prompt` asks before allowing non-alpha mods to move to alpha; `always_skip` always blocks that move.
-- `migration_update_all_mods`: Runs `packwiz update --all -y` after changing MC version.
-- `migration_disable_incompatible_mods`: Disables mods that do not have a target-compatible update.
-
-When enabled, the tool will:
-
-1. Update `Packwiz/pack.toml` to the target Minecraft version and selected modloader/version.
-2. Refresh and update mods with Packwiz.
-3. Disable incompatible mods by setting `side = "...(disabled)"` in their `.toml` entries.
-4. Bump the modpack version to the one chosen during migration setup (pressing Enter keeps the current version) and create the matching changelog template.
-
-## MC-prefixed versioning scheme
-
-Enable `mc_prefixed_versions: True` in a project's `settings.yml` to use modpack versions that embed the Minecraft version: `<mc>-<release>`, e.g. `26.2-1.0`, `26.2-1.6`. The release part is dotted numeric and resets to `1.0` for every Minecraft version. Pre-releases append a tag and sort before their stable release: `26.2-1.0-beta.1` comes before `26.2-1.0` (and `beta`/`alpha` in the version keeps driving release-type detection for publishing).
-
-The flag only changes prompt defaults:
-
-- The migration setup prompt defaults to `<new-mc>-1.0` and Enter accepts it (under this scheme, keeping the old version after an MC migration would be wrong).
-- The bump prompt (option 9) defaults to the next release (`26.2-1.6` -> `26.2-1.7`); a pre-release defaults to its stable base (`26.2-1.0-beta.1` -> `26.2-1.0`).
-
-Version sorting and changelog rendering handle both schemes automatically regardless of the flag, so histories mixing legacy versions (`4.11.1+1.21.11.yml`) and scheme versions (`26.2-1.0+26.2.yml`) order correctly, and a malformed version can no longer crash the workflow. Projects using a standard MC-independent version number just leave the flag off and see no behavior change.
-
-Note: `comparison_files_use_versioned_packwiz_root` ranges are PEP 440-based; scheme versions always use the default `Packwiz` comparison root.
-
-## Auto-generated changelog text
-
-The export flow can auto-populate changelog fields in `Changelogs/<version>+<mc_version>.yml`:
-
-- `Update overview` is deterministic and generated from local diff data.
-- `Config Changes` can be generated with an LLM from config file diffs.
-
-### Settings
-
-- `auto_generate_update_overview`: Enables deterministic `Update overview` generation during export.
-- `auto_summary_overwrite_existing`: Overwrites existing `Update overview` when `true`.
-- `auto_generate_config_changes`: Enables LLM generation for `Config Changes`.
-- `auto_config_overwrite_existing`: Overwrites existing `Config Changes` when `true`.
-- `auto_config_include_removed_files`: Includes removed config-file bullets in `Config Changes` when `true`.
-- `auto_config_provider`: Provider name (`ollama` currently supported).
-- `auto_config_model`: Model used by Ollama (default: `qwen3:4b-instruct`).
-- `auto_config_endpoint`: Ollama generate endpoint (default: `http://127.0.0.1:11434/api/generate`).
-- `auto_config_timeout_seconds`: HTTP timeout for the model call.
-- `auto_config_temperature`: Creativity for config bullets (default: `0.25`); higher values allow more varied wording.
-- `auto_config_max_items`: Max config diff items per category included in the prompt.
-- `auto_config_max_lines`: Max output bullet lines written to `Config Changes`.
-
-`Config Changes` generation provides full previous/current contents for modified config files so the model can infer meaningful option/value changes with broader context.
-
-### Requirements
-
-For `Config Changes`, run Ollama locally and pull a model, for example:
-
-```powershell
-ollama pull qwen3:4b-instruct
-```
-
-If the model call fails or no model is available, the tool does not write `Config Changes` and prints a notice instead.
-
-## Notable runtime prompts
-
-- Migration actions can prompt for target Minecraft version, modloader, and modloader version if not set in `settings.yml`, and always ask for the new modpack version (Enter keeps the current one).
-- When summary generation is active, the script prompts whether to overwrite existing `Update overview` / `Config Changes` for the current run.
-- Server export includes a manual step where you provide a dragged `mods` folder path from a CurseForge launcher instance built from the just-exported zip.
+`*_overwrite_existing` flags control whether existing sections are replaced.
