@@ -140,6 +140,35 @@ def suggest_next_release(current_version):
     return f"{mc_text}-{'.'.join(release_parts)}"
 
 
-def suggest_migration_version(target_mc) -> str:
-    """Return the first MC-scheme version for a new Minecraft version."""
-    return f"{str(target_mc or '').strip()}-1.0"
+def minecraft_content_key(mc_version) -> str:
+    """Return the content-update key of a Minecraft version.
+
+    Modern Minecraft distinguishes content updates (``26.1``) from their
+    patches (``26.1.1``); the key is the first two numeric components, so
+    patches share their content update's key. Examples: ``26.1.1`` -> ``26.1``,
+    ``26.1`` -> ``26.1``, ``1.21.11`` -> ``1.21``, ``26`` -> ``26``.
+    """
+    text = str(mc_version or "").strip()
+    numeric = []
+    for part in text.split("."):
+        if part.isdigit():
+            numeric.append(part)
+        else:
+            break
+    return ".".join(numeric[:2]) if numeric else text
+
+
+def suggest_migration_version(target_mc, current_version=None) -> str:
+    """Suggest the pack version to release after migrating to ``target_mc``.
+
+    The version tracks the content update, not the exact Minecraft version: a
+    patch within the same content update (``26.1`` -> ``26.1.1``) continues the
+    current line (next release), while a new content update (``26.1`` -> ``26.2``)
+    resets to ``<content-key>-1.0``.
+    """
+    key = minecraft_content_key(target_mc)
+    if current_version and is_mc_prefixed_version(current_version):
+        current_content_key = minecraft_content_key(str(current_version).partition("-")[0])
+        if current_content_key == key:
+            return suggest_next_release(current_version)
+    return f"{key}-1.0"

@@ -8,7 +8,7 @@ from mdutils.mdutils import MdUtils
 import re
 import toml
 import markdown_helper as markdown
-from pack_version import parse_pack_version_key, format_version_anchor, is_prerelease
+from pack_version import parse_pack_version_key, format_version_anchor, is_prerelease, minecraft_content_key
 import requests
 from datetime import datetime
 from urllib.parse import quote
@@ -251,9 +251,11 @@ class ChangelogFactory:
                     return candidate_version, candidate_mc
             return None, None
 
-        target_mc_text = str(mc_version)
+        # Group by content-update key so patches (e.g. 26.1.1) share the line
+        # of their content update (26.1) rather than forming a separate line.
+        target_content_key = minecraft_content_key(mc_version)
         for candidate_version, candidate_mc in sorted_versions:
-            if str(candidate_mc) != target_mc_text:
+            if minecraft_content_key(candidate_mc) != target_content_key:
                 continue
             if parse_pack_version_key(candidate_version) < target_version_key:
                 return candidate_version, candidate_mc

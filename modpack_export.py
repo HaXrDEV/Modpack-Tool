@@ -234,7 +234,7 @@ def ensure_migration_targets(settings):
         settings.migration_mod_loader = target_loader
 
     suggested = (
-        suggest_migration_version(settings.migration_target_minecraft)
+        suggest_migration_version(settings.migration_target_minecraft, pack_version)
         if settings.mc_prefixed_versions else None
     )
     settings.bump_target_version = prompt_new_pack_version(" after migration", suggested=suggested)

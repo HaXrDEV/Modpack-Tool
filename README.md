@@ -46,7 +46,7 @@ Updates `pack.toml` to the target MC version and loader, refreshes and updates m
 
 ## Versioning
 
-By default the version in `pack.toml` is used as-is. Set `mc_prefixed_versions: True` for versions that embed the Minecraft version as `<mc>-<release>` (e.g. `26.2-1.0`), where the release resets per MC version and pre-releases append a tag and sort first (`26.2-1.0-beta.1` < `26.2-1.0`; `beta`/`alpha`/`rc` drive release-type detection). The flag only changes prompt defaults; sorting and rendering handle mixed histories automatically and never crash on a malformed version.
+By default the version in `pack.toml` is used as-is. Set `mc_prefixed_versions: True` for versions that embed the Minecraft version as `<content-update>-<release>` (e.g. `26.1-1.0`). Following Minecraft's year-based scheme, the version tracks the content update (`26.1`): a patch such as `26.1.1` continues the same line as its next release, while a new content update (`26.2`) resets the release to `1.0`. Patches share their content update's changelog page, with each release showing its exact Minecraft version. Pre-releases append a tag and sort first (`26.1-1.0-beta.1` before `26.1-1.0`; `beta`/`alpha`/`rc` drive release-type detection). The flag only changes prompt defaults; sorting and rendering handle mixed histories automatically and never crash on a malformed version.
 
 ## Changelogs
 
