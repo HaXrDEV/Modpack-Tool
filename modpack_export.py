@@ -7,6 +7,7 @@ launch_message = """
 
 import os
 import json
+from datetime import date
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from shutil import rmtree, make_archive, move, copytree
 
@@ -76,6 +77,14 @@ import asyncio
 # Changelog stuff
 from changelog_factory import ChangelogFactory, changelog_filename
 
+# Version scheme helpers
+from pack_version import (
+    is_mc_prefixed_version,
+    format_version_anchor,
+    suggest_next_release,
+    suggest_migration_version,
+)
+
 # Markdown Stuff
 import markdown_helper as markdown
 
@@ -133,9 +142,16 @@ def determine_server_export():
     return settings.export_server and input("Want to export server pack? [N]: ") in ("y", "Y", "yes", "Yes")
 
 
-def prompt_new_pack_version(context: str = "") -> str:
-    """Prompt for the next modpack version; empty answer means keep the current one."""
-    return input(f"New modpack version{context} [{pack_version}]: ").strip()
+def prompt_new_pack_version(context: str = "", suggested: str = None) -> str:
+    """Prompt for the next modpack version.
+
+    With a ``suggested`` default, Enter returns the suggestion. Otherwise the
+    current version is shown and Enter returns an empty string, which callers
+    treat as "keep the current version".
+    """
+    default = suggested or pack_version
+    entered = input(f"New modpack version{context} [{default}]: ").strip()
+    return entered or suggested or ""
 
 
 def ensure_migration_targets(settings):
@@ -217,7 +233,11 @@ def ensure_migration_targets(settings):
     elif not is_supported_mod_loader(configured_compat_loader):
         settings.migration_mod_loader = target_loader
 
-    settings.bump_target_version = prompt_new_pack_version(" after migration")
+    suggested = (
+        suggest_migration_version(settings.migration_target_minecraft)
+        if settings.mc_prefixed_versions else None
+    )
+    settings.bump_target_version = prompt_new_pack_version(" after migration", suggested=suggested)
 
 
 def get_config_changes_mode_label(settings) -> str:
@@ -309,6 +329,7 @@ Config Changes generator: {config_mode_label}
     settings.migrate_minecraft_version = False
     settings.export_client = False
     settings.export_server = False
+    settings.bump_target_version = ""
 
     if choice == "1":
         # Keep the configured export_client value while preserving existing server prompt behavior.
@@ -358,7 +379,8 @@ Config Changes generator: {config_mode_label}
 
     if choice == "9":
         settings.bump_version_only = True
-        settings.bump_target_version = prompt_new_pack_version() or pack_version
+        suggested = suggest_next_release(pack_version) if settings.mc_prefixed_versions else None
+        settings.bump_target_version = prompt_new_pack_version(suggested=suggested) or pack_version
         return True
 
     if choice == "10":
@@ -726,6 +748,10 @@ def resolve_comparison_packwiz_root(input_version, tag_mc_ver):
         A relative path string such as "Packwiz" or "Packwiz/1.21.1".
     """
     if not settings.comparison_files_use_versioned_packwiz_root:
+        return "Packwiz"
+
+    # MC-scheme versions cannot be compared against the PEP 440 range bounds.
+    if is_mc_prefixed_version(input_version):
         return "Packwiz"
 
     min_version = str(settings.comparison_files_versioned_root_min_version or "").strip() or None
@@ -1644,8 +1670,61 @@ def download_missing_comparison_files():
                     print(ex)
 
 
+def write_release_data(diff_payload=None):
+    """Write the frozen, presentation-free data record for the current release.
+
+    Merges the authored changelog YAML with the computed mod/resourcepack/
+    shaderpack diffs into ``Changelogs/<version>+<mc>.json``. The release date
+    is stamped once and preserved on later runs so a published record stays
+    immutable while its diffs can still be regenerated during authoring.
+
+    Args:
+        diff_payload: A pack diff already computed this run (by
+            ``run_changelog_auto_generation``); computed here when ``None``.
+    """
+    os.chdir(git_path)
+    changelog_path = ensure_changelog_yml(pack_version, minecraft_version, active_mod_loader, mod_loader_version)
+    with open(changelog_path, "r", encoding="utf-8") as f:
+        changelog_yml = yaml.load(f) or {}
+
+    if diff_payload is None:
+        diff_payload = changelog_factory.get_current_pack_diff_payload(
+            target_version=pack_version,
+            mc_version=minecraft_version,
+            tempgit_path=tempgit_path,
+            packwiz_path=packwiz_path,
+            migration_mode=bool(settings.migrate_minecraft_version),
+        )
+
+    # Published, presentation-free data lives in its own subfolder so the wiki
+    # sync is a clean directory copy separate from the authored YAML.
+    data_dir = os.path.join(changelog_dir_path, "data")
+    os.makedirs(data_dir, exist_ok=True)
+    data_path = os.path.join(data_dir, f"{pack_version}+{minecraft_version}.json")
+    released = date.today().isoformat()
+    if os.path.isfile(data_path):
+        try:
+            with open(data_path, "r", encoding="utf-8") as f:
+                released = json.load(f).get("released") or released
+        except (OSError, ValueError):
+            pass
+
+    record = changelog_factory.build_release_data(
+        changelog_yml, diff_payload, pack_version, minecraft_version,
+        get_mod_loader_label(active_mod_loader), mod_loader_version, released,
+    )
+    with open(data_path, "w", encoding="utf-8") as f:
+        json.dump(record, f, indent=2, ensure_ascii=False)
+    print(f"[Changelog] Wrote release data: {data_path}")
+
+
 def run_changelog_auto_generation():
-    """Run the configured automatic changelog generation steps (update overview and/or config changes)."""
+    """Run the configured automatic changelog generation steps (update overview and/or config changes).
+
+    Returns:
+        The pack diff payload computed for this release, so callers can reuse it
+        instead of recomputing the (expensive) diff.
+    """
     os.chdir(git_path)
     changelog_path = ensure_changelog_yml(pack_version, minecraft_version, active_mod_loader, mod_loader_version)
 
@@ -1664,6 +1743,7 @@ def run_changelog_auto_generation():
         maybe_generate_update_overview(changelog_path, diff_payload, settings, yaml)
     if settings.auto_generate_config_changes or settings.generate_update_summary_only:
         maybe_generate_config_changes(changelog_path, diff_payload, settings, yaml, packwiz_config_path)
+    return diff_payload
 
 
 def clear_stored_repository_data():
@@ -1920,7 +2000,7 @@ def run_release_notes_generation(settings):
     """Generate CurseForge and Modrinth release-note Markdown files from the current changelog YAML."""
     os.chdir(git_path)
     major_minecraft_version = '.'.join(minecraft_version.split('.', 2)[:2])
-    md_element_full_changelog = f"**[[Full Changelog]](https://crismpack.net/{modpack_name.lower().split(' ', 1)[0]}/changelogs/{major_minecraft_version}/{minecraft_version}#v{pack_version})**"
+    md_element_full_changelog = f"**[[Full Changelog]](https://crismpack.net/{modpack_name.lower().split(' ', 1)[0]}/changelogs/{major_minecraft_version}/{minecraft_version}#{format_version_anchor(pack_version)})**"
     md_element_pre_release = '**This is a pre-release. Here be dragons!**'
     md_element_bh_banner = f"[![BisectHosting Banner]({settings.bh_banner})](https://bisecthosting.com/CRISM)"
     mdFile_CF = MdUtils(file_name='CurseForge-Release')
@@ -2094,11 +2174,20 @@ def main():
         #----------------------------------------
         # Auto-generate changelog update overview.
         #----------------------------------------
+        auto_gen_diff_payload = None
         if settings.auto_generate_update_overview or settings.auto_generate_config_changes:
-            run_changelog_auto_generation()
+            auto_gen_diff_payload = run_changelog_auto_generation()
 
         #----------------------------------------
-        # Generate CHANGELOG.md file.
+        # Write the frozen data-first release record (reusing the diff already
+        # computed by auto-generation when it ran).
+        #----------------------------------------
+        if settings.generate_primary_changelog:
+            write_release_data(auto_gen_diff_payload)
+
+        #----------------------------------------
+        # Generate CHANGELOG.md file (legacy renderer; retired once the wiki
+        # data renderer is live).
         #----------------------------------------
         if settings.generate_primary_changelog:
             os.chdir(git_path)

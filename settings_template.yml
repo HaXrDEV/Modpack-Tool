@@ -30,6 +30,7 @@ migration_mod_loader: "fabric" # Compatibility-check loader. Leave as-is unless 
 alpha_update_policy: "prompt" # "prompt" or "always_skip"
 migration_update_all_mods: True
 migration_disable_incompatible_mods: True
+mc_prefixed_versions: False # Opt-in "<mc>-<release>" version scheme, e.g. "26.2-1.0". Release resets per MC version; pre-releases append "-beta.N". Only affects prompt defaults; sorting handles both schemes automatically.
 auto_generate_update_overview: False
 auto_summary_overwrite_existing: False
 auto_generate_config_changes: False

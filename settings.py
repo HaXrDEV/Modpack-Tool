@@ -49,6 +49,7 @@ class Settings:
     migrate_minecraft_version: bool = False
     migration_disable_incompatible_mods: bool = True
     migration_update_all_mods: bool = True
+    mc_prefixed_versions: bool = False
     auto_generate_update_overview: bool = False
     auto_summary_overwrite_existing: bool = False
     auto_generate_config_changes: bool = False

@@ -143,6 +143,19 @@ When enabled, the tool will:
 3. Disable incompatible mods by setting `side = "...(disabled)"` in their `.toml` entries.
 4. Bump the modpack version to the one chosen during migration setup (pressing Enter keeps the current version) and create the matching changelog template.
 
+## MC-prefixed versioning scheme
+
+Enable `mc_prefixed_versions: True` in a project's `settings.yml` to use modpack versions that embed the Minecraft version: `<mc>-<release>`, e.g. `26.2-1.0`, `26.2-1.6`. The release part is dotted numeric and resets to `1.0` for every Minecraft version. Pre-releases append a tag and sort before their stable release: `26.2-1.0-beta.1` comes before `26.2-1.0` (and `beta`/`alpha` in the version keeps driving release-type detection for publishing).
+
+The flag only changes prompt defaults:
+
+- The migration setup prompt defaults to `<new-mc>-1.0` and Enter accepts it (under this scheme, keeping the old version after an MC migration would be wrong).
+- The bump prompt (option 9) defaults to the next release (`26.2-1.6` -> `26.2-1.7`); a pre-release defaults to its stable base (`26.2-1.0-beta.1` -> `26.2-1.0`).
+
+Version sorting and changelog rendering handle both schemes automatically regardless of the flag, so histories mixing legacy versions (`4.11.1+1.21.11.yml`) and scheme versions (`26.2-1.0+26.2.yml`) order correctly, and a malformed version can no longer crash the workflow. Projects using a standard MC-independent version number just leave the flag off and see no behavior change.
+
+Note: `comparison_files_use_versioned_packwiz_root` ranges are PEP 440-based; scheme versions always use the default `Packwiz` comparison root.
+
 ## Auto-generated changelog text
 
 The export flow can auto-populate changelog fields in `Changelogs/<version>+<mc_version>.yml`:

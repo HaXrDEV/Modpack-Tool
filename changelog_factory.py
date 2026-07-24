@@ -8,7 +8,7 @@ from mdutils.mdutils import MdUtils
 import re
 import toml
 import markdown_helper as markdown
-from packaging import version as version_helper
+from pack_version import parse_pack_version_key, format_version_anchor, is_prerelease
 import requests
 from datetime import datetime
 from urllib.parse import quote
@@ -230,26 +230,24 @@ class ChangelogFactory:
         if not version_candidates:
             return None, None
 
+        # MC version is the primary sort component so that per-MC version
+        # schemes (whose release numbers reset each Minecraft version) and
+        # legacy monotonic versions order correctly side by side.
         sorted_versions = sorted(
             version_candidates,
-            key=lambda x: (
-                version_helper.parse(self.normalize_version(str(x[0]))),
-                version_helper.parse(str(x[1])),
-            ),
+            key=lambda x: (parse_pack_version_key(x[1]), parse_pack_version_key(x[0])),
             reverse=True,
         )
-        target_parsed = (
-            version_helper.parse(self.normalize_version(str(target_version))),
-            version_helper.parse(str(mc_version)),
-        )
+        target_version_key = parse_pack_version_key(target_version)
+        target_key = (parse_pack_version_key(mc_version), target_version_key)
 
         if migration_mode:
             for candidate_version, candidate_mc in sorted_versions:
-                candidate_parsed = (
-                    version_helper.parse(self.normalize_version(str(candidate_version))),
-                    version_helper.parse(str(candidate_mc)),
+                candidate_key = (
+                    parse_pack_version_key(candidate_mc),
+                    parse_pack_version_key(candidate_version),
                 )
-                if candidate_parsed < target_parsed:
+                if candidate_key < target_key:
                     return candidate_version, candidate_mc
             return None, None
 
@@ -257,8 +255,7 @@ class ChangelogFactory:
         for candidate_version, candidate_mc in sorted_versions:
             if str(candidate_mc) != target_mc_text:
                 continue
-            candidate_parsed = version_helper.parse(self.normalize_version(str(candidate_version)))
-            if candidate_parsed < target_parsed[0]:
+            if parse_pack_version_key(candidate_version) < target_version_key:
                 return candidate_version, candidate_mc
         return None, None
 
@@ -336,6 +333,70 @@ class ChangelogFactory:
             "shaderpack_differences": shaderpack_differences,
             "mod_addition_breakdown": mod_addition_breakdown,
             "config_differences": config_differences,
+        }
+
+    @staticmethod
+    def _record_lines(value):
+        """Normalize a changelog YAML field into a clean list of bullet strings."""
+        if not value:
+            return []
+        if isinstance(value, str):
+            lines = value.splitlines()
+        else:
+            lines = list(value)
+        cleaned = []
+        for line in lines:
+            text = str(line).strip()
+            if text.startswith("- "):
+                text = text[2:].strip()
+            if text:
+                cleaned.append(text)
+        return cleaned
+
+    @staticmethod
+    def _record_diff(section):
+        """Convert a compare_toml_files result into presentation-free diff data."""
+        section = section or {}
+        return {
+            "added": list(section.get("added", []) or []),
+            "removed": list(section.get("removed", []) or []),
+            "updated": [
+                {"name": name, "from": before, "to": after}
+                for (name, before, after) in (section.get("modified", []) or [])
+            ],
+        }
+
+    def build_release_data(self, changelog_yml, diff_payload, version, mc_version,
+                           loader_label, loader_version, released):
+        """Compile a single release into a frozen, presentation-free data record.
+
+        Merges the human-authored changelog YAML fields with the computed
+        mod/resourcepack/shaderpack diffs and release metadata. The result is a
+        pure-data dict (no VitePress markup) suitable for the wiki renderer.
+        """
+        changelog_yml = changelog_yml or {}
+        payload = diff_payload or {}
+        compared_to = None
+        if payload.get("previous_version"):
+            compared_to = {
+                "version": str(payload.get("previous_version")),
+                "minecraft": str(payload.get("previous_mc_version") or mc_version),
+            }
+        return {
+            "pack": self.modpack_name,
+            "version": str(version),
+            "minecraft": str(mc_version),
+            "loader": {"name": str(loader_label), "version": str(loader_version)},
+            "released": released,
+            "prerelease": is_prerelease(version),
+            "comparedTo": compared_to,
+            "overview": self._record_lines(changelog_yml.get("Update overview")),
+            "changes": self._record_lines(changelog_yml.get("Changes/Improvements")),
+            "bugfixes": self._record_lines(changelog_yml.get("Bug Fixes")),
+            "configChanges": self._record_lines(changelog_yml.get("Config Changes")),
+            "mods": self._record_diff(payload.get("mod_differences")),
+            "resourcepacks": self._record_diff(payload.get("resourcepack_differences")),
+            "shaderpacks": self._record_diff(payload.get("shaderpack_differences")),
         }
 
     def compare_directory_files(self, previous_dir, current_dir):
@@ -627,25 +688,6 @@ class ChangelogFactory:
             "reenabled_from_disabled": unique_sorted(reenabled_from_disabled),
         }
 
-    def normalize_version(self, version_str):
-        """
-        Normalize version strings to handle letter suffixes as post-releases.
-        Examples:
-            4.1.1a -> 4.1.1.post1
-            4.1.1b -> 4.1.1.post2
-            etc.
-        """
-        # Regular expression to match version with optional letter suffix
-        match = re.match(r'^(\d+\.\d+\.\d+)([a-zA-Z])?$', str(version_str))
-        if match:
-            base_version, letter_suffix = match.groups()
-            if letter_suffix:
-                # Convert letter to number (a=1, b=2, etc.) and use as post-release number
-                post_number = ord(letter_suffix.lower()) - ord('a') + 1
-                return f"{base_version}.post{post_number}"
-        return str(version_str)
-
-
 
     def vitepress_container_maker(self, type: str, content: str):
         """https://vitepress.dev/guide/markdown#custom-containers"""
@@ -763,18 +805,18 @@ class ChangelogFactory:
                     continue
                 version_file_pairs.append((changelog, str(ver), str(mc_ver)))
         
-        # Sort by modpack version first, then MC version.
-        # The key is a 2-tuple so that when two entries share the same modpack
-        # version (e.g. a build released for multiple MC lines), the one with the
-        # higher MC version sorts first.  normalize_version() is called on the
-        # modpack version to handle letter suffixes (e.g. "4.1.1a" → "4.1.1.post1")
-        # so that post-release letters rank above the bare version; MC versions are
-        # standard PEP-440 strings and need no normalisation.
+        # Sort by MC version first, then modpack version. MC-primary ordering
+        # keeps per-MC version schemes (release numbers reset each Minecraft
+        # version) chronological, and is identical to the old version-primary
+        # order for legacy histories where both only ever move forward
+        # together. parse_pack_version_key handles legacy letter suffixes
+        # ("4.1.1a"), pre-releases, and the "<mc>-<release>" scheme, and never
+        # raises on malformed versions.
         sorted_pairs = sorted(
             version_file_pairs,
             key=lambda x: (
-                version_helper.parse(self.normalize_version(x[1])),  # modpack version (index 1)
-                version_helper.parse(str(x[2])),                     # MC version fallback (index 2)
+                parse_pack_version_key(x[2]),  # MC version (index 2)
+                parse_pack_version_key(x[1]),  # modpack version (index 1)
             ),
             reverse=True
         )
@@ -881,13 +923,11 @@ class ChangelogFactory:
                     print(e)
                     continue
 
+                anchor = format_version_anchor(version)
                 if version == self.modpack_version and version != latest_modrinth_version_number:
-                        mdFile.new_paragraph(f"## v{version} <Badge type='warning' text='Work in progress'/> <a href='#v{version}' id='v{version}'></a>")
-                else: 
-                    if "v" not in version:
-                        mdFile.new_paragraph(f"## v{version} <a href='#v{version}' id='v{version}'></a>")
-                    else:
-                        mdFile.new_paragraph(f"## {version} <a href='#{version}' id='{version}'></a>")
+                    mdFile.new_paragraph(f"## {anchor} <Badge type='warning' text='Work in progress'/> <a href='#{anchor}' id='{anchor}'></a>")
+                else:
+                    mdFile.new_paragraph(f"## {anchor} <a href='#{anchor}' id='{anchor}'></a>")
 
 
                 if date_only:
@@ -902,7 +942,7 @@ class ChangelogFactory:
                     and str(next_mc_version) != str(changelog_mc_version)
                     and getattr(self.settings, "changelog_include_compare_notice", False)
                 ):
-                    mdFile.new_paragraph(self.vitepress_container_maker("info", f"Changes are in comparison to version [{next_version}]({next_mc_version}.md#v{next_version})."))
+                    mdFile.new_paragraph(self.vitepress_container_maker("info", f"Changes are in comparison to version [{next_version}]({next_mc_version}.md#{format_version_anchor(next_version)})."))
                 
                 if "beta" in version or "alpha" in version:
                     mdFile.new_paragraph(self.vitepress_container_maker("warning", "This is a pre-release. Here be dragons!"))
