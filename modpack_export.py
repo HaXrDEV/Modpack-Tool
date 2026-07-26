@@ -292,7 +292,7 @@ Choose action:
 6) Migration + export client + server
 7) Refresh only
 8) Update mods only
-9) Bump modpack version only
+9) Change modpack version (rename or bump)
 10) Clear stored repository data
 11) Generate changelog summary only
 12) List disabled mods
@@ -379,7 +379,12 @@ Config Changes generator: {config_mode_label}
 
     if choice == "9":
         settings.bump_version_only = True
-        suggested = suggest_next_release(pack_version) if settings.mc_prefixed_versions else None
+        mode = input("Rename the current version, or bump to a new release? [rename/Bump]: ").strip().lower()
+        settings.version_change_mode = "rename" if mode in ("r", "rename") else "bump"
+        # Bump suggests the next release; rename defaults to the current version.
+        suggested = (suggest_next_release(pack_version)
+                     if settings.version_change_mode == "bump" and settings.mc_prefixed_versions
+                     else None)
         settings.bump_target_version = prompt_new_pack_version(suggested=suggested) or pack_version
         return True
 
@@ -1503,33 +1508,87 @@ def set_bcc_config_version(bcc_path, new_pack_version):
         print(f"[Version] Failed updating {bcc_path}: {ex}")
 
 
+def _apply_pack_version(new_version):
+    """Persist ``new_version`` to pack.toml and the BCC configs, rebind the
+    version globals, and rebuild the changelog factory. Returns the old version.
+    """
+    global pack_version, changelog_factory
+    old_version = pack_version
+    os.chdir(packwiz_path)
+    with open(packwiz_manifest, "r", encoding="utf8") as f:
+        local_pack_toml = toml.load(f)
+    local_pack_toml["version"] = new_version
+    with open(packwiz_manifest, "w", encoding="utf8") as f:
+        toml.dump(local_pack_toml, f)
+    for bcc_path in (bcc_client_config_path, bcc_server_config_path):
+        set_bcc_config_version(bcc_path, new_version)
+    pack_version = new_version
+    changelog_factory = ChangelogFactory(changelog_dir_path, modpack_name, pack_version, settings, yaml)
+    return old_version
+
+
 def bump_modpack_version(new_pack_version):
     """Update the modpack version in pack.toml and BCC configs, then create a changelog template.
 
     Args:
         new_pack_version: The new version string to apply.
     """
-    global pack_version, changelog_factory
     if not new_pack_version:
         print("[Version] No target version provided. Skipping.")
         return
 
-    os.chdir(packwiz_path)
-    with open(packwiz_manifest, "r", encoding="utf8") as f:
-        local_pack_toml = toml.load(f)
-
-    old_pack_version = str(local_pack_toml.get("version", ""))
-    local_pack_toml["version"] = new_pack_version
-    with open(packwiz_manifest, "w", encoding="utf8") as f:
-        toml.dump(local_pack_toml, f)
-
-    for bcc_path in (bcc_client_config_path, bcc_server_config_path):
-        set_bcc_config_version(bcc_path, new_pack_version)
-
-    pack_version = new_pack_version
-    ensure_changelog_yml(pack_version, minecraft_version, active_mod_loader, mod_loader_version)
-    changelog_factory = ChangelogFactory(changelog_dir_path, modpack_name, pack_version, settings, yaml)
+    # Create the new release's changelog before rebuilding the factory.
+    ensure_changelog_yml(new_pack_version, minecraft_version, active_mod_loader, mod_loader_version)
+    old_pack_version = _apply_pack_version(new_pack_version)
     print(f"[Version] Modpack version bumped: {old_pack_version} -> {new_pack_version}")
+
+
+def rename_current_version(new_version):
+    """Rename the current working version in place.
+
+    Updates pack.toml and the BCC configs, and renames the current changelog
+    (and its data record) rather than creating a new one. Use this to correct
+    the current version number without starting a new release. Aborts if a
+    changelog for the new version already exists.
+
+    Args:
+        new_version: The corrected version string to apply.
+    """
+    if not new_version or new_version == pack_version:
+        print("[Version] No version change.")
+        return
+
+    old_version = pack_version
+    old_name = changelog_filename(old_version, minecraft_version)
+    new_name = changelog_filename(new_version, minecraft_version)
+    new_yml = os.path.join(changelog_dir_path, new_name)
+    if os.path.exists(new_yml):
+        print(f"[Version] A changelog already exists at {new_name}; aborting rename.")
+        return
+
+    # The authored changelog has no version key, so a plain move suffices.
+    old_yml = os.path.join(changelog_dir_path, old_name)
+    if os.path.isfile(old_yml):
+        os.rename(old_yml, new_yml)
+        print(f"[Version] Renamed changelog {old_name} -> {new_name}")
+
+    # Move the data record and update its embedded version field.
+    data_dir = os.path.join(changelog_dir_path, "data")
+    old_json = os.path.join(data_dir, changelog_filename(old_version, minecraft_version, ext="json"))
+    new_json = os.path.join(data_dir, changelog_filename(new_version, minecraft_version, ext="json"))
+    if os.path.isfile(old_json):
+        try:
+            with open(old_json, "r", encoding="utf-8") as f:
+                record = json.load(f)
+            record["version"] = new_version
+            with open(new_json, "w", encoding="utf-8") as f:
+                json.dump(record, f, indent=2, ensure_ascii=False)
+            os.remove(old_json)
+        except (OSError, ValueError) as ex:
+            print(f"[Version] Failed updating release data: {ex}")
+
+    _apply_pack_version(new_version)
+    print(f"[Version] Renamed modpack version: {old_version} -> {new_version}")
 
 
 def apply_loader_metadata_to_changelog(changelog_yml, target_mod_loader, target_mod_loader_version):
@@ -1942,7 +2001,10 @@ def run_special_menu_action(settings):
     if settings.clear_repo_data_only:
         clear_stored_repository_data()
     elif settings.bump_version_only:
-        bump_modpack_version(settings.bump_target_version)
+        if settings.version_change_mode == "rename":
+            rename_current_version(settings.bump_target_version)
+        else:
+            bump_modpack_version(settings.bump_target_version)
         pack_manager.refresh_index(packwiz_exe_path, packwiz_path)
     elif settings.generate_update_summary_only:
         download_missing_comparison_files()

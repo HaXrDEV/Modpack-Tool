@@ -69,6 +69,7 @@ class Settings:
     client_export_format: str = "curseforge"
     alpha_update_policy: str = "prompt"
     bump_target_version: str = ""
+    version_change_mode: str = "bump"  # "bump" (new changelog) or "rename" (rename current)
     auto_config_provider: str = "ollama"
     auto_config_model: str = "qwen3:4b-instruct"
     auto_config_endpoint: str = "http://127.0.0.1:11434/api/generate"

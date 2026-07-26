@@ -33,7 +33,7 @@ Every `settings.yml` flag is documented inline in [`settings_template.yml`](sett
 
 ## Action menu
 
-`1` configured workflow · `2` migration · `3` export client · `4` export server · `5` migration + client · `6` migration + client + server · `7` refresh · `8` update mods · `9` bump version · `10` clear cache · `11` changelog summary · `12` list disabled · `13` add mod · `14` find orphaned libraries · `P` manage projects · `0` exit
+`1` configured workflow · `2` migration · `3` export client · `4` export server · `5` migration + client · `6` migration + client + server · `7` refresh · `8` update mods · `9` change version (rename or bump) · `10` clear cache · `11` changelog summary · `12` list disabled · `13` add mod · `14` find orphaned libraries · `P` manage projects · `0` exit
 
 ## Export
 
