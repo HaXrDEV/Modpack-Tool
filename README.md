@@ -29,7 +29,7 @@ projects:
 
 Per-project cache (comparison snapshots, previous releases) lives in a gitignored `.modpack-tool/` at the project root. An old embedded install (`<project>/Modpack-CLI-Tool/`) is auto-detected and migrated on first activation.
 
-Every `settings.yml` flag is documented inline in [`settings_template.yml`](settings_template.yml).
+Every `settings.yml` flag is documented inline in [`settings_template.yml`](settings_template.yml). On launch each project's `settings.yml` is reconciled to the template: missing settings are added, obsolete or unknown keys are dropped, and legacy keys are renamed, all while keeping your existing values, so the file stays complete and matches the template's layout.
 
 ## Action menu
 

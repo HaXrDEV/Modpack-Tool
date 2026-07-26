@@ -6,20 +6,24 @@ update_bcc_version: True
 cleanup_temp: True
 create_release_notes: True
 server_mods_remove_list: []
-print_path_debug: True
+print_path_debug: False
 update_publish_workflow: True
 download_comparison_files: True
 generate_primary_changelog: True
 generate_mods_changelog: True
+update_crash_assistant_modlist: False # Write the crash-assistant modlist during export.
 # Legacy compatibility preset. If True, missing modular flags below are auto-enabled.
 breakneck_fixes: False
 client_export_multi_platform: False
+client_export_format: "curseforge" # Single-platform export target when client_export_multi_platform is False: "curseforge" or "modrinth".
 show_export_mode_notice: False
 changelog_template_use_overview_layout: False
 changelog_include_compare_notice: False
 comparison_files_use_versioned_packwiz_root: False
 github_auth: False
 changelog_side_tag: True
+changelog_updated_mods: False # Include an "Updated Mods" section in the changelog.
+changelog_updated_resourcepacks: False # Include an "Updated Resource Packs" section in the changelog.
 modlist_side_tag: True
 migrate_minecraft_version: False
 migration_target_minecraft: "" # Example: "1.21.12"

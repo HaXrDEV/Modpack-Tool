@@ -20,7 +20,7 @@ from ruamel.yaml.scalarstring import LiteralScalarString
 from mdutils.mdutils import MdUtils
 
 # Settings
-from settings import load_settings
+from settings import load_settings, reconcile_settings_file
 from api_clients import configure_curseforge_api_key
 import pack_manager
 
@@ -1855,8 +1855,9 @@ def activate_project(project_root):
         return False
 
     paths = compute_project_paths(project_root)
+    template_path = os.path.join(tool_dir, "settings_template.yml")
     try:
-        preflight_project(paths, os.path.join(tool_dir, "settings_template.yml"))
+        preflight_project(paths, template_path)
         pack_toml = read_pack_manifest(paths)
     except RuntimeError as ex:
         print(f"[Project] {ex}")
@@ -1884,6 +1885,17 @@ def activate_project(project_root):
     modpack_name = pack_toml["name"]
     minecraft_version = pack_toml["versions"]["minecraft"]
     active_mod_loader, mod_loader_version = get_pack_mod_loader_details(pack_toml)
+
+    # Bring settings.yml up to the template's shape (all keys, comments, order)
+    # while keeping the user's values, before loading it.
+    reconciliation = reconcile_settings_file(settings_path, template_path)
+    if reconciliation:
+        summary = ", ".join(
+            f"{name} {len(reconciliation[name])}"
+            for name in ("added", "removed", "renamed") if reconciliation[name]
+        )
+        if summary:
+            print(f"[Settings] Reconciled settings.yml to the template ({summary}).")
 
     settings = load_settings(settings_path, yaml)
     changelog_factory = ChangelogFactory(changelog_dir_path, modpack_name, pack_version, settings, yaml)
