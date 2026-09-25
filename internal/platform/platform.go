@@ -87,7 +87,10 @@ type CFDependency struct {
 
 // CFMod is a CurseForge project.
 type CFMod struct {
-	ID         int64 `json:"id"`
+	ID    int64 `json:"id"`
+	Links struct {
+		WebsiteURL string `json:"websiteUrl"` // e.g. https://www.curseforge.com/minecraft/mc-mods/servercore
+	} `json:"links"`
 	Categories []struct {
 		Name string `json:"name"`
 		Slug string `json:"slug"`

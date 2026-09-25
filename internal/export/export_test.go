@@ -8,14 +8,17 @@ import (
 	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"hash"
 	"io"
+	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/HaXrDEV/Modpack-Tool/internal/pack"
 	"github.com/HaXrDEV/Modpack-Tool/internal/platform"
@@ -298,8 +301,15 @@ func TestBadDownloadStopsTheExport(t *testing.T) {
 func TestBlockedFilesAreAskedFor(t *testing.T) {
 	folder := filepath.Join(t.TempDir(), "instance-mods")
 	testutil.Write(t, filepath.Join(folder, "renamed-by-user.jar"), string(jar["cfmod"]))
-	f := exportProject(t, folder)
+	f := exportProject(t, "f", folder)
 	f.api.Files = map[int64]platform.CFFile{11: {ID: 11}} // No download URL: the author blocks third-party downloads.
+	f.buildServerWithCFMod(t)
+}
+
+// buildServerWithCFMod builds the server pack and checks that the CurseForge
+// mod made it in and is cached for next time.
+func (f *fixture) buildServerWithCFMod(t *testing.T) {
+	t.Helper()
 	contents := f.contents(t)
 	output := filepath.Join(t.TempDir(), "s.zip")
 	if _, _, err := BuildServer(context.Background(), f.project, contents, f.store, output); err != nil {
@@ -314,6 +324,113 @@ func TestBlockedFilesAreAskedFor(t *testing.T) {
 				t.Error("not cached for next time")
 			}
 		}
+	}
+}
+
+// browserDownloads makes the store watch a temporary Downloads folder.
+func (f *fixture) browserDownloads(t *testing.T) string {
+	downloads := t.TempDir()
+	f.store.DownloadsDir = func() (string, error) { return downloads, nil }
+	f.store.Poll = 10 * time.Millisecond
+	f.api.Files = map[int64]platform.CFFile{11: {ID: 11}}
+	mod := platform.CFMod{ID: 22}
+	mod.Links.WebsiteURL = "https://www.curseforge.com/minecraft/mc-mods/cf-mod"
+	f.api.Mods = map[int64]platform.CFMod{22: mod}
+	return downloads
+}
+
+func TestBlockedFilesComeFromTheBrowser(t *testing.T) {
+	f := exportProject(t, "") // Enter: the browser is the default.
+	downloads := f.browserDownloads(t)
+	testutil.Write(t, filepath.Join(downloads, "cfmod (1).jar.crdownload"), "cfmod") // Another download, still going.
+	testutil.Write(t, filepath.Join(downloads, "other.jar"), "something else")
+	var opened []string
+	f.store.OpenURL = func(url string) error {
+		opened = append(opened, url)
+		// The browser saves the file a moment later, renamed since cfmod.jar was taken.
+		time.AfterFunc(50*time.Millisecond, func() {
+			os.WriteFile(filepath.Join(downloads, "cfmod (1).jar"), jar["cfmod"], 0o644)
+		})
+		return nil
+	}
+	f.buildServerWithCFMod(t)
+	if !slices.Equal(opened, []string{"https://www.curseforge.com/minecraft/mc-mods/cf-mod/download/11"}) {
+		t.Error(opened)
+	}
+	if text := f.session.Text(); !strings.Contains(text, "Picked up 1 file from "+downloads) {
+		t.Error(text)
+	}
+}
+
+func TestBlockedFilesAlreadyDownloadedAreUsed(t *testing.T) {
+	f := exportProject(t, "b")
+	downloads := f.browserDownloads(t)
+	path := filepath.Join(downloads, "cfmod.jar")
+	testutil.Write(t, path, string(jar["cfmod"]))
+	yesterday := time.Now().Add(-24 * time.Hour)
+	if err := os.Chtimes(path, yesterday, yesterday); err != nil {
+		t.Fatal(err)
+	}
+	f.store.OpenURL = func(url string) error {
+		t.Error("opened", url)
+		return nil
+	}
+	f.buildServerWithCFMod(t)
+}
+
+func TestBlockedFilesWithoutAWebsiteOpenTheProject(t *testing.T) {
+	f := exportProject(t, "b")
+	downloads := f.browserDownloads(t)
+	f.api.Mods = nil
+	var opened []string
+	f.store.OpenURL = func(url string) error {
+		opened = append(opened, url)
+		return os.WriteFile(filepath.Join(downloads, "cfmod.jar"), jar["cfmod"], 0o644)
+	}
+	f.buildServerWithCFMod(t)
+	if !slices.Equal(opened, []string{"https://www.curseforge.com/projects/22"}) {
+		t.Error(opened)
+	}
+}
+
+func TestPagesThatDontOpenAreListed(t *testing.T) {
+	f := exportProject(t, "b")
+	downloads := f.browserDownloads(t)
+	f.store.OpenURL = func(string) error {
+		time.AfterFunc(20*time.Millisecond, func() { // Saved by hand.
+			os.WriteFile(filepath.Join(downloads, "cfmod.jar"), jar["cfmod"], 0o644)
+		})
+		return errors.New("no browser")
+	}
+	f.buildServerWithCFMod(t)
+	if text := f.session.Text(); !strings.Contains(text, "Couldn't open the browser") ||
+		!strings.Contains(text, "https://www.curseforge.com/minecraft/mc-mods/cf-mod/download/11") {
+		t.Error(text)
+	}
+}
+
+func TestWaitingForDownloadsStopsWhenCanceled(t *testing.T) {
+	f := exportProject(t, "b")
+	f.browserDownloads(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	f.store.OpenURL = func(string) error {
+		time.AfterFunc(50*time.Millisecond, cancel) // Esc while waiting.
+		return nil
+	}
+	contents := f.contents(t)
+	_, _, err := BuildServer(ctx, f.project, contents, f.store, filepath.Join(t.TempDir(), "s.zip"))
+	if !errors.Is(err, context.Canceled) {
+		t.Error(err)
+	}
+}
+
+func TestBlockedFilesCanBeCanceled(t *testing.T) {
+	f := exportProject(t, "c")
+	f.api.Files = map[int64]platform.CFFile{11: {ID: 11}}
+	contents := f.contents(t)
+	_, _, err := BuildServer(context.Background(), f.project, contents, f.store, filepath.Join(t.TempDir(), "s.zip"))
+	if err == nil || err.Error() != "Export stopped; these files are missing: CF Mod" {
+		t.Error(err)
 	}
 }
 

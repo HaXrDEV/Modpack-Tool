@@ -81,7 +81,7 @@ packwiz refresh                      rebuild index.toml after editing files by h
 - **Changelogs.** You write `Changelogs/<version>+<minecraft>.yml` (just `<version>.yml` for versions like `26.2-1.0`). Build turns it into `Changelogs/data/<same name>.json`, the release record that the [wiki](https://github.com/CrismPack/Wiki) renders, plus `CurseForge-Release.md` and `Modrinth-Release.md` for `publish.yml`.
 - **Disabled mods** have `side = "both(disabled)"` (or `client`/`server`). They stay in the pack and packwiz keeps updating them; the tool leaves them out of exports, changelogs and the modlists.
 - **Exports** follow packwiz's own index, so `.packwizignore` applies. Mods, resource packs and shader packs are all included. For the CurseForge zip, files from other platforms are matched on CurseForge by fingerprint and bundled only when CurseForge doesn't have them; the `.mrpack` gets proper hashes and sizes. `Export/bundled_links.md` lists every bundled file with its source, for license checks.
-- **Server pack**: the `Server Pack` folder (start scripts, server configs, extra jars in `mods/`) plus every server-side mod jar, minus `server_exclude`. Jars are downloaded and cached; for the few files whose authors block third-party downloads, the tool asks for a folder that contains them, once per file version.
+- **Server pack**: the `Server Pack` folder (start scripts, server configs, extra jars in `mods/`) plus every server-side mod jar, minus `server_exclude`. Jars are downloaded and cached. For the few files whose authors block third-party downloads, the tool opens their CurseForge download pages in your browser and picks the files up from your Downloads folder as they arrive (recognized by hash, even if the browser renamed them). You can also point it at a folder that has them. Either way it's needed once per file version.
 
 ## Settings
 
@@ -110,7 +110,7 @@ Each pack has a `modpack-tool.yml` next to its `Packwiz` folder, created on firs
 ## Troubleshooting
 
 - **"No earlier release tag found"**: the previous release isn't tagged. Tag it (`git tag 2.2.0 <commit>`) or pass `--since <tag or commit>` to `draft`/`build`.
-- **A file can't be downloaded**: its author blocks third-party downloads on CurseForge. Download it once from CurseForge (or point the tool at a CurseForge app instance's `mods` folder); it is cached afterwards.
+- **A file can't be downloaded**: its author blocks third-party downloads on CurseForge. Choose `b` and the tool opens the download pages and waits for the files in your Downloads folder (if your browser saves somewhere else, save them there by hand). Or choose `f` and point it at a folder that has them, such as a CurseForge app instance's `mods` folder. Either way they are cached afterwards.
 - **git push asks for a login**: the tool never waits for typed credentials. Run `git push` once in a terminal (or `gh auth setup-git`) and publish again.
 - **An old tool is needed**: the Python version of this tool is tagged `python-final`, the one before it `legacy-v1` (for example a release on an old Minecraft line that still uses `CHANGELOG.md`). `git worktree add ../Modpack-Tool-python python-final` and run its `run_modpack_tool.bat` (needs Python 3.11).
 
