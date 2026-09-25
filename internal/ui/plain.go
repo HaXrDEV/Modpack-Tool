@@ -23,9 +23,8 @@ type Plain struct {
 	color    bool
 	progress bool // Draw "done/total" progress in place.
 	// Open opens a file in its default app (OpenFile unless replaced).
-	Open func(path string) error
-	// Canceled reports whether the user pressed Ctrl+C.
-	Canceled func() bool
+	Open  func(path string) error
+	lines chan readResult
 }
 
 // NewPlain returns a session reading answers from in and writing to out.
@@ -105,11 +104,12 @@ func (s *plainStep) Done(detail string) {
 	}
 }
 
-func (s *plainStep) Fail(err error) {
+// Fail marks the step failed; the reason is printed once, when the action ends.
+func (s *plainStep) Fail(error) {
 	if s.drawn {
 		s.p.println("")
 	}
-	s.p.println(s.p.style("31", "✗ ") + s.title + ": " + err.Error())
+	s.p.println(s.p.style("31", "✗ ") + s.title)
 }
 
 func (p *Plain) Log(line string) { p.println(p.style("2", "  | ") + line) }
@@ -142,23 +142,45 @@ func (p *Plain) Result(summary, next string) {
 	}
 }
 
-// readLine reads one answer; the end of input cancels the run.
+type readResult struct {
+	line string
+	err  error
+}
+
+// readLine reads one answer; Ctrl+C (ctx) or the end of input cancels the run.
 func (p *Plain) readLine(ctx context.Context, prompt string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 	p.mu.Lock()
 	fmt.Fprint(p.out, prompt)
+	if p.lines == nil {
+		// One reader for the whole session, so a canceled prompt can't lose a line.
+		p.lines = make(chan readResult)
+		go func() {
+			for {
+				line, err := p.in.ReadString('\n')
+				p.lines <- readResult{line, err}
+				if err != nil {
+					close(p.lines)
+					return
+				}
+			}
+		}()
+	}
+	lines := p.lines
 	p.mu.Unlock()
-	line, err := p.in.ReadString('\n')
-	if err != nil && (line == "" || !errors.Is(err, io.EOF)) {
+	select {
+	case <-ctx.Done():
 		p.println("")
-		return "", context.Canceled
+		return "", ctx.Err()
+	case r, ok := <-lines:
+		if !ok || (r.err != nil && (r.line == "" || !errors.Is(r.err, io.EOF))) {
+			p.println("")
+			return "", context.Canceled
+		}
+		return strings.TrimSpace(r.line), nil
 	}
-	if p.Canceled != nil && p.Canceled() {
-		return "", context.Canceled
-	}
-	return strings.TrimSpace(line), nil
 }
 
 func (p *Plain) Confirm(ctx context.Context, question string, def bool) (bool, error) {

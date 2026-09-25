@@ -79,6 +79,31 @@ func Limit(items []string, n int) []string {
 	return append(append([]string{}, items[:n]...), fmt.Sprintf("… and %d more", len(items)-n))
 }
 
+// Discard is a Session that shows nothing and cancels every prompt, for
+// background work such as loading the status.
+var Discard Session = discard{}
+
+type discard struct{}
+
+func (discard) Step(string) Step                                    { return discard{} }
+func (discard) Log(string)                                          {}
+func (discard) Info(string, ...string)                              {}
+func (discard) Warn(string, ...string)                              {}
+func (discard) Result(string, string)                               {}
+func (discard) Progress(int, int)                                   {}
+func (discard) Done(string)                                         {}
+func (discard) Fail(error)                                          {}
+func (discard) WaitForEdit(context.Context, string) error           { return context.Canceled }
+func (discard) Confirm(context.Context, string, bool) (bool, error) { return false, context.Canceled }
+func (discard) Choose(context.Context, string, []Option, string) (string, error) {
+	return "", context.Canceled
+}
+func (discard) PickMany(context.Context, string, []string) ([]int, error) {
+	return nil, context.Canceled
+}
+func (discard) Ask(context.Context, string, string) (string, error) { return "", context.Canceled }
+func (discard) AskPath(context.Context, string) (string, error)     { return "", context.Canceled }
+
 // BugError is an unexpected failure (a panic): a bug in the tool.
 type BugError struct {
 	Value any
