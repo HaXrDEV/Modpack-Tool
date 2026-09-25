@@ -24,11 +24,17 @@ def test_mod_properties(pack_dir):
     assert mods["fresh"].category == "resourcepacks" and mods["fresh"].folder == "resourcepacks"
 
 
-def test_invalid_and_empty_sides():
-    assert pack.Mod("mods/x.pw.toml", {"side": "dyed(disabled)"}).side == "both"
-    assert not pack.Mod("mods/x.pw.toml", {"side": "dyed(disabled)"}).side_valid
-    assert pack.Mod("mods/x.pw.toml", {"side": ""}).installs_on("server")
-    assert pack.Mod("mods/x.pw.toml", {}).installs_on("client")
+def test_invalid_legacy_and_empty_sides():
+    def mod(side):
+        return pack.Mod("mods/x.pw.toml", {} if side is None else {"side": side})
+
+    assert mod("dyed(disabled)").disabled and mod("dyed(disabled)").side == "both"
+    assert not mod("dyed(disabled)").side_valid
+    # Older packs disabled mods with "none" / "both(none)".
+    assert mod("none").disabled and mod("both(none)").disabled and mod("none").side_valid
+    assert mod("none").side == "both" and mod("both(none)").side == "both"
+    assert mod("dyed").disabled  # packwiz wouldn't install a typo'd side either.
+    assert mod("").installs_on("server") and mod(None).installs_on("client")
 
 
 def test_disable_and_enable_keep_formatting_and_line_endings(pack_dir):

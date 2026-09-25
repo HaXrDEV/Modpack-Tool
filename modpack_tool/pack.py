@@ -192,7 +192,8 @@ class Mod:
 
     @property
     def disabled(self):
-        return "disabled" in self.side_raw.lower()
+        """Only sides packwiz installs count as active; "both(disabled)", "none" and typos don't."""
+        return self.side_raw.lower() not in ("", *VALID_SIDES)
 
     @property
     def base_side(self):
@@ -201,12 +202,13 @@ class Mod:
 
     @property
     def side_valid(self):
-        return self.base_side in VALID_SIDES
+        # "none" is how older packs marked disabled mods.
+        return self.base_side in (*VALID_SIDES, "none")
 
     @property
     def side(self):
-        """The side used for installs: invalid values count as "both"."""
-        return self.base_side if self.side_valid else "both"
+        """The side used for installs and when re-enabling: anything else counts as "both"."""
+        return self.base_side if self.base_side in VALID_SIDES else "both"
 
     def installs_on(self, side):
         """True when this file ships in a ``side`` ("client"/"server") install."""
