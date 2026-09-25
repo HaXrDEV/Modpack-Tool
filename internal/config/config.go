@@ -7,13 +7,13 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
 
 	"github.com/HaXrDEV/Modpack-Tool/internal/files"
+	"github.com/HaXrDEV/Modpack-Tool/internal/proc"
 	"github.com/HaXrDEV/Modpack-Tool/internal/pycompat"
 )
 
@@ -171,7 +171,7 @@ func (c *Config) PackwizExe() string {
 	if path := strings.TrimSpace(c.PackwizExePath); path != "" {
 		return path
 	}
-	if path, err := exec.LookPath("packwiz"); err == nil {
+	if path, err := proc.LookPath("packwiz"); err == nil {
 		return path
 	}
 	home, _ := os.UserHomeDir()

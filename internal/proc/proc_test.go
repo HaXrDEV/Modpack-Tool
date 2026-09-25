@@ -2,7 +2,10 @@ package proc
 
 import (
 	"context"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"testing"
 )
@@ -19,6 +22,30 @@ func TestCleanLine(t *testing.T) {
 		if got := CleanLine(in); got != want {
 			t.Errorf("CleanLine(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// A stray quote in PATH (`C:\Program Files\PowerShell\7"`) hides every later
+// folder from Go's exec.LookPath; LookPath and child processes must not care.
+func TestStrayQuoteInPath(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("PATH quoting is a Windows matter")
+	}
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "fake-tool.exe"), []byte("MZ"), 0o755)
+	t.Setenv("PATH", `C:\Program Files\PowerShell\7";`+dir+`;C:\Windows\System32`)
+	if _, err := exec.LookPath("fake-tool"); err == nil {
+		t.Skip("this Go version reads stray quotes like cmd.exe")
+	}
+	if path, err := LookPath("fake-tool"); err != nil || path != filepath.Join(dir, "fake-tool.exe") {
+		t.Errorf("LookPath = %q, %v", path, err)
+	}
+	cleaned := cleanPath([]string{"A=1", "PATH=" + os.Getenv("PATH")})
+	if want := `PATH=C:\Program Files\PowerShell\7;` + dir + `;C:\Windows\System32`; cleaned[1] != want {
+		t.Errorf("cleanPath = %q", cleaned[1])
+	}
+	if _, err := Run(context.Background(), Spec{Name: "cmd", Args: []string{"/c", "exit 0"}}); err != nil {
+		t.Errorf("cmd /c: %v", err)
 	}
 }
 

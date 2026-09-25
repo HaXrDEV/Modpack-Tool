@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
 	"strings"
 
 	"github.com/HaXrDEV/Modpack-Tool/internal/fail"
@@ -35,7 +34,7 @@ type CLI struct {
 
 func (c *CLI) run(ctx context.Context, echo, check bool, args ...string) error {
 	if _, err := os.Stat(c.Exe); err != nil {
-		if _, err := exec.LookPath(c.Exe); err != nil {
+		if _, err := proc.LookPath(c.Exe); err != nil {
 			return fail.Errorf("packwiz was not found at '%s'. Install it with "+
 				"'go install github.com/packwiz/packwiz@latest' or set packwiz_exe_path in the tool's config.yml.", c.Exe)
 		}

@@ -35,6 +35,9 @@ type Options struct {
 	Interactive bool // Stdin and stdout are a terminal.
 	// Dashboard opens the full-screen app; nil when it isn't available.
 	Dashboard func(cfg *config.Config, root string) error
+	// WithoutConsole handles a dashboard request outside a terminal (Git
+	// Bash's own window); when it returns false, the status is printed.
+	WithoutConsole func() (code int, handled bool)
 }
 
 // Version is the tool's version, from the Go module information.
@@ -76,6 +79,11 @@ func Main(opts Options) int {
 				return ExitFailed
 			}
 			return ExitOK
+		}
+		if opts.WithoutConsole != nil {
+			if code, handled := opts.WithoutConsole(); handled {
+				return code
+			}
 		}
 		command = "status"
 	}

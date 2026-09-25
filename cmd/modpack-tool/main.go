@@ -24,6 +24,7 @@ func main() {
 		Dashboard: func(cfg *config.Config, root string) error {
 			return tui.Run(cfg, root)
 		},
+		WithoutConsole: withoutConsole,
 	})
 	if code != app.ExitOK {
 		pauseIfOwnConsole()

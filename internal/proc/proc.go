@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -54,6 +55,21 @@ func Run(ctx context.Context, spec Spec) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
+	name := spec.Name
+	if !strings.ContainsAny(name, `\/`) {
+		path, err := LookPath(name)
+		if err != nil {
+			return Result{}, ErrNotFound
+		}
+		name = path
+	} else if _, err := os.Stat(name); errors.Is(err, fs.ErrNotExist) {
+		return Result{}, ErrNotFound
+	}
+	if spec.Dir != "" {
+		if info, err := os.Stat(spec.Dir); err != nil || !info.IsDir() {
+			return Result{}, fmt.Errorf("can't run %s in %s: the folder doesn't exist", spec.Name, spec.Dir)
+		}
+	}
 	runCtx := ctx
 	if spec.Changes {
 		runCtx = context.WithoutCancel(ctx)
@@ -63,9 +79,9 @@ func Run(ctx context.Context, spec Spec) (Result, error) {
 		runCtx, cancel = context.WithTimeout(runCtx, spec.Timeout)
 		defer cancel()
 	}
-	cmd := exec.CommandContext(runCtx, spec.Name, spec.Args...)
+	cmd := exec.CommandContext(runCtx, name, spec.Args...)
 	cmd.Dir = spec.Dir
-	cmd.Env = append(os.Environ(), Env...)
+	cmd.Env = cleanPath(append(os.Environ(), Env...))
 	cmd.Stdin = nil // The null device.
 	cmd.WaitDelay = 5 * time.Second
 	hide(cmd)
@@ -97,9 +113,6 @@ func Run(ctx context.Context, spec Spec) (Result, error) {
 	if errors.As(err, &exitErr) {
 		result.Code = exitErr.ExitCode()
 		return result, nil
-	}
-	if errors.Is(err, exec.ErrNotFound) || errors.Is(err, fs.ErrNotExist) {
-		return result, ErrNotFound
 	}
 	return result, err
 }

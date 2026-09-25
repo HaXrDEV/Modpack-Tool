@@ -6,7 +6,6 @@ package workflow
 
 import (
 	"context"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -52,7 +51,7 @@ func NewEnv(session ui.Session, p *project.Project, packwizExe string, api platf
 		API:      api,
 		Store:    export.NewStore(cacheDir, api, session),
 		Now:      time.Now,
-		LookPath: exec.LookPath,
+		LookPath: proc.LookPath,
 		RunGH:    runGH,
 	}
 }
