@@ -362,12 +362,14 @@ func (r *runScreen) view(width, height int) string {
 		body := r.prompt.view(t, width-4, innerHeight)
 		panel = box(t, t.Accent, r.title, r.prompt.counter(), body, width)
 	}
-	available := height - 1 - lipgloss.Height(panel)
-	if panel == "" {
-		available = height - 1
+	available := height - 1
+	if panel != "" {
+		available -= lipgloss.Height(panel)
 	}
-	body := strings.Join(bottom(lines, max(0, available)), "\n")
-	out := t.Title.Render(r.title) + "\n" + body
+	lines = bottom(lines, max(0, available))
+	// Anchored to the bottom: the newest lines and the prompt sit above the keys.
+	gap := make([]string, max(0, available-len(lines)))
+	out := t.Title.Render(r.title) + "\n" + strings.Join(append(gap, lines...), "\n")
 	if panel != "" {
 		out += "\n" + panel
 	}

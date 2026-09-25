@@ -19,7 +19,7 @@ var modrinthFiles = []ModrinthFile{
 }
 
 // The goldens are tomlkit's edits of real metafiles from both packs, in both
-// line endings (scripts/golden.py).
+// line endings (scripts/golden.py at the python-final tag).
 func TestEditsMatchTomlkit(t *testing.T) {
 	data, err := os.ReadFile("testdata/tomledits.json")
 	if err != nil {

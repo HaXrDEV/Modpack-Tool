@@ -38,7 +38,7 @@ func windowsNewlines(t *testing.T) {
 	t.Cleanup(func() { pycompat.NewFileNewline = saved })
 }
 
-// The goldens are what the Python tool wrote for each input (scripts/golden.py).
+// The goldens are what the Python tool wrote for each input (scripts/golden.py at the python-final tag).
 func TestSettingsMatchPython(t *testing.T) {
 	windowsNewlines(t)
 	data, err := os.ReadFile("testdata/settings.json")
@@ -109,10 +109,7 @@ func legacyProject(t *testing.T, fixture string) string {
 		"[versions]\nfabric = \"0.18.4\"\nminecraft = \"1.21.1\"\n")
 	testutil.Write(t, filepath.Join(root, "Packwiz", "mods", "from-the-fog.pw.toml"),
 		testutil.Metafile("From The Fog", "From-The-Fog-1.21-v2.0.jar"))
-	legacy, err := os.ReadFile(filepath.Join("..", "..", "tests", "fixtures", "legacy_settings", fixture))
-	if err != nil {
-		legacy, err = os.ReadFile(filepath.Join("testdata", "legacy_"+fixture))
-	}
+	legacy, err := os.ReadFile(filepath.Join("testdata", "legacy_"+fixture)) // The old tool's settings.yml of the packs.
 	if err != nil {
 		t.Fatal(err)
 	}

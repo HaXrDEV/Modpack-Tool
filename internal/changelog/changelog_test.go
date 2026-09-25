@@ -85,7 +85,7 @@ func withoutNone(lines []string) []string {
 	return slices.DeleteFunc(slices.Clone(lines), func(line string) bool { return line == "None" })
 }
 
-// The goldens come from the Python tool (scripts/golden.py).
+// The goldens come from the Python tool (scripts/golden.py at the python-final tag).
 func TestSectionsMatchPython(t *testing.T) {
 	for _, c := range loadGolden(t).Sections {
 		cl := loadText(t, c.Text)

@@ -30,7 +30,7 @@ func ints(value any) []int {
 	return result
 }
 
-// The goldens come from the Python implementation (scripts/golden.py) over
+// The goldens come from the Python implementation (scripts/golden.py at the python-final tag) over
 // every tag of both packs plus edge cases.
 func TestGolden(t *testing.T) {
 	data, err := os.ReadFile("testdata/golden.json")
