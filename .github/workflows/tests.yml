@@ -4,11 +4,24 @@ on: [push, pull_request]
 
 jobs:
   test:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-go@v5
         with:
-          python-version: "3.11"
-      - run: pip install -r requirements-dev.txt
-      - run: python -m pytest -q
+          go-version-file: go.mod
+      - name: gofmt
+        if: runner.os == 'Linux'
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - run: go vet ./...
+      - name: go test
+        if: runner.os == 'Linux'
+        run: go test -race ./...
+      - name: go test
+        if: runner.os == 'Windows'
+        run: go test ./...
+      - run: go build ./cmd/modpack-tool

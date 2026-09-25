@@ -7,13 +7,21 @@ A guided release assistant for [packwiz](https://github.com/packwiz/packwiz) mod
 
 ## After a long break: start here
 
-Run `run_modpack_tool.bat`. The menu shows where the pack stands and what to do next:
+Run `modpack-tool` inside a pack folder (or anywhere; it opens the last pack you used). The dashboard shows where the pack stands and what to do next, with the cursor already on that action:
 
 ```
-Breakneck 26.2-1.1 (not released yet) · Minecraft 26.2 · Fabric 0.19.1
-Since 26.2-1.0: +3 mods, -1 mod, 22 updated, 4 config files changed
-Changelog: 26.2-1.1.yml · overview 3 lines · config changes empty
-Next: Draft changelog (3), then edit it.
+ HaXr's Modpack Tool                                      Breakneck
+╭────────────────────────────────────────────────────────────────╮
+│ 26.2-1.1 · not released         Minecraft 26.2 · Fabric 0.19.1 │
+│ Since 26.2-1.0  +3 mods, -1 mod, 22 updated, 4 config files ch…│
+│ Changelog  overview 3 lines · config changes empty             │
+│ Next  Draft changelog (3), then edit it.                       │
+╰────────────────────────────────────────────────────────────────╯
+  1  Update mods        packwiz update, then the alpha guard
+  2  New version        bump or rename the version
+› 3  Draft changelog    fill sections from the changes
+  ...
+ ↑↓ select • enter run • p projects • ? help • q quit
 ```
 
 A release, start to finish:
@@ -24,29 +32,36 @@ A release, start to finish:
 4. **Build release (4)**: release record and notes, pack files, and the packs in `Export/`.
 5. **Publish (5)**: commit, push and create the GitHub release. The pack's `publish.yml` uploads it to CurseForge/Modrinth, and the wiki sync picks up `Changelogs/data/`.
 
-Press `h` in the menu for the same overview, a packwiz cheat sheet and where files live.
+Press `?` on the dashboard for the same overview, a packwiz cheat sheet and where files live.
 
 ## Setup
 
-Needs Python 3.11+, [packwiz](https://github.com/packwiz/packwiz) (`go install github.com/packwiz/packwiz@latest`), git, and the [GitHub CLI](https://cli.github.com) (`gh`, logged in) for publishing.
+Needs [Go](https://go.dev/dl/) 1.25 or newer, [packwiz](https://github.com/packwiz/packwiz), git, and the [GitHub CLI](https://cli.github.com) (`gh`, logged in) for publishing. Install or update the tool with:
 
-Clone this repo anywhere and run `run_modpack_tool.bat`. It creates the `venv` and reinstalls dependencies when `requirements.txt` changes. Update with `git pull`.
+```
+go install github.com/HaXrDEV/Modpack-Tool/cmd/modpack-tool@latest
+```
 
-The first run asks for a modpack folder: the folder that contains `Packwiz/pack.toml` (drag & drop works). The tool remembers it; `p` in the menu switches, adds or removes projects.
+That puts `modpack-tool.exe` in `%USERPROFILE%\go\bin` (next to packwiz); make sure that folder is on your `PATH`.
 
-## The menu
+The first run asks for a modpack folder: the folder that contains `Packwiz/pack.toml` (drag & drop works). The tool remembers it; `p` on the dashboard switches, adds or removes projects.
+
+## The dashboard
 
 | Key | Action | What it does |
 |---|---|---|
 | 1 | Update mods | `packwiz update --all`, then an alpha guard (keep, move to the newest beta/release, or revert) and an offer to re-enable disabled mods that received an update. Pinned mods can be unpinned for one run. |
 | 2 | New version | Bumps the version in `pack.toml` and the BetterCompatibilityChecker configs and creates the changelog file. If the current version was never released, it can be renamed instead. |
-| 3 | Draft changelog | Fills `Update overview` and `Config Changes` from the changes since the last release. Text you wrote is only replaced after you confirm. |
+| 3 | Draft changelog | Fills `Update overview` and `Config Changes` from the changes since the last release. Text you wrote is only replaced after you confirm; the rest of the file stays exactly as it is. |
 | 4 | Build release | Updates `bcc.json`, the Crash Assistant modlist and `modlist.md`, writes the release record and release notes, and builds the packs listed in `exports`. Refuses an empty changelog. |
 | 5 | Publish | Commits, pushes and runs `gh release create` with the built files, asking before each step. Refuses if the pack changed since the last build. |
 | 6 | Migrate Minecraft | `packwiz migrate minecraft`, the same alpha guard and re-enable offer, then disables mods with no build for the new version and starts a new version. |
 | 7 | Check pack | Invalid sides, leftover disabled folders, disabled and pinned mods, and library mods nothing depends on (removal via `packwiz remove`). |
+| 8 | View changes | Everything that changed since the last release: mods, packs and config lines. |
 
-Every action is also a command: `run_modpack_tool.bat status`, `update`, `new-version [VERSION]`, `draft [--since REF]`, `build [--since REF] [--skip-server]`, `publish [--dry-run]`, `migrate [MINECRAFT]`, `check`. Add `--project PATH` to pick a pack; `--help` lists everything.
+Digits move the cursor and Enter runs the action, so a stray key never starts one. While an action runs, each step shows a spinner (with a progress bar for downloads), questions appear in a panel at the bottom, and `l` shows the full packwiz/git output. `Esc` or `Ctrl+C` cancels; packwiz and git always finish the command they are running first, so no file is left half-written. A second `Ctrl+C` quits.
+
+Every action is also a command with plain output, for scripts: `modpack-tool status`, `update`, `new-version [VERSION]`, `draft [--since REF]`, `build [--since REF] [--skip-server] [--no-review]`, `publish [--dry-run]`, `migrate [MINECRAFT]`, `check`, `changes [--since REF]`. Add `--project PATH` to pick a pack; `--help` lists everything.
 
 ## packwiz does the rest
 
@@ -83,19 +98,35 @@ Each pack has a `modpack-tool.yml` next to its `Packwiz` folder, created on firs
 | `changelog_url` | The "Full changelog" link in release notes (`{mc_group}`, `{mc}`, `{version}`, `{anchor}`). |
 | `curseforge_notes_footer`, `modrinth_notes_footer` | Markdown appended to the release notes (e.g. a sponsor banner). |
 
-Tool-wide state lives in the gitignored `tool_config.yml` beside the scripts: the known projects, an optional `packwiz_exe_path` (default: PATH, then `%USERPROFILE%\go\bin\packwiz.exe`) and an optional `curseforge_api_key` (or `cf-api-key.txt`; packwiz's public key is used otherwise). Downloaded files and CurseForge fingerprints are cached in `cache/`, which is safe to delete.
+## Where files live
+
+| Path | What |
+|---|---|
+| `%AppData%\modpack-tool\config.yml` | Known projects, an optional `packwiz_exe_path` (default: PATH, then `%USERPROFILE%\go\bin\packwiz.exe`) and an optional `curseforge_api_key` (packwiz's public key is used otherwise). |
+| `%LocalAppData%\modpack-tool\` | Downloaded files and CurseForge fingerprints (safe to delete), and `last-run.log`, the full output of the last action. |
+
+`MODPACK_TOOL_CONFIG` and `MODPACK_TOOL_CACHE` point the tool somewhere else, handy for testing on a copy of a pack.
 
 ## Troubleshooting
 
 - **"No earlier release tag found"**: the previous release isn't tagged. Tag it (`git tag 2.2.0 <commit>`) or pass `--since <tag or commit>` to `draft`/`build`.
 - **A file can't be downloaded**: its author blocks third-party downloads on CurseForge. Download it once from CurseForge (or point the tool at a CurseForge app instance's `mods` folder); it is cached afterwards.
-- **Old tool needed** (for example a release on an old Minecraft line that still uses `CHANGELOG.md`): `git worktree add ../Modpack-Tool-legacy legacy-v1` and run the old `run_modpack_tool.bat` there.
+- **git push asks for a login**: the tool never waits for typed credentials. Run `git push` once in a terminal (or `gh auth setup-git`) and publish again.
+- **An old tool is needed**: the Python version of this tool is tagged `python-final`, the one before it `legacy-v1` (for example a release on an old Minecraft line that still uses `CHANGELOG.md`). `git worktree add ../Modpack-Tool-python python-final` and run its `run_modpack_tool.bat` (needs Python 3.11).
 
 ## Development
 
-`pip install -r requirements-dev.txt`, then `python -m pytest`. The package is `modpack_tool/`; `__main__.py` holds the single command table that drives the menu, the command line and the help screen.
+`go test ./...` runs everything; `go vet ./...` and `gofmt -l .` should be clean. The command is `cmd/modpack-tool`, and `internal/` has one package per concern:
+
+- `workflow`: the actions and the command table that drives the dashboard, the subcommands and the help;
+- `tui`: the dashboard (Bubble Tea v2); `ui`: the `Session` interface workflows talk to, and the plain line-by-line session;
+- `pack`, `project`, `changelog`, `diff`, `draft`, `export`, `platform`, `git`, `packwiz`, `version`: the parts of a release;
+- `pycompat`: the text, JSON and YAML formats the Python version of the tool wrote, so the files in the packs stay byte-identical.
+
+The `testdata` goldens were generated from the Python tool (`scripts/golden.py` at the `python-final` tag) and are the specification of those formats.
 
 ## Credits
 
 - [packwiz](https://github.com/packwiz/packwiz): mod metadata and pack format; the bundled CurseForge community API key is packwiz's.
 - [mmc-export](https://github.com/RozeFound/mmc-export): the fingerprint-based CurseForge export follows its approach.
+- [Charm](https://charm.land): Bubble Tea, Bubbles and Lip Gloss for the dashboard.

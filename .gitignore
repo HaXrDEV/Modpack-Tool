@@ -1,8 +1,4 @@
-venv/
-cache/
-tool_config.yml
-cf-api-key.txt
-gh-token.txt
-__pycache__/
-.pytest_cache/
+# Local builds
+/modpack-tool
+/modpack-tool.exe
 .claude/
