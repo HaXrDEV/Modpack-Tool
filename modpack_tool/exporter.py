@@ -424,14 +424,18 @@ def export(project, kinds):
         ui.ok(f"{output.name} ({summary})")
 
     report = project.export_dir / "bundled_links.md"
+    lines = [f"# Bundled files in {project.name} {project.version}", ""]
     if bundled_by_kind:
-        lines = [f"# Bundled files in {project.name} {project.version}", "",
-                 "These files are included in the packs instead of being downloaded from the platform.",
-                 "Check that each license allows redistribution.", ""]
+        lines += ["These files are included in the packs instead of being downloaded from the platform.",
+                  "Check that each license allows redistribution.", ""]
         for label, mods in bundled_by_kind.items():
             lines += [f"## {label}", ""]
             lines += [f"- [{mod.display_name}]({_source_link(mod)}): `{mod.filename}`" for mod in mods]
             lines.append("")
+    else:
+        lines += ["No files are bundled; everything is downloaded from CurseForge or Modrinth.", ""]
+    if bundled_by_kind or report.exists():  # An old list must never describe a new release.
         pack.write_text(report, "\n".join(lines))
+    if bundled_by_kind:
         ui.info(f"Bundled files and their sources: {report.relative_to(project.root)}")
     return written

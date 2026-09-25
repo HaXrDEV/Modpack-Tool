@@ -12,9 +12,11 @@ from io import StringIO
 from pathlib import Path
 
 from ruamel.yaml import YAML
+from ruamel.yaml.error import YAMLError
 
 from . import pack, ui
 from .diff import tagged
+from .ui import ToolError
 from .version import format_version_anchor, is_mc_prefixed_version, is_prerelease, minecraft_content_key
 
 # (YAML key, record key) for every hand-written section, in display order.
@@ -102,8 +104,16 @@ def create_changelog(project, version=None, minecraft=None):
 
 
 def load_changelog(path):
-    with open(path, "r", encoding="utf-8") as f:
-        return _yaml().load(f) or _yaml().load("{}")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = _yaml().load(f)
+    except YAMLError as ex:
+        raise ToolError(f"{Path(path).name} isn't valid YAML, so it can't be read:\n{ex}") from ex
+    if data is None:
+        return _yaml().load("{}")
+    if not isinstance(data, dict):
+        raise ToolError(f"{Path(path).name} should contain sections such as 'Update overview:'.")
+    return data
 
 
 def save_changelog(path, data):
@@ -112,11 +122,25 @@ def save_changelog(path, data):
     pack.write_text(path, buffer.getvalue())
 
 
+def _as_text(item):
+    # "- Sodium: fixed flicker" is a one-entry mapping in YAML; keep it as written.
+    if isinstance(item, dict):
+        return ", ".join(f"{key}: {value}" for key, value in item.items())
+    return str(item)
+
+
 def section_lines(value):
     """A section's bullets as plain strings (without "- ")."""
-    if not value:
+    if value is None or value == "":
         return []
-    lines = value.splitlines() if isinstance(value, str) else list(value)
+    if isinstance(value, str):
+        lines = value.splitlines()
+    elif isinstance(value, dict):
+        lines = [_as_text({key: item}) for key, item in value.items()]
+    elif isinstance(value, (list, tuple)):
+        lines = [_as_text(item) for item in value]
+    else:
+        lines = [str(value)]
     cleaned = []
     for line in lines:
         text = str(line).strip()
@@ -211,7 +235,7 @@ def release_notes(project, data, platform):
         link = f"**[[Full Changelog]]({url})**"
         blocks.append(f"#### {link}" if platform == "curseforge" else link)
     footer = project.settings.curseforge_notes_footer if platform == "curseforge" else project.settings.modrinth_notes_footer
-    if str(footer).strip():
+    if footer and str(footer).strip():
         blocks.append(str(footer).strip())
     return "\n\n".join(blocks) + "\n"
 

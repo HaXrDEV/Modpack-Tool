@@ -1,6 +1,8 @@
 """The release cycle: start a new version, build the release, publish it."""
 
+import hashlib
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -22,8 +24,11 @@ def release_tag(project, version=None):
     return project.git.tag_for(version or project.version) if project.git.is_repo else None
 
 
-def changes_since_release(project, since=None):
-    """(PackDiff, base ref) for the working copy against the previous release, or (None, None)."""
+def changes_since_release(project, since=None, details=True):
+    """(PackDiff, base ref) for the working copy against the previous release, or (None, None).
+
+    ``details=False`` skips config line diffs; enough for the status summary.
+    """
     if not project.git.is_repo:
         return None, None
     # A released version is compared against its own tag: what isn't in any release yet.
@@ -35,7 +40,7 @@ def changes_since_release(project, since=None):
     old_tree = project.git.snapshot(base, pack.TREE_PARTS)
     new_tree = pack.read_tree(project.pack_dir)
     previous = base[1:] if base[:1] == "v" and base[1:2].isdigit() else base
-    return diff.compare(old_tree, new_tree, previous, project.version, project.minecraft), base
+    return diff.compare(old_tree, new_tree, previous, project.version, project.minecraft, details), base
 
 
 ############################################################
@@ -152,9 +157,40 @@ def draft(project, since=None, only_empty=False):
 ############################################################
 # Build release
 
+_WORKFLOW_ENV = re.compile(r"^(\s+)(MC_VERSION|RELEASE_TYPE|PRE_RELEASE):[^\n]*$", re.MULTILINE)
+
+
+def sync_publish_workflow(project):
+    """Update an old-style publish.yml that hard-codes MC_VERSION/RELEASE_TYPE/PRE_RELEASE.
+
+    Workflows that read these from the release itself don't have those keys, so
+    nothing changes for them. Returns the path when the file was rewritten.
+    """
+    path = project.root / ".github" / "workflows" / "publish.yml"
+    if not path.is_file():
+        return None
+    text = path.read_text(encoding="utf-8")
+    if "alpha" in project.version.lower():
+        kind = "alpha"
+    elif is_prerelease(project.version):
+        kind = "beta"
+    else:
+        kind = "release"
+    values = {"MC_VERSION": project.minecraft, "RELEASE_TYPE": kind,
+              "PRE_RELEASE": "false" if kind == "release" else "true"}
+    updated = _WORKFLOW_ENV.sub(lambda m: f"{m.group(1)}{m.group(2)}: {values[m.group(2)]}", text)
+    if updated == text:
+        return None
+    pack.write_text(path, updated)
+    return path
+
+
 def update_generated_files(project):
-    """Keep bcc.json, the Crash Assistant modlist and modlist.md in step with the pack."""
+    """Keep bcc.json, the Crash Assistant modlist, modlist.md and an old-style publish.yml in step."""
     written = []
+    workflow = sync_publish_workflow(project)
+    if workflow:
+        written.append(workflow)
     for path in (project.pack_dir / "config" / "bcc.json", project.server_template_dir / "config" / "bcc.json"):
         if pack.write_bcc_version(path, project.version):
             written.append(path)
@@ -214,7 +250,7 @@ def build(project, since=None, skip_server=False, review=True):
     kinds = [kind for kind in project.settings.exports if not (skip_server and kind == "server")]
     files = exporter.export(project, kinds) if kinds else []
     last = {"version": project.version, "index_hash": pack.index_hash(project.pack_dir),
-            "files": [file.name for file in files]}
+            "changelog_hash": _file_hash(path), "files": [file.name for file in files]}
     _last_build_path(project).write_text(json.dumps(last, indent=2), encoding="utf-8")
     ui.ok(f"Release {project.version} is built.")
     ui.info("Next: Publish (commit, push and create the GitHub release).")
@@ -241,6 +277,22 @@ def _last_build(project):
         return None
 
 
+def _file_hash(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest() if Path(path).is_file() else ""
+
+
+def build_is_current(project, last=None):
+    """(True, "") when the last build matches the pack and changelog as they are now, else (False, why)."""
+    last = last or _last_build(project)
+    if not last or last.get("version") != project.version:
+        return False, f"There is no build of {project.version} yet; run Build release first."
+    if pack.index_hash(project.pack_dir) != last.get("index_hash"):
+        return False, "The pack changed since the last build. Build release again so the uploaded files match it."
+    if _file_hash(changelog.changelog_path(project)) != last.get("changelog_hash"):
+        return False, "The changelog changed since the last build. Build release again so the release notes match it."
+    return True, ""
+
+
 def publish(project, dry_run=False):
     """Commit, push and create the GitHub release; publish.yml then uploads to CurseForge/Modrinth."""
     ui.title(f"Publish {project.name} {project.version}")
@@ -250,10 +302,11 @@ def publish(project, dry_run=False):
     if release_tag(project):
         raise ToolError(f"{project.version} is already released (tag {release_tag(project)}).")
     last = _last_build(project)
-    if not last or last.get("version") != project.version:
-        raise ToolError(f"There is no build of {project.version} yet; run Build release first.")
-    if pack.index_hash(project.pack_dir) != last.get("index_hash"):
-        raise ToolError("The pack changed since the last build. Build release again so the uploaded files match it.")
+    if last and last.get("version") == project.version:
+        project.packwiz.refresh()  # So edits made after the build show up in the index hash.
+    current, reason = build_is_current(project, last)
+    if not current:
+        raise ToolError(reason)
     files = [project.export_dir / name for name in last.get("files", [])]
     missing = [file.name for file in files if not file.is_file()]
     if missing:

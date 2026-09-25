@@ -106,42 +106,52 @@ def next_step(project, changelog_data):
         return "Draft changelog (3), then edit it."
     last = release._last_build(project)
     if last and last.get("version") == project.version:
-        if last.get("index_hash") == pack.index_hash(project.pack_dir):
-            return "Publish (5)."
-        return "Build release (4) again: the pack changed since the last build."
+        current, reason = release.build_is_current(project, last)
+        return "Publish (5)." if current else f"Build release (4) again. {reason.split('.')[0]}."
     return "Build release (4) when the pack is ready."
 
 
 def show_status(project):
-    tag = release.release_tag(project)
-    state = f"released, tag {tag}" if tag else "not released yet"
-    print()
-    print(f"{ui.bold(project.name)} {project.version} ({state}) · Minecraft {project.minecraft} · "
-          f"{project.loader_label} {project.loader_version}")
+    """The header above the menu. Problems are shown in it instead of stopping the tool."""
     try:
-        changes, base = release.changes_since_release(project)
-        if base:
-            print(f"Since {base}: {changes.summary()}")
-        elif project.git.is_repo:
-            print("No earlier release tag found.")
+        tag = release.release_tag(project)
+        state = f"released, tag {tag}" if tag else "not released yet"
+        print()
+        print(f"{ui.bold(project.name)} {project.version} ({state}) · Minecraft {project.minecraft} · "
+              f"{project.loader_label} {project.loader_version}")
+        try:
+            changes, base = release.changes_since_release(project, details=False)
+            if base:
+                print(f"Since {base}: {changes.summary()}")
+            elif project.git.is_repo:
+                print("No earlier release tag found.")
+        except ToolError as ex:
+            print(f"Changes: {ex}")
+        path = changelog.changelog_path(project)
+        data = changelog.load_changelog(path) if path.exists() else None
+        if data is None:
+            print(f"Changelog: {path.name} doesn't exist yet")
+        else:
+            overview = len(changelog.section_lines(data.get("Update overview")))
+            config = len(changelog.section_lines(data.get("Config Changes")))
+            print(f"Changelog: {path.name} · overview {_lines(overview)} · config changes {_lines(config)}")
+        print(ui.bold("Next: ") + next_step(project, data))
     except ToolError as ex:
-        print(f"Changes: {ex}")
-    path = changelog.changelog_path(project)
-    data = changelog.load_changelog(path) if path.exists() else None
-    if data is None:
-        print(f"Changelog: {path.name} doesn't exist yet")
-    else:
-        overview = len(changelog.section_lines(data.get("Update overview")))
-        config = len(changelog.section_lines(data.get("Config Changes")))
-        print(f"Changelog: {path.name} · overview {_lines(overview)} · config changes {_lines(config)}")
-    print(ui.bold("Next: ") + next_step(project, data))
+        ui.error(str(ex))
+    except Exception as ex:  # A bug shouldn't lock you out of the menu.
+        ui.error(f"Couldn't show the pack status ({type(ex).__name__}: {ex}).")
 
 
 ############################################################
 # Projects
 
 def activate(config, root):
-    project, notes = projects.open_project(root, config)
+    try:
+        project, notes = projects.open_project(root, config)
+    except ToolError:
+        raise
+    except Exception as ex:  # Anything unexpected becomes a message, not a crash at startup.
+        raise ToolError(f"Couldn't open {root}: {type(ex).__name__}: {ex}") from ex
     for note in notes:
         ui.info(note)
     projects.remember_project(config, project.root)

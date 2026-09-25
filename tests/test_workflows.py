@@ -101,7 +101,8 @@ def test_build_writes_record_notes_and_pack_files(repo_project, monkeypatch):
     assert "- Beta Mod" in (repo_project.root / "modlist.md").read_text()
     modlist = repo_project.pack_dir / "config" / "crash_assistant" / "modlist.json"
     assert json.loads(modlist.read_text()) == ["a-1.jar", "b-1.jar"]
-    assert release._last_build(repo_project) == {"version": "1.1.0", "index_hash": "h1", "files": []}
+    last = release._last_build(repo_project)
+    assert (last["version"], last["index_hash"], last["files"]) == ("1.1.0", "h1", [])
     assert (repo_project.root / ".git" / release.LAST_BUILD_FILE).is_file()  # Never committed.
     assert cli.next_step(repo_project, changelog.load_changelog(changelog.changelog_path(repo_project))) == "Publish (5)."
 

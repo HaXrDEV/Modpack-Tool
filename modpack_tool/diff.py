@@ -164,11 +164,12 @@ def _line_diff(path, old_content, new_content, output_path=None):
         return None
     old_lines, new_lines = _text(old_content), _text(new_content)
     removed, added = [], []
-    for line in difflib.ndiff(old_lines, new_lines):
-        if line.startswith("- ") and line[2:].strip():
-            removed.append(line[2:].strip())
-        elif line.startswith("+ ") and line[2:].strip():
-            added.append(line[2:].strip())
+    # unified_diff stays fast on large rewritten files, where ndiff can take minutes.
+    for line in list(difflib.unified_diff(old_lines, new_lines, n=0, lineterm=""))[2:]:
+        if line.startswith("-") and line[1:].strip():
+            removed.append(line[1:].strip())
+        elif line.startswith("+") and line[1:].strip():
+            added.append(line[1:].strip())
     if not removed and not added:
         return None
     return {
@@ -180,8 +181,11 @@ def _line_diff(path, old_content, new_content, output_path=None):
     }
 
 
-def diff_config(old_files, new_files):
-    """Compare two config folders ({path relative to config/: bytes})."""
+def diff_config(old_files, new_files, details=True):
+    """Compare two config folders ({path relative to config/: bytes}).
+
+    ``details=False`` skips the line-by-line diffs (enough for a summary).
+    """
     old = {path: hashlib.sha256(data).hexdigest() for path, data in old_files.items() if not _generated_by_tool(path)}
     new = {path: hashlib.sha256(data).hexdigest() for path, data in new_files.items() if not _generated_by_tool(path)}
     result = ConfigDiff()
@@ -210,14 +214,14 @@ def diff_config(old_files, new_files):
     result.removed = kept_removed
 
     line_diffs = {}
-    for path in modified:
+    for path in modified if details else []:
         entry = _line_diff(path, old_files[path], new_files[path])
         if entry:
             line_diffs[path.lower()] = entry
     for move in result.moved_to_yosbr:
         if move["content_changed"]:
             modified.append(move["to"])
-            entry = _line_diff(move["to"], old_files[move["from"]], new_files[move["to"]])
+            entry = _line_diff(move["to"], old_files[move["from"]], new_files[move["to"]]) if details else None
             if entry:
                 line_diffs.setdefault(move["to"].lower(), entry)
     result.modified = sorted(set(modified), key=str.lower)
@@ -234,8 +238,11 @@ def _subtree(tree, folder):
     return {path[len(prefix):]: data for path, data in tree.items() if path.startswith(prefix)}
 
 
-def compare(old_tree, new_tree, previous_version, current_version, minecraft):
-    """Everything that changed from ``old_tree`` (an earlier release) to ``new_tree``."""
+def compare(old_tree, new_tree, previous_version, current_version, minecraft, details=True):
+    """Everything that changed from ``old_tree`` (an earlier release) to ``new_tree``.
+
+    ``details=False`` skips the config files' line diffs, for a quick summary.
+    """
     previous_minecraft = ""
     if "pack.toml" in old_tree:
         try:
@@ -254,5 +261,5 @@ def compare(old_tree, new_tree, previous_version, current_version, minecraft):
         shaderpacks=diff_category(old_tree, new_tree, "shaderpacks"),
         newly_added=newly_added,
         reenabled=reenabled,
-        config=diff_config(_subtree(old_tree, "config"), _subtree(new_tree, "config")),
+        config=diff_config(_subtree(old_tree, "config"), _subtree(new_tree, "config"), details),
     )

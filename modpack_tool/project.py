@@ -8,6 +8,7 @@ from pathlib import Path
 
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedSeq
+from ruamel.yaml.error import YAMLError
 from ruamel.yaml.representer import RoundTripRepresenter
 from ruamel.yaml.scalarstring import DoubleQuotedScalarString, LiteralScalarString, ScalarString
 
@@ -88,6 +89,29 @@ class Settings:
     modrinth_notes_footer: str = ""
 
 
+def _coerce(name, value, default, notes):
+    """A setting's value as the type of its default; empty values mean the default."""
+    if value is None or value == "":
+        return default
+    if isinstance(default, bool):
+        if isinstance(value, bool):
+            return value
+        text = str(value).strip().lower()
+        if text in ("true", "yes", "on", "1"):
+            return True
+        if text in ("false", "no", "off", "0"):
+            return False
+        notes.append(f"{name}: '{value}' isn't True or False; using {default}.")
+        return default
+    if isinstance(default, list):
+        values = value if isinstance(value, list) else [value]
+        return [str(entry).strip() for entry in values if str(entry).strip()]
+    if isinstance(value, (list, dict)):
+        notes.append(f"{name} should be a single value; using the default.")
+        return default
+    return str(value)
+
+
 def default_changelog_url(pack_name):
     slug = str(pack_name).lower().split(" ", 1)[0] or "pack"
     return f"https://crismpack.net/{slug}/changelogs/{{mc_group}}#{{anchor}}"
@@ -106,7 +130,13 @@ def load_settings(root, pack_name):
     notes = []
     if path.is_file():
         current = path.read_text(encoding="utf-8")
-        values = yaml.load(current) or {}
+        try:
+            values = yaml.load(current) or {}
+        except YAMLError as ex:
+            raise ToolError(f"{path} isn't valid YAML: {ex}\n"
+                            "Tip: put Windows paths in single quotes, e.g. 'D:\\Servers\\Pack'.") from ex
+        if not isinstance(values, dict):
+            raise ToolError(f"{path} should contain settings such as 'exports: [curseforge]'.")
     else:
         current = ""
         legacy = root / LEGACY_SETTINGS_FILE
@@ -124,16 +154,11 @@ def load_settings(root, pack_name):
     if rendered != current:
         pack.write_text(path, rendered)
     if unknown:
-        notes.append(f"Ignored unknown keys in {SETTINGS_FILE}: {', '.join(unknown)}")
+        notes.append(f"Removed keys that aren't settings from {SETTINGS_FILE}: {', '.join(unknown)}")
 
     settings = Settings()
     for item in fields(Settings):
-        value = template[item.name]
-        if isinstance(value, list):
-            value = [str(entry) for entry in value]
-        elif isinstance(value, str):
-            value = str(value)
-        setattr(settings, item.name, value)
+        setattr(settings, item.name, _coerce(item.name, template[item.name], getattr(settings, item.name), notes))
 
     bad = [kind for kind in settings.exports if kind not in EXPORT_KINDS]
     if bad:
@@ -147,7 +172,13 @@ def load_settings(root, pack_name):
 
 def import_legacy_settings(legacy_path, root, pack_name, notes):
     """Translate the old tool's settings.yml into the new keys (asks to confirm the wiki link)."""
-    old = YAML(typ="safe").load(Path(legacy_path).read_text(encoding="utf-8")) or {}
+    try:
+        old = YAML(typ="safe").load(Path(legacy_path).read_text(encoding="utf-8")) or {}
+    except YAMLError as ex:
+        notes.append(f"Couldn't read the old {LEGACY_SETTINGS_FILE} ({ex}); starting from the defaults.")
+        old = {}
+    if not isinstance(old, dict):
+        old = {}
 
     def flag(key, default=False):
         return bool(old.get(key, default))
@@ -299,6 +330,7 @@ class ToolConfig:
     packwiz_exe_path: str = ""
     curseforge_api_key: str = ""
     projects: list = field(default_factory=list)  # Absolute project roots.
+    read_only: bool = False  # Set when the file couldn't be read, so it isn't overwritten.
 
 
 def load_tool_config():
@@ -307,13 +339,18 @@ def load_tool_config():
         return config
     try:
         raw = YAML(typ="safe").load(TOOL_CONFIG_PATH.read_text(encoding="utf-8")) or {}
+        if not isinstance(raw, dict):
+            raise ValueError("expected keys such as 'projects:'")
     except Exception as ex:  # A broken file shouldn't stop the tool from starting.
-        ui.warn(f"Could not read {TOOL_CONFIG_PATH}: {ex}. Starting with an empty project list.")
+        ui.warn(f"Could not read {TOOL_CONFIG_PATH}: {ex}\n"
+                "  It is left untouched until you fix it (tip: single quotes around Windows paths).")
+        config.read_only = True
         return config
     config.last_used_project = str(raw.get("last_used_project") or "")
     config.packwiz_exe_path = str(raw.get("packwiz_exe_path") or "")
     config.curseforge_api_key = str(raw.get("curseforge_api_key") or "")
-    for entry in raw.get("projects") or []:
+    projects = raw.get("projects")
+    for entry in projects if isinstance(projects, list) else []:
         root = entry.get("root") if isinstance(entry, dict) else entry
         if root:
             config.projects.append(str(root))
@@ -321,6 +358,8 @@ def load_tool_config():
 
 
 def save_tool_config(config):
+    if config.read_only:
+        return
     data = {
         "last_used_project": config.last_used_project,
         "packwiz_exe_path": config.packwiz_exe_path,
