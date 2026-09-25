@@ -88,7 +88,7 @@ def test_update_overview_uses_real_names():
         "Updated to Minecraft 1.21.11.",
         "Added 'Brand New' mod.",
         "Re-added some mods.",
-        "Temporarily removed incompatible mods: 'Sodium Extra'.",  # Not mistaken for "Sodium".
+        "Temporarily removed incompatible mod 'Sodium Extra'.",  # Not mistaken for "Sodium".
         "Updated mods.",
         "Added 'BSL Shaders' shaderpack.",
     ]

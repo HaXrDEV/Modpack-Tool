@@ -55,7 +55,8 @@ def update_overview(diff):
     removed = _dedupe(named.name for named in diff.mods.removed)
     if removed:
         if diff.migration:
-            lines.append(f"Temporarily removed incompatible mods: {', '.join(_quote(name) for name in removed)}.")
+            # No ": " in the sentence, so YAML can keep it unquoted.
+            lines.append(f"Temporarily removed incompatible mod{'s' * (len(removed) > 1)} {_quoted_list(removed)}.")
         else:
             lines.append(f"Removed {_quoted_list(removed)} mod{'s' * (len(removed) > 1)}.")
 

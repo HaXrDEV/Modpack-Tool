@@ -183,6 +183,15 @@ def suggest_migration_version(target_mc, current_version=None) -> str:
     return f"{target}-1.0"
 
 
+def suggest_minor_version(current_version):
+    """For a legacy version, the next minor release ("4.11.1" -> "4.12.0"); None otherwise."""
+    base = _split_pre_tag(str(current_version or "").strip())[0]
+    parts = base.split(".")
+    if is_mc_prefixed_version(current_version) or len(parts) < 2 or not all(p.isdigit() for p in parts[:2]):
+        return None
+    return ".".join([parts[0], str(int(parts[1]) + 1)] + ["0"] * (len(parts) - 2))
+
+
 def suggest_next_version(current_version):
     """Suggest the release that follows ``current_version``, for either scheme.
 

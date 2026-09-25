@@ -425,5 +425,5 @@ def export(project, kinds):
             lines += [f"- [{mod.display_name}]({_source_link(mod)}): `{mod.filename}`" for mod in mods]
             lines.append("")
         pack.write_text(report, "\n".join(lines))
-        ui.info(f"Bundled files and their sources: {report}")
+        ui.info(f"Bundled files and their sources: {report.relative_to(project.root)}")
     return written

@@ -138,8 +138,11 @@ class Packwiz:
     def migrate_loader(self, version):
         self.run("migrate", "loader", version, "-y")
 
-    def set_acceptable_versions(self, versions):
-        self.run("settings", "acceptable-versions", ",".join(versions), echo=False)
+    def add_acceptable_version(self, version):
+        self.run("settings", "acceptable-versions", "--add", version, echo=False)
+
+    def remove_acceptable_version(self, version):
+        self.run("settings", "acceptable-versions", "--remove", version, echo=False)
 
 
 @contextmanager

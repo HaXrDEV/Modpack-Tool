@@ -5,6 +5,7 @@ from modpack_tool.version import (
     minecraft_content_key,
     parse_pack_version_key,
     suggest_migration_version,
+    suggest_minor_version,
     suggest_next_release,
     suggest_next_version,
 )
@@ -48,6 +49,9 @@ def test_suggestions():
     assert suggest_next_version("4.1.1a") == "4.1.2"
     assert suggest_next_version("26.2-1.6") == "26.2-1.7"
     assert suggest_next_version("junk") is None
+    assert suggest_minor_version("4.11.1") == "4.12.0"
+    assert suggest_minor_version("4.12.0-beta.2") == "4.13.0"
+    assert suggest_minor_version("26.2-1.6") is None
     assert suggest_migration_version("26.1", "4.11.1") == "26.1-1.0"
     assert suggest_migration_version("26.1.1", "26.1-1.3") == "26.1.1-1.4"
     assert suggest_migration_version("26.2", "26.1.1-1.4") == "26.2-1.0"

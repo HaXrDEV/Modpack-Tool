@@ -17,7 +17,8 @@ from .ui import ToolError
 from .version import is_mc_prefixed_version
 
 TOOL_DIR = Path(__file__).resolve().parent.parent
-TOOL_CONFIG_PATH = TOOL_DIR / "tool_config.yml"
+# MODPACK_TOOL_CONFIG points the tool at another registry (handy for testing).
+TOOL_CONFIG_PATH = Path(os.environ.get("MODPACK_TOOL_CONFIG") or TOOL_DIR / "tool_config.yml")
 CF_KEY_FILE = TOOL_DIR / "cf-api-key.txt"
 CACHE_DIR = TOOL_DIR / "cache"
 SETTINGS_FILE = "modpack-tool.yml"
@@ -327,6 +328,7 @@ def save_tool_config(config):
         "projects": [{"name": Path(root).name, "root": root} for root in config.projects],
     }
     yaml = YAML()
+    yaml.width = 4096  # Keep long paths on one line.
     with open(TOOL_CONFIG_PATH, "w", encoding="utf-8") as f:
         yaml.dump(data, f)
 
