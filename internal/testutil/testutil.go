@@ -106,6 +106,58 @@ func PackDir(t testing.TB) string {
 	return pw
 }
 
+// Tree turns {path: text} into a tree of {path: bytes}.
+func Tree(files map[string]string) map[string][]byte {
+	result := map[string][]byte{}
+	for path, text := range files {
+		result[path] = []byte(text)
+	}
+	return result
+}
+
+// OldTree and NewTree are the two pack states of the Python tool's diff and
+// drafting tests (tests/test_diff_and_drafting.py: OLD and NEW).
+func OldTree() map[string][]byte {
+	return Tree(map[string]string{
+		"pack.toml":                           "[versions]\nminecraft = \"1.21.10\"\n",
+		"mods/sodium.pw.toml":                 Metafile("Sodium", "sodium-1.jar", MetaOptions{Side: "client"}),
+		"mods/lithium.pw.toml":                Metafile("Lithium", "lithium-1.jar"),
+		"mods/sodium-extra.pw.toml":           Metafile("Sodium Extra", "extra-1.jar"),
+		"mods/cleanview.pw.toml":              Metafile("CleanView", "cleanview.jar", MetaOptions{Side: "client(disabled)"}),
+		"mods/switch.pw.toml":                 Metafile("Switcher", "switch-1.jar", MetaOptions{Source: "curseforge"}),
+		"mods/renamed-old.pw.toml":            Metafile("Renamed", "renamed-1.jar"),
+		"resourcepacks/fa.pw.toml":            Metafile("Fresh Animations", "fa-1.zip", MetaOptions{Side: "client"}),
+		"config/bcc.json":                     `{"modpackVersion": "1.0"}`,
+		"config/crash_assistant/modlist.json": "[]",
+		"config/breakneckmenu.json5":          "{\n  coloredText: false\n}\n",
+		"config/voxy.json":                    "{\n  \"maxActiveTasks\": 5,\n  \"enabled\": true\n}\n",
+		"config/gone.json":                    "{}",
+		"config/rpo.json":                     "{\n  \"default_packs\": [\n    \"file/A.zip\",\n    \"file/B.zip\"\n  ]\n}\n",
+	})
+}
+
+// NewTree is the later state (see OldTree).
+func NewTree() map[string][]byte {
+	return Tree(map[string]string{
+		"pack.toml":              "[versions]\nminecraft = \"1.21.11\"\n",
+		"mods/sodium.pw.toml":    Metafile("Sodium", "sodium-2.jar", MetaOptions{Side: "client"}),
+		"mods/lithium.pw.toml":   Metafile("Lithium", "lithium-1.jar"),
+		"mods/cleanview.pw.toml": Metafile("CleanView", "cleanview.jar", MetaOptions{Side: "client"}),
+		"mods/new.pw.toml":       Metafile("Brand New [Fabric]", "new-1.jar", MetaOptions{Side: "client"}),
+		// Same jar, now tracked through Modrinth instead of CurseForge: not an update.
+		"mods/switch.pw.toml":                     Metafile("Switcher", "switch-1.jar", MetaOptions{Source: "modrinth"}),
+		"mods/renamed-new.pw.toml":                Metafile("Renamed", "renamed-1.jar"),
+		"resourcepacks/fa.pw.toml":                Metafile("Fresh Animations", "fa-1.zip", MetaOptions{Side: "client"}),
+		"shaderpacks/bsl.pw.toml":                 Metafile("BSL Shaders", "bsl.zip", MetaOptions{Side: "client"}),
+		"config/bcc.json":                         `{"modpackVersion": "2.0"}`,
+		"config/crash_assistant/modlist.json":     `["x"]`,
+		"config/yosbr/config/breakneckmenu.json5": "{\n  coloredText: true\n}\n",
+		"config/voxy.json":                        "{\n  \"maxActiveTasks\": 2,\n  \"enabled\": true\n}\n",
+		"config/rpo.json":                         "{\n  \"default_packs\": [\n    \"file/B.zip\",\n    \"file/A.zip\",\n    \"file/C.zip\"\n  ]\n}\n",
+		"config/added.json":                       "{}",
+	})
+}
+
 // RequireGit skips the test when git isn't installed.
 func RequireGit(t testing.TB) {
 	t.Helper()

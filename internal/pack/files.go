@@ -79,41 +79,42 @@ func SetDisabled(packDir string, mod Mod, disabled bool) error {
 	return editFile(filepath.Join(packDir, filepath.FromSlash(mod.Rel)), []Edit{{"", "side", Quote(side)}})
 }
 
+// ModrinthFile is one file of a Modrinth version.
+type ModrinthFile struct {
+	URL, Filename string
+	Primary       bool
+	Hashes        map[string]string
+}
+
 // ApplyModrinthVersion points a Modrinth metafile at another version of the
 // same project. It returns false when the version has no usable primary file.
-func ApplyModrinthVersion(packDir string, mod Mod, version map[string]any) (bool, error) {
-	fileList, _ := version["files"].([]any)
-	var primary map[string]any
-	for _, f := range fileList {
-		if file, ok := f.(map[string]any); ok && pycompat.Truthy(file["primary"]) {
+func ApplyModrinthVersion(packDir string, mod Mod, versionID string, versionFiles []ModrinthFile) (bool, error) {
+	if len(versionFiles) == 0 {
+		return false, nil
+	}
+	primary := versionFiles[0]
+	for _, file := range versionFiles {
+		if file.Primary {
 			primary = file
 			break
 		}
 	}
-	if primary == nil && len(fileList) > 0 {
-		primary, _ = fileList[0].(map[string]any)
-	}
-	if primary == nil {
-		return false, nil
-	}
-	hashes := Table(primary["hashes"])
 	format := ""
 	for _, candidate := range []string{"sha512", "sha1"} {
-		if _, ok := hashes[candidate]; ok {
+		if _, ok := primary.Hashes[candidate]; ok {
 			format = candidate
 			break
 		}
 	}
-	url, filename := pycompat.Or(primary["url"], ""), pycompat.Or(primary["filename"], "")
-	if format == "" || url == "" || filename == "" {
+	if format == "" || primary.URL == "" || primary.Filename == "" {
 		return false, nil
 	}
 	edits := []Edit{
-		{"", "filename", Quote(filename)},
-		{"download", "url", Quote(url)},
+		{"", "filename", Quote(primary.Filename)},
+		{"download", "url", Quote(primary.URL)},
 		{"download", "hash-format", Quote(format)},
-		{"download", "hash", Quote(pycompat.Str(hashes[format]))},
-		{"update.modrinth", "version", Quote(pycompat.Str(version["id"]))},
+		{"download", "hash", Quote(primary.Hashes[format])},
+		{"update.modrinth", "version", Quote(versionID)},
 	}
 	return true, editFile(filepath.Join(packDir, filepath.FromSlash(mod.Rel)), edits)
 }

@@ -117,12 +117,13 @@ func yamlPlainAllowed(text string, flow bool) bool {
 }
 
 // YAMLScalar writes a string the way ruamel does when it may pick the style:
-// plain when that reads back as the same string, else single-quoted.
+// plain when that reads back as the same string, double-quoted when the text
+// has a single quote or a line break, else single-quoted.
 func YAMLScalar(text string, flow bool) string {
 	if yamlResolvesAsString(text) && yamlPlainAllowed(text, flow) {
 		return text
 	}
-	if strings.ContainsFunc(text, func(r rune) bool { return !isPrintable(r) || isBreak(r) }) {
+	if strings.ContainsAny(text, "'\n") || strings.ContainsFunc(text, func(r rune) bool { return !isPrintable(r) || isBreak(r) }) {
 		return YAMLDoubleQuoted(text)
 	}
 	return YAMLSingleQuoted(text)

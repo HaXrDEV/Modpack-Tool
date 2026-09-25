@@ -57,6 +57,26 @@ func SplitLines(s string) []string {
 	return lines
 }
 
+// DecodeUTF8 is bytes.decode("utf-8", errors="replace"): each invalid byte
+// becomes U+FFFD.
+func DecodeUTF8(data []byte) string {
+	if utf8.Valid(data) {
+		return string(data)
+	}
+	var b strings.Builder
+	for len(data) > 0 {
+		r, size := utf8.DecodeRune(data)
+		if r == utf8.RuneError && size <= 1 {
+			b.WriteRune(utf8.RuneError)
+			size = 1
+		} else {
+			b.WriteRune(r)
+		}
+		data = data[size:]
+	}
+	return b.String()
+}
+
 // IsDigits is Python's str.isdigit() for ASCII text: true for a non-empty
 // string of digits.
 func IsDigits(s string) bool {

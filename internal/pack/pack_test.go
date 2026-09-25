@@ -12,12 +12,11 @@ import (
 	"github.com/HaXrDEV/Modpack-Tool/internal/testutil"
 )
 
-var modrinthVersion = map[string]any{"id": "NEWID", "files": []any{
-	map[string]any{"primary": false, "url": "https://cdn.modrinth.com/data/x/versions/y/other.jar", "filename": "other.jar",
-		"hashes": map[string]any{"sha512": "o"}},
-	map[string]any{"primary": true, "url": "https://cdn.modrinth.com/data/x/versions/y/new%20file%2B1.jar",
-		"filename": "new file+1.jar", "hashes": map[string]any{"sha1": "s1", "sha512": "s512"}},
-}}
+var modrinthFiles = []ModrinthFile{
+	{URL: "https://cdn.modrinth.com/data/x/versions/y/other.jar", Filename: "other.jar", Hashes: map[string]string{"sha512": "o"}},
+	{URL: "https://cdn.modrinth.com/data/x/versions/y/new%20file%2B1.jar", Filename: "new file+1.jar", Primary: true,
+		Hashes: map[string]string{"sha1": "s1", "sha512": "s512"}},
+}
 
 // The goldens are tomlkit's edits of real metafiles from both packs, in both
 // line endings (scripts/golden.py).
@@ -48,7 +47,7 @@ func TestEditsMatchTomlkit(t *testing.T) {
 		case "disable", "enable":
 			err = SetDisabled(pw, mod, c.Op == "disable")
 		case "modrinth":
-			_, err = ApplyModrinthVersion(pw, mod, modrinthVersion)
+			_, err = ApplyModrinthVersion(pw, mod, "NEWID", modrinthFiles)
 		case "version":
 			err = SetPackVersion(pw, "9.9.9-beta.1")
 		}
@@ -165,12 +164,12 @@ func TestDisableAndEnableKeepFormatting(t *testing.T) {
 // py: test_pack.py::test_apply_modrinth_version
 func TestApplyModrinthVersion(t *testing.T) {
 	pw := testutil.PackDir(t)
-	version := map[string]any{"id": "NEWID", "files": []any{
-		map[string]any{"primary": false, "url": "https://x/other.jar", "filename": "other.jar", "hashes": map[string]any{"sha512": "o"}},
-		map[string]any{"primary": true, "url": "https://x/lithium-0.22.jar", "filename": "lithium-0.22.jar",
-			"hashes": map[string]any{"sha1": "s1", "sha512": "s512"}, "size": 1234},
-	}}
-	ok, err := ApplyModrinthVersion(pw, bySlug(loadMods(t, pw))["lithium"], version)
+	files := []ModrinthFile{
+		{URL: "https://x/other.jar", Filename: "other.jar", Hashes: map[string]string{"sha512": "o"}},
+		{URL: "https://x/lithium-0.22.jar", Filename: "lithium-0.22.jar", Primary: true,
+			Hashes: map[string]string{"sha1": "s1", "sha512": "s512"}},
+	}
+	ok, err := ApplyModrinthVersion(pw, bySlug(loadMods(t, pw))["lithium"], "NEWID", files)
 	if !ok || err != nil {
 		t.Fatal(ok, err)
 	}

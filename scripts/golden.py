@@ -267,6 +267,160 @@ def project():
     save("project", "settings.json", {"cases": cases})
 
 
+############################################################
+# changelog: section parsing, release records, release notes, drafted sections
+
+CHANGELOG_TEXTS = [
+    ("list", "Update overview:\n  - Added 'Sodium' mod.\n  - Updated mods.\n"),
+    ("literal", "Config Changes: |-\n  - Changed x: [Mod]\n  - Set \"y\" to 2: [Other]\n"),
+    ("string with dashes", "Bug Fixes: \"- Fixed a crash\\n- Fixed another\"\n"),
+    ("mapping bullets", "Bug Fixes:\n  - Sodium: fixed flicker\n  - Lithium: faster\n  - plain\n"),
+    ("mapping section", "Bug Fixes:\n  Sodium: fixed flicker\n"),
+    ("scalars", "Bug Fixes:\n  - 42\n  - true\n  - 1.50\n  - 2024-01-01\n  - ~\n"),
+    ("number section", "Bug Fixes: 42\n"),
+    ("placeholder", "Config Changes: |-\n  - : [mod], [Client]\n  - Changed x: [Mod]\n"),
+    ("empty sections", "Update overview:\nBug Fixes: ''\nConfig Changes:\n"),
+    ("metadata and unknown", "Mod loader: Fabric\nDISCLAIMER: Something important\nBug Fixes:\n  - Fixed it.\n"),
+    ("quoted and odd", "Update overview:\n  - 'Added ''Mod #1'' mod.'\n  - \"Mod: Addon added\"\n  - x # comment\n"),
+    ("nested", "Bug Fixes:\n  - [a, b]\n  - {k: v}\n"),
+]
+
+DRAFT_TEXTS = [
+    ("template", None),
+    ("comments", "# Changelog for MyPack 1.2.0\n# keep me\nUpdate overview:\n  - Old line.\n\n# Section comment\n"
+                 "Bug Fixes:\n  - A very long hand-written bullet that goes on and on and on past eighty columns for sure.\n"
+                 "Config Changes: |-\n  - Old: [X]\n"),
+    ("missing keys", "Bug Fixes:\n  - Fixed it.\n"),
+    ("flow list", "Update overview: [a, b]\nConfig Changes: 'x'\n"),
+    ("block at column 0", "Update overview:\n- one\n- two\nConfig Changes:\n"),
+]
+
+
+@section
+def changelog():
+    import tempfile
+
+    from modpack_tool import changelog as cl
+    from modpack_tool import diff, project
+    from tests.test_diff_and_drafting import NEW, OLD
+
+    sections = []
+    records = []
+    notes = []
+    drafts = []
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        for name, text in CHANGELOG_TEXTS:
+            path = tmp / "c.yml"
+            path.write_text(text, encoding="utf-8")
+            data = cl.load_changelog(path)
+            sections.append({"name": name, "text": text,
+                             "lines": {key: cl.section_lines(data.get(key)) for key in data},
+                             "unknown": cl.unknown_sections(data), "empty": cl.is_empty(data)})
+
+        root = tmp / "MyPack"
+        (root / "Packwiz").mkdir(parents=True)
+        (root / "Packwiz" / "pack.toml").write_text(
+            'name = "MyPack"\nversion = "1.2.0"\n[versions]\nfabric = "0.18.4"\nminecraft = "1.21.11"\n')
+        (root / "modpack-tool.yml").write_text("exports: []\n")
+        proj, _ = project.open_project(root, project.ToolConfig())
+        result = diff.compare(OLD, NEW, "1.1.0", "1.2.0", "1.21.11")
+        for side_tags in (False, True):
+            for name, text in CHANGELOG_TEXTS[:4] + [CHANGELOG_TEXTS[9]]:
+                path = tmp / "c.yml"
+                path.write_text(text, encoding="utf-8")
+                data = cl.load_changelog(path)
+                proj.settings.side_tags = side_tags
+                record = cl.build_record(proj, data, result, released="2026-09-25")
+                out = cl.write_record(proj, record)
+                records.append({"changelog": text, "side_tags": side_tags,
+                                "json": out.read_bytes().decode("utf-8")})
+        record = cl.build_record(proj, {}, None, released="2026-09-25")
+        records.append({"changelog": "", "side_tags": False, "no_diff": True,
+                        "json": cl.write_record(proj, record).read_bytes().decode("utf-8")})
+        proj.settings.side_tags = False
+
+        footer = "<br>\n\n[![BisectHosting Banner](https://x/bh.png)](https://bisecthosting.com/CRISM)\n"
+        variants = [("1.2.0", "https://crismpack.net/mypack/changelogs/{mc_group}#{anchor}", footer, ""),
+                    ("1.3.0-beta.1", "", "", "Modrinth footer"),
+                    ("26.1-1.0", "https://x/{mc}/{version}#{anchor}", footer, footer),
+                    ("1.2.0", "https://x/{unknown}", "", "")]
+        for version, url, cf_footer, mr_footer in variants:
+            for name, text in CHANGELOG_TEXTS[:4] + [("changes only", "Changes/Improvements:\n  - New menu\n"
+                                                                       "Bug Fixes:\n  - Fixed crash\n")]:
+                path = tmp / "c.yml"
+                path.write_text(text, encoding="utf-8")
+                data = cl.load_changelog(path)
+                proj.version = version
+                proj.settings.changelog_url = url
+                proj.settings.curseforge_notes_footer = cf_footer
+                proj.settings.modrinth_notes_footer = mr_footer
+                for platform in ("curseforge", "modrinth"):
+                    notes.append({"version": version, "url": url, "cf_footer": cf_footer, "mr_footer": mr_footer,
+                                  "changelog": text, "platform": platform,
+                                  "notes": cl.release_notes(proj, data, platform)})
+        proj.version = "1.2.0"
+
+        overview = ["Added 'Brand New' mod.", "Temporarily removed incompatible mod 'Sodium Extra'.",
+                    "Added 'A: B' & 'C #1' mods.", "Updated mods."]
+        config_lines = ["Changed \"maxActiveTasks\" from 5 to 2: [Voxy WorldGen]", "Removed config file gone.json: [Gone]"]
+        from ruamel.yaml.scalarstring import LiteralScalarString
+        for name, text in DRAFT_TEXTS:
+            path = tmp / "d.yml"
+            if text is None:
+                path.unlink(missing_ok=True)
+                path = cl.create_changelog(proj)
+            else:
+                path.write_text(text, encoding="utf-8")
+            data = cl.load_changelog(path)
+            data["Update overview"] = overview
+            data["Config Changes"] = LiteralScalarString("\n".join(f"- {line}" for line in config_lines))
+            cl.save_changelog(path, data)
+            saved = cl.load_changelog(path)
+            drafts.append({"name": name, "text": text, "saved": path.read_text(encoding="utf-8"),
+                           "lines": {key: cl.section_lines(saved.get(key)) for key in saved}})
+    save("changelog", "golden.json", {"sections": sections, "records": records, "notes": notes, "drafts": drafts,
+                                      "overview": [overview], "config_lines": [config_lines]})
+
+
+############################################################
+# history: diffs and drafts between two states of a real pack, printed as
+# JSON for the Go parity test (internal/draft/parity_test.go).
+
+def history(repo, old_ref, new_ref):
+    from modpack_tool import diff, drafting, pack
+    from modpack_tool.gitrepo import GitRepo
+
+    git = GitRepo(Path(repo))
+    old_tree = git.snapshot(old_ref, pack.TREE_PARTS)
+    new_tree = pack.read_tree(Path(repo) / "Packwiz") if new_ref == "WORKTREE" else git.snapshot(new_ref, pack.TREE_PARTS)
+    import tomllib
+    pack_toml = tomllib.loads(new_tree["pack.toml"].decode("utf-8"))
+    result = diff.compare(old_tree, new_tree, old_ref, str(pack_toml.get("version", "")),
+                          str(pack_toml.get("versions", {}).get("minecraft", "")), details=True)
+    labels = drafting.ModLabels(pack.parse_mods(new_tree))
+
+    def category(c):
+        return {"added": [list(n) for n in c.added], "removed": [list(n) for n in c.removed],
+                "updated": [list(u) for u in c.updated]}
+
+    return {
+        "summary": result.summary(),
+        "previous_minecraft": result.previous_minecraft,
+        "mods": category(result.mods), "resourcepacks": category(result.resourcepacks),
+        "shaderpacks": category(result.shaderpacks),
+        "newly_added": result.newly_added, "reenabled": result.reenabled,
+        "config": {"added": result.config.added, "removed": result.config.removed,
+                   "modified": result.config.modified, "moved": result.config.moved_to_yosbr,
+                   "line_diffs": [[e["path"], e["removed_lines"], e["added_lines"]] for e in result.config.line_diffs]},
+        "update_overview": drafting.update_overview(result),
+        "config_changes": drafting.config_changes(result, labels),
+    }
+
+
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["history"]:
+        sys.stdout.buffer.write(json.dumps(history(*sys.argv[2:5]), ensure_ascii=False).encode("utf-8"))
+        sys.exit(0)
     for name in sys.argv[1:] or SECTIONS:
         SECTIONS[name]()
