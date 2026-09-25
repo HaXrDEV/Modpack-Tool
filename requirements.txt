@@ -1,6 +1,4 @@
-toml
-mdutils
 requests
 ruamel.yaml
+tomlkit
 packaging
-aiohttp==3.8.3

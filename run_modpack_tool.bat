@@ -1,7 +1,8 @@
 @echo off
 setlocal
 
-:: Launches HaXr's Modpack Tool from this repository.
+:: Launches HaXr's Modpack Tool from this repository. Arguments are passed on,
+:: e.g. "run_modpack_tool.bat status" or "run_modpack_tool.bat --help".
 :: Creates the venv on first run and re-installs dependencies only when
 :: requirements.txt has changed since the last install.
 
@@ -16,7 +17,7 @@ pushd "%REPO_DIR%" >nul
 if exist "%VENV_PY%" goto CHECK_DEPS
 
 :: ----------------------------------------
-:: Create the virtual environment
+:: Create the virtual environment (Python 3.11 or newer)
 :: ----------------------------------------
 echo Creating Python virtual environment...
 set "PYTHON_CMD="
@@ -25,7 +26,7 @@ if not defined PYTHON_CMD for /f "delims=" %%P in ('py -3 -c "import sys; print(
 if not defined PYTHON_CMD for /f "delims=" %%P in ('python -c "import sys; print(sys.executable)" 2^>nul') do set "PYTHON_CMD=%%P"
 
 if not defined PYTHON_CMD (
-    echo No usable Python interpreter found. Install Python 3.11 and re-run.
+    echo No usable Python interpreter found. Install Python 3.11 or newer and re-run.
     goto FAIL
 )
 
@@ -57,7 +58,7 @@ copy /y "%REQS%" "%REQS_INSTALLED%" >nul
 :: Run the tool
 :: ----------------------------------------
 :RUN
-"%VENV_PY%" "%REPO_DIR%modpack_export.py"
+"%VENV_PY%" -m modpack_tool %*
 if errorlevel 1 (
     echo The tool exited with an error.
     goto FAIL

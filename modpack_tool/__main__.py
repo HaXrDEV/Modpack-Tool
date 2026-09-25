@@ -4,14 +4,18 @@ One COMMANDS table drives the menu, the command line and the help screen, so
 the three can't drift apart.
 """
 
-import argparse
 import sys
-import traceback
-from dataclasses import dataclass, field
 
-from . import changelog, check, mods, pack, platforms, release, ui
-from . import project as projects
-from .ui import ToolError
+if sys.version_info < (3, 11):
+    sys.exit("HaXr's Modpack Tool needs Python 3.11 or newer.")
+
+import argparse  # noqa: E402
+import traceback  # noqa: E402
+from dataclasses import dataclass, field  # noqa: E402
+
+from . import changelog, check, mods, pack, platforms, release, ui  # noqa: E402
+from . import project as projects  # noqa: E402
+from .ui import ToolError  # noqa: E402
 
 
 @dataclass
