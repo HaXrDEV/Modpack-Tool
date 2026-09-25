@@ -15,6 +15,7 @@ import (
 	"github.com/HaXrDEV/Modpack-Tool/internal/app"
 	"github.com/HaXrDEV/Modpack-Tool/internal/config"
 	"github.com/HaXrDEV/Modpack-Tool/internal/fail"
+	"github.com/HaXrDEV/Modpack-Tool/internal/git"
 	"github.com/HaXrDEV/Modpack-Tool/internal/ui"
 	"github.com/HaXrDEV/Modpack-Tool/internal/workflow"
 )
@@ -43,18 +44,21 @@ type (
 
 // App is the root model.
 type App struct {
-	ctx     context.Context // Canceled when the app exits; the parent of every run.
-	cfg     *config.Config
-	theme   *Theme
-	fancy   bool
-	width   int
-	height  int
-	screen  screen
-	home    *homeScreen
-	env     *workflow.Env // The open project; nil when there is none.
-	runs    *sync.WaitGroup
-	running bool
-	help    help.Model
+	ctx    context.Context // Canceled when the app exits; the parent of every run.
+	cfg    *config.Config
+	theme  *Theme
+	fancy  bool
+	width  int
+	height int
+	screen screen
+	home   *homeScreen
+	env    *workflow.Env // The open project; nil when there is none.
+	// projectName is the open project's name for the header (the project
+	// itself belongs to a running workflow).
+	projectName string
+	runs        *sync.WaitGroup
+	running     bool
+	help        help.Model
 	// lastResult is printed after the app exits, so something stays on screen.
 	lastResult string
 	logPath    string
@@ -111,6 +115,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, a.open(msg.root)
 	case projectReady:
 		a.env = msg.env
+		a.projectName = msg.env.Project.Name
 		a.home.status, a.home.notice = nil, strings.Join(msg.notes, " ")
 		a.screen = a.home
 		return a, tea.Batch(a.home.reload(), a.fetchTags())
@@ -148,11 +153,9 @@ func (a *App) render() string {
 	}
 	t := a.theme
 	width := max(20, min(a.width-4, 100))
-	right := ""
+	right := a.projectName
 	if a.home.status != nil {
 		right = a.home.status.Name + " " + a.home.status.Version
-	} else if a.env != nil {
-		right = a.env.Project.Name
 	}
 	header := spread(t.Bold.Render("HaXr's Modpack Tool"), t.Faint.Render(right), width)
 	a.help.SetWidth(width)
@@ -228,6 +231,7 @@ func (a *App) statusEnv() *workflow.Env {
 	env := *a.env
 	env.Project = &projectCopy
 	env.UI = ui.Discard
+	env.Git = git.New(projectCopy.Root) // Fresh, so tags made by a run are seen.
 	return &env
 }
 
@@ -249,10 +253,8 @@ func (a *App) start(action workflow.Action) tea.Cmd {
 	log := a.openLog(action)
 	session := newSession(a.ctx.Done(), log)
 	ctx, cancel := context.WithCancel(a.ctx)
-	p := a.env.Project
+	p := a.env.Project // The workflow owns it until the run ends.
 	env := workflow.NewEnv(session, p, a.cfg.PackwizExe(), a.env.API, config.CacheDir())
-	env.Git = a.env.Git
-	a.env.Git.Log = session.Log
 	title := action.Label + ": " + p.Name + " " + p.Version
 	r := newRunScreen(a.theme, title, session.events, cancel)
 	r.onDone = func(err error) tea.Msg {

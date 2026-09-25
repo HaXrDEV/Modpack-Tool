@@ -284,6 +284,34 @@ func TestPickManyAndPaths(t *testing.T) {
 	}
 }
 
+func TestViewChangesAndHelp(t *testing.T) {
+	r := newRunner(t, 100, 30)
+	changes, _ := workflow.ActionByName("changes")
+	r.send(startAction{changes})
+	r.waitText("No earlier release tag found") // The fixture pack isn't a git repo.
+	r.key("esc")
+	r.waitFor("the dashboard", func(s string) bool { return strings.Contains(s, "1  Update mods") })
+	r.key("?")
+	r.waitText("HOW A RELEASE WORKS")
+}
+
+func TestAddingAProjectOpensIt(t *testing.T) {
+	r := newRunner(t, 100, 30)
+	other := filepath.Dir(testutil.PackDir(t))
+	r.send(showProjects{})
+	r.waitText("Add a project") // With no projects yet, the screen starts there.
+	r.send(tea.PasteMsg{Content: `"` + other + `"`})
+	r.key("enter")
+	r.waitFor("the new project's dashboard", func(s string) bool {
+		return strings.Contains(s, "1  Update mods") && strings.Contains(s, "Next")
+	})
+	if !config.SamePath(r.app.env.Project.Root, other) || len(r.app.cfg.Projects) != 1 {
+		t.Errorf("open %s, known %v", r.app.env.Project.Root, r.app.cfg.Projects)
+	}
+	r.send(showProjects{})
+	r.waitText("(open)")
+}
+
 // The real Bubble Tea program: input parsing, rendering and quitting.
 func TestRealProgramRendersAndQuits(t *testing.T) {
 	r := newRunner(t, 80, 24)
