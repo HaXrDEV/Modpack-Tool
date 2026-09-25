@@ -77,7 +77,7 @@ class FileStore:
                 result[mod.rel] = data
         if not needed:
             return result
-        cf_ids = [int(mod.curseforge["file-id"]) for mod in needed if mod.curseforge and not mod.download.get("url")]
+        cf_ids = [mod.curseforge.get("file-id") for mod in needed if mod.curseforge and not mod.download.get("url")]
         if cf_ids:
             self._cf_files.update(platforms.curseforge_files(cf_ids))
 
@@ -122,17 +122,25 @@ class FileStore:
                 ui.warn(f"{folder} is not a folder.")
                 continue
             candidates = [path for path in folder.rglob("*") if path.is_file()]
+            digests = {}  # (path, hash format) -> digest, so each file is hashed at most once per format.
             for mod in mods:
                 if mod.rel in found:
                     continue
                 hash_format, hash_value = mod.hash
                 named = [path for path in candidates if path.name == mod.filename]
-                for path in named + [path for path in candidates if path not in named]:
+                # Without a hash only the exact filename can identify the file.
+                pool = named + [path for path in candidates if path not in named] if hash_format else named
+                for path in pool:
+                    if hash_format:
+                        key = (path, hash_format)
+                        if key not in digests:
+                            digests[key] = _digest(path.read_bytes(), hash_format).lower()
+                        if digests[key] != hash_value.lower():
+                            continue
                     data = path.read_bytes()
-                    if not hash_format or _digest(data, hash_format).lower() == hash_value.lower():
-                        self.add(mod, data)
-                        found[mod.rel] = data
-                        break
+                    self.add(mod, data)
+                    found[mod.rel] = data
+                    break
             still = [mod for mod in mods if mod.rel not in found]
             if still:
                 ui.warn("Still missing:")

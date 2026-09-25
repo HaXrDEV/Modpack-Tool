@@ -3,12 +3,15 @@
 import json
 import shutil
 import subprocess
+from pathlib import Path
+
+from ruamel.yaml.scalarstring import LiteralScalarString
 
 from . import changelog, diff, drafting, exporter, pack, ui
 from .ui import ToolError
 from .version import is_mc_prefixed_version, is_prerelease, suggest_migration_version, suggest_next_version
 
-LAST_BUILD_FILE = ".last-build.json"
+LAST_BUILD_FILE = "modpack-tool-last-build.json"
 
 
 ############################################################
@@ -105,7 +108,6 @@ def _draft_sections(project, changes):
 
 def _write_section(data, key, lines):
     if key == "Config Changes":
-        from ruamel.yaml.scalarstring import LiteralScalarString
         data[key] = LiteralScalarString("\n".join(f"- {line}" for line in lines)) if lines else None
     else:
         data[key] = lines or None
@@ -213,8 +215,7 @@ def build(project, since=None, skip_server=False, review=True):
     files = exporter.export(project, kinds) if kinds else []
     last = {"version": project.version, "index_hash": pack.index_hash(project.pack_dir),
             "files": [file.name for file in files]}
-    project.export_dir.mkdir(parents=True, exist_ok=True)
-    (project.export_dir / LAST_BUILD_FILE).write_text(json.dumps(last, indent=2), encoding="utf-8")
+    _last_build_path(project).write_text(json.dumps(last, indent=2), encoding="utf-8")
     ui.ok(f"Release {project.version} is built.")
     ui.info("Next: Publish (commit, push and create the GitHub release).")
     return files
@@ -223,8 +224,17 @@ def build(project, since=None, skip_server=False, review=True):
 ############################################################
 # Publish
 
+def _last_build_path(project):
+    """Where Build notes what it built: inside .git, so it never ends up in a commit."""
+    if project.git.is_repo:
+        git_dir = Path(project.git.run("rev-parse", "--git-dir").strip())
+        return (git_dir if git_dir.is_absolute() else project.root / git_dir) / LAST_BUILD_FILE
+    project.export_dir.mkdir(parents=True, exist_ok=True)
+    return project.export_dir / LAST_BUILD_FILE
+
+
 def _last_build(project):
-    path = project.export_dir / LAST_BUILD_FILE
+    path = _last_build_path(project)
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
