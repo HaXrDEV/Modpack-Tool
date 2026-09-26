@@ -112,7 +112,7 @@ Each pack has a `modpack-tool.yml` next to its `Packwiz` folder, created on firs
 - **"No earlier release tag found"**: the previous release isn't tagged. Tag it (`git tag 2.2.0 <commit>`) or pass `--since <tag or commit>` to `draft`/`build`.
 - **A file can't be downloaded**: its author blocks third-party downloads on CurseForge. Choose `b` and the tool opens the download pages and waits for the files in your Downloads folder (if your browser saves somewhere else, save them there by hand). Or choose `f` and point it at a folder that has them, such as a CurseForge app instance's `mods` folder. Either way they are cached afterwards.
 - **git push asks for a login**: the tool never waits for typed credentials. Run `git push` once in a terminal (or `gh auth setup-git`) and publish again.
-- **An old tool is needed**: the Python version of this tool is tagged `python-final`. Before it came `legacy-v2`, the last version of the original tool (for example for a release on an old Minecraft line that still uses `CHANGELOG.md`), and `legacy-v1`, from before it became a standalone tool, when it lived inside each pack as `Modpack-CLI-Tool`. `git worktree add ../Modpack-Tool-python python-final` and run its `run_modpack_tool.bat` (needs Python 3.11).
+- **An old tool is needed**: the Python version of this tool is tagged `python-final`, and the version before it `legacy-v1` (for example for a release on an old Minecraft line that still uses `CHANGELOG.md`). `git worktree add ../Modpack-Tool-python python-final` and run its `run_modpack_tool.bat` (needs Python 3.11).
 
 ## Development
 
