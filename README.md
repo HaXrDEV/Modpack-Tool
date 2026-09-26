@@ -9,20 +9,7 @@ A guided release assistant for [packwiz](https://github.com/packwiz/packwiz) mod
 
 Run `modpack-tool` inside a pack folder (or anywhere; it opens the last pack you used). The dashboard shows where the pack stands and what to do next, with the cursor already on that action:
 
-```
- HaXr's Modpack Tool                                      Breakneck
-╭────────────────────────────────────────────────────────────────╮
-│ 26.2-1.1 · not released         Minecraft 26.2 · Fabric 0.19.1 │
-│ Since 26.2-1.0  +3 mods, -1 mod, 22 updated, 4 config files ch…│
-│ Changelog  overview 3 lines · config changes empty             │
-│ Next  Draft changelog (3), then edit it.                       │
-╰────────────────────────────────────────────────────────────────╯
-  1  Update mods        packwiz update, then the alpha guard
-  2  New version        bump or rename the version
-› 3  Draft changelog    fill sections from the changes
-  ...
- ↑↓ select • enter run • p projects • ? help • q quit
-```
+![The dashboard for InsomniaHardcore 2.2.0 in Windows Terminal, with the cursor on Build release](docs/dashboard.png)
 
 A release, start to finish:
 
