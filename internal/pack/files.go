@@ -4,7 +4,9 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/HaXrDEV/Modpack-Tool/internal/fail"
@@ -151,6 +153,32 @@ func IndexEntries(packDir string) ([]IndexEntry, error) {
 		entries = append(entries, IndexEntry{File: pycompat.Str(entry["file"]), Metafile: pycompat.Truthy(entry["metafile"])})
 	}
 	return entries, nil
+}
+
+// Bundled lists what a pack ships itself instead of downloading, such as an
+// edited shader pack: every .jar directly in mods/, and every .zip or folder
+// directly in the other category folders, as paths like
+// "shaderpacks/Complementary". It follows the index, so ignored files are
+// left out.
+func Bundled(entries []IndexEntry) []string {
+	var found []string
+	for _, entry := range entries {
+		category, rest, ok := strings.Cut(entry.File, "/")
+		if entry.Metafile || !ok || !slices.Contains(Categories, category) {
+			continue
+		}
+		name, _, folder := strings.Cut(rest, "/")
+		switch ext := strings.ToLower(path.Ext(name)); {
+		case category == "mods" && (folder || ext != ".jar"):
+			continue
+		case category != "mods" && !folder && ext != ".zip":
+			continue
+		}
+		if item := category + "/" + name; !slices.Contains(found, item) {
+			found = append(found, item)
+		}
+	}
+	return found
 }
 
 // IndexHash is the index hash recorded in pack.toml.

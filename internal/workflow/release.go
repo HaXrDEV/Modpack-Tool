@@ -577,8 +577,18 @@ func Build(ctx context.Context, env *Env, since string, skipServer, review bool)
 		return err
 	})
 	var recordPath string
+	var mods []pack.Mod
+	var index []pack.IndexEntry
 	if err == nil {
-		recordPath, err = changelog.WriteRecord(p, changelog.BuildRecord(p, data, changes, env.Now().Format("2006-01-02")))
+		mods, _, err = loadMods(env)
+	}
+	if err == nil {
+		index, err = pack.IndexEntries(p.PackDir())
+	}
+	if err == nil {
+		record := changelog.BuildRecord(p, data, changes, env.Now().Format("2006-01-02"))
+		record.Contents = ReleaseContents(ctx, env, mods, pack.Bundled(index))
+		recordPath, err = changelog.WriteRecord(p, record)
 	}
 	var notes []string
 	if err == nil {

@@ -12,6 +12,7 @@ type Fake struct {
 	mu              sync.Mutex
 	Versions        map[string]Version
 	Projects        map[string]Project
+	Teams           map[string][]TeamMember
 	ProjectVersions map[string][]Version // By project id.
 	Files           map[int64]CFFile
 	Mods            map[int64]CFMod
@@ -37,6 +38,10 @@ func (f *Fake) ModrinthVersions(_ context.Context, ids []string) (map[string]Ver
 
 func (f *Fake) ModrinthProjects(_ context.Context, ids []string) (map[string]Project, error) {
 	return pick(f.Projects, ids), nil
+}
+
+func (f *Fake) ModrinthTeams(_ context.Context, ids []string) (map[string][]TeamMember, error) {
+	return pick(f.Teams, ids), nil
 }
 
 func (f *Fake) ModrinthProjectVersions(_ context.Context, projectID string, _, _ []string) ([]Version, error) {

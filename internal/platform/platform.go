@@ -68,8 +68,21 @@ type Dependency struct {
 
 // Project is a Modrinth project.
 type Project struct {
-	ID         string   `json:"id"`
-	Categories []string `json:"categories"`
+	ID          string   `json:"id"`
+	Slug        string   `json:"slug"`
+	ProjectType string   `json:"project_type"` // mod, resourcepack, shader, ...
+	Team        string   `json:"team"`
+	Categories  []string `json:"categories"`
+}
+
+// TeamMember is a member of a Modrinth project's team.
+type TeamMember struct {
+	TeamID string `json:"team_id"`
+	User   struct {
+		Username string `json:"username"`
+	} `json:"user"`
+	Role     string `json:"role"`
+	Ordering int    `json:"ordering"`
 }
 
 // CFFile is a CurseForge file.
@@ -100,6 +113,9 @@ type CFMod struct {
 		Name string `json:"name"`
 		Slug string `json:"slug"`
 	} `json:"categories"`
+	Authors []struct {
+		Name string `json:"name"`
+	} `json:"authors"`
 }
 
 // Match is a CurseForge project and file that a fingerprint belongs to.
@@ -109,6 +125,7 @@ type Match struct{ ProjectID, FileID int64 }
 type API interface {
 	ModrinthVersions(ctx context.Context, ids []string) (map[string]Version, error)
 	ModrinthProjects(ctx context.Context, ids []string) (map[string]Project, error)
+	ModrinthTeams(ctx context.Context, ids []string) (map[string][]TeamMember, error)
 	ModrinthProjectVersions(ctx context.Context, projectID string, gameVersions, loaders []string) ([]Version, error)
 	CurseForgeFiles(ctx context.Context, ids []int64) (map[int64]CFFile, error)
 	CurseForgeMods(ctx context.Context, ids []int64) (map[int64]CFMod, error)
@@ -304,6 +321,22 @@ func (c *Client) ModrinthProjects(ctx context.Context, ids []string) (map[string
 		var projects []Project
 		err := c.request(ctx, "GET", c.Modrinth+"/projects?ids="+url.QueryEscape(string(encoded)), nil, nil, &projects)
 		return byID(projects, func(p Project) string { return p.ID }), err
+	})
+}
+
+// ModrinthTeams returns {team id: members} for the given team ids.
+func (c *Client) ModrinthTeams(ctx context.Context, ids []string) (map[string][]TeamMember, error) {
+	return batch(ctx, ids, 100, func(ctx context.Context, chunk []string) (map[string][]TeamMember, error) {
+		encoded, _ := json.Marshal(chunk)
+		var teams [][]TeamMember
+		err := c.request(ctx, "GET", c.Modrinth+"/teams?ids="+url.QueryEscape(string(encoded)), nil, nil, &teams)
+		found := map[string][]TeamMember{}
+		for _, members := range teams {
+			if len(members) > 0 {
+				found[members[0].TeamID] = members
+			}
+		}
+		return found, err
 	})
 }
 

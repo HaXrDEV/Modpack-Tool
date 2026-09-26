@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -298,6 +299,9 @@ func TestBuildWritesRecordNotesAndPackFiles(t *testing.T) {
 	if !slices.Equal(record.Mods.Added, []string{"Beta Mod"}) || !slices.Equal(record.Overview, []string{"Added 'Beta Mod' mod."}) {
 		t.Error(record.Mods, record.Overview)
 	}
+	if record.Contents == nil || len(record.Contents.Mods) != 2 || record.Contents.Mods[1].File != "b-1.jar" {
+		t.Error("contents", record.Contents)
+	}
 	if notes := testutil.Read(t, filepath.Join(f.Project.Root, "CurseForge-Release.md")); !strings.HasPrefix(notes, "- Added 'Beta Mod' mod.") {
 		t.Error(notes)
 	}
@@ -537,6 +541,64 @@ func TestMigrateSuggestsABetaWhenModsAreMissing(t *testing.T) {
 		if strings.Contains(f.session.Text(), "Suggesting a beta, since the pack is missing 1 mod until") != (sodium != "26.1") {
 			t.Error(f.session.Text())
 		}
+	}
+}
+
+// A release's contents list every enabled file with its project page and
+// authors, sorted by name, and sides when the pack shows side tags, plus the
+// files the pack bundles by name.
+func TestReleaseContents(t *testing.T) {
+	pw := testutil.PackDir(t)
+	testutil.Write(t, filepath.Join(pw, "mods", "cf.pw.toml"), testutil.Metafile("CF Mod", "cf-1.jar", testutil.MetaOptions{Source: "curseforge"}))
+	f := newFixture(t, filepath.Dir(pw))
+	f.Project.Settings.SideTags = true
+	f.api.Projects = map[string]platform.Project{"Sodium": {ID: "Sodium", Slug: "sodium", ProjectType: "mod", Team: "T"}}
+	f.api.Teams = map[string][]platform.TeamMember{"T": {{TeamID: "T", Role: "Developer", Ordering: 0}, {TeamID: "T", Role: "Owner", Ordering: 1}}}
+	f.api.Teams["T"][1].User.Username = "jellysquid3"
+	cf := platform.CFMod{ID: 222}
+	cf.Links.WebsiteURL = "https://www.curseforge.com/minecraft/mc-mods/cf-mod"
+	cf.Authors = append(cf.Authors, struct {
+		Name string `json:"name"`
+	}{"Someone"})
+	f.api.Mods = map[int64]platform.CFMod{222: cf}
+	mods, _, err := loadMods(f.Env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := ReleaseContents(ctx, f.Env, mods, []string{"shaderpacks/Complementary r5.2.1 [Insomnia Edit]",
+		"mods/[Let's Do] Extra-1.0.jar"})
+	want := []changelog.Item{
+		{Name: "CF Mod", File: "cf-1.jar", URL: "https://www.curseforge.com/minecraft/mc-mods/cf-mod", Authors: []string{"Someone"}},
+		{Name: "[Let's Do] Extra-1.0", File: "[Let's Do] Extra-1.0.jar"}, // Sorted under L, bundled.
+		{Name: "Lithium", File: "lithium-0.21.jar", URL: "https://modrinth.com/project/Lithium"},
+		{Name: "Pinned Mod", File: "pinned-1.0.jar", URL: "https://modrinth.com/project/Pinned M"}, // Without "[Fabric]".
+		{Name: "Server Thing", File: "server-1.0.jar", Side: "server"},
+		{Name: "Sodium", File: "sodium-0.8.jar", Side: "client", URL: "https://modrinth.com/mod/sodium", Authors: []string{"jellysquid3"}},
+	}
+	if !reflect.DeepEqual(contents.Mods, want) { // The disabled Boss Checklist is left out.
+		t.Errorf("mods\n got %+v\nwant %+v", contents.Mods, want)
+	}
+	shaders := []changelog.Item{{Name: "Complementary r5.2.1", File: "Complementary r5.2.1 [Insomnia Edit]"}}
+	if len(contents.ResourcePacks) != 1 || contents.ResourcePacks[0].Name != "Fresh Animations" || !reflect.DeepEqual(contents.ShaderPacks, shaders) {
+		t.Error(contents.ResourcePacks, contents.ShaderPacks)
+	}
+}
+
+// failingAPI can't reach the platforms.
+type failingAPI struct{ platform.Fake }
+
+func (*failingAPI) CurseForgeMods(context.Context, []int64) (map[int64]platform.CFMod, error) {
+	return nil, errors.New("offline")
+}
+
+// Without the platforms, the contents link projects by id and leave the authors out.
+func TestReleaseContentsWithoutThePlatforms(t *testing.T) {
+	f := newFixture(t, filepath.Dir(testutil.PackDir(t)))
+	f.API = &failingAPI{}
+	mods, _, _ := loadMods(f.Env)
+	contents := ReleaseContents(ctx, f.Env, mods, nil)
+	if len(contents.Mods) != 4 || contents.Mods[0].URL != "https://modrinth.com/project/Lithium" || !strings.Contains(f.session.Text(), "offline") {
+		t.Error(contents.Mods, f.session.Text())
 	}
 }
 

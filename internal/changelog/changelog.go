@@ -436,6 +436,36 @@ type Record struct {
 	Mods          RecordDiff  `json:"mods"`
 	ResourcePacks RecordDiff  `json:"resourcepacks"`
 	ShaderPacks   RecordDiff  `json:"shaderpacks"`
+	Contents      *Contents   `json:"contents,omitempty"`
+}
+
+// Contents is everything a release contains, for the wiki's modlists.
+type Contents struct {
+	Mods          []Item `json:"mods"`
+	ResourcePacks []Item `json:"resourcepacks"`
+	ShaderPacks   []Item `json:"shaderpacks"`
+}
+
+// Add adds an item to the list of its category ("mods", "resourcepacks" or
+// "shaderpacks").
+func (c *Contents) Add(category string, item Item) {
+	switch category {
+	case "resourcepacks":
+		c.ResourcePacks = append(c.ResourcePacks, item)
+	case "shaderpacks":
+		c.ShaderPacks = append(c.ShaderPacks, item)
+	default:
+		c.Mods = append(c.Mods, item)
+	}
+}
+
+// Item is one mod, resource pack or shader pack of a release.
+type Item struct {
+	Name    string   `json:"name"`
+	File    string   `json:"file"`
+	Side    string   `json:"side,omitempty"` // "client" or "server", when the pack shows side tags.
+	URL     string   `json:"url,omitempty"`  // Its project page.
+	Authors []string `json:"authors,omitempty"`
 }
 
 // Loader is the record's loader entry.

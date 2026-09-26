@@ -179,9 +179,9 @@ func NewLabels(mods []pack.Mod) *Labels {
 		if mod.Category() != "mods" || mod.Disabled() {
 			continue
 		}
-		label := pycompat.Strip(trailingDash.ReplaceAllString(mod.DisplayName(), ""))
+		label := pycompat.Strip(trailingDash.ReplaceAllString(mod.PlainName(), ""))
 		if label == "" {
-			label = mod.DisplayName()
+			label = mod.PlainName()
 		}
 		for _, text := range []string{label, mod.Slug()} {
 			if k := key(text); k != "" {
