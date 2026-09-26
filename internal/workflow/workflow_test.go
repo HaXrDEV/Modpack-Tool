@@ -144,6 +144,41 @@ func TestNewVersionBumpsAfterARelease(t *testing.T) {
 	}
 }
 
+// Starting the next version removes the released version's changelog when
+// its record has the same notes, found by the record's Minecraft version also
+// after Migrate moved the pack to a new one. One that differs from its record,
+// or has none, stays.
+func TestNewVersionDropsTheReleasedChangelog(t *testing.T) {
+	for name, c := range map[string]struct {
+		text, minecraft string
+		record, kept    bool
+	}{
+		"as released":       {"Update overview:\n  - First.\n", "1.21.11", true, false},
+		"reformatted":       {"# Notes\r\nUpdate overview:\r\n- First.\r\nBug Fixes:\r\n", "1.21.11", true, false},
+		"after a migration": {"Update overview:\n  - First.\n", "26.1", true, false},
+		"edited":            {"Update overview:\n  - First, edited.\n", "1.21.11", true, true},
+		"without a record":  {"Update overview:\n  - First.\n", "1.21.11", false, true},
+	} {
+		f := repoProject(t)
+		path := testutil.Write(t, filepath.Join(f.Project.ChangelogDir(), "1.0.0+1.21.11.yml"), c.text)
+		if c.record {
+			record := changelog.Record{Version: "1.0.0", Minecraft: "1.21.11", Overview: []string{"First."}}
+			if _, err := changelog.WriteRecord(f.Project, record); err != nil {
+				t.Fatal(err)
+			}
+		}
+		toml := filepath.Join(f.Project.PackDir(), "pack.toml")
+		testutil.Write(t, toml, strings.Replace(testutil.Read(t, toml), `"1.21.11"`, `"`+c.minecraft+`"`, 1))
+		if err := f.Project.Reload(); err != nil {
+			t.Fatal(err)
+		}
+		mustNewVersion(t, f, "1.1.0")
+		if files.Exists(path) != c.kept {
+			t.Errorf("%s: kept %v\n%s", name, !c.kept, f.session.Text())
+		}
+	}
+}
+
 // py: test_workflows.py::test_new_version_renames_an_unreleased_version
 func TestNewVersionRenamesAnUnreleasedVersion(t *testing.T) {
 	f := repoProject(t)
@@ -173,9 +208,17 @@ func TestNewVersionRefusesAReleasedVersion(t *testing.T) {
 	}
 }
 
-// release commits the pack as it is and tags its version, as Publish does.
+// release writes the record, commits the pack as it is and tags its version,
+// as Build and Publish do.
 func release(t *testing.T, f *fixture) {
 	t.Helper()
+	data, err := changelog.Load(changelog.Path(f.Project, "", ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := changelog.WriteRecord(f.Project, changelog.BuildRecord(f.Project, data, nil, "")); err != nil {
+		t.Fatal(err)
+	}
 	root := f.Project.Root
 	testutil.Git(t, root, "add", "-A")
 	testutil.Git(t, root, "commit", "-q", "-m", f.Project.Version)
@@ -235,6 +278,11 @@ func TestPreviewPrereleases(t *testing.T) {
 	} {
 		if got := data.Lines(key); !slices.Equal(got, want) {
 			t.Errorf("%s: %q", key, got)
+		}
+	}
+	for _, beta := range []string{"1.1.0-beta.1", "1.1.0-beta.2"} { // So their notes came from their records.
+		if files.Exists(filepath.Join(f.Project.ChangelogDir(), beta+"+1.21.11.yml")) {
+			t.Error(beta, "still has its changelog")
 		}
 	}
 	changes, base, err := ChangesSinceRelease(ctx, f.Env, "", false)

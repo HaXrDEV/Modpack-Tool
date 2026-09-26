@@ -182,6 +182,11 @@ func NewVersion(ctx context.Context, env *Env, suggestion, newVersion string) (b
 		if err := includePrereleases(env); err != nil {
 			env.UI.Warn("The notes of its pre-releases weren't added to the changelog: " + err.Error())
 		}
+		if currentTag != "" {
+			if err := dropReleasedChangelog(env, oldVersion); err != nil {
+				env.UI.Warn(fmt.Sprintf("The changelog of %s wasn't removed: %v", oldVersion, err))
+			}
+		}
 		env.UI.Result(fmt.Sprintf("Version is now %s. Changelog: %s", newVersion, p.Rel(path)),
 			"work on the pack, then Draft changelog (3) and Build release (4).")
 		return true, nil
@@ -221,23 +226,27 @@ func NewVersion(ctx context.Context, env *Env, suggestion, newVersion string) (b
 }
 
 // includePrereleases adds what you wrote for a full release's pre-releases to
-// its changelog, when the release covers theirs (prereleases: previews).
+// its changelog, when the release covers theirs (prereleases: previews). It
+// reads them from their records, as they were released.
 func includePrereleases(env *Env) error {
 	p := env.Project
 	if !p.CoversPrereleases() {
 		return nil
 	}
-	paths, err := changelog.Prereleases(p, p.Version)
-	if err != nil || len(paths) == 0 {
+	records, err := changelog.Records(p)
+	if err != nil {
 		return err
 	}
-	earlier := make([]*changelog.Changelog, len(paths))
-	names := make([]string, len(paths))
-	for i, path := range paths {
-		if earlier[i], err = changelog.Load(path); err != nil {
-			return err
+	var earlier []changelog.Notes
+	var versions []string
+	for _, r := range records {
+		if version.IsPrereleaseOf(r.Version, p.Version) {
+			earlier = append(earlier, r)
+			versions = append(versions, r.Version)
 		}
-		names[i] = filepath.Base(path)
+	}
+	if len(earlier) == 0 {
+		return nil
 	}
 	data, err := changelog.Load(changelog.Path(p, "", ""))
 	if err != nil {
@@ -249,7 +258,42 @@ func includePrereleases(env *Env) error {
 	if err := data.Save(); err != nil {
 		return err
 	}
-	env.UI.Info("Added the Changes/Improvements, Bug Fixes and Script/Datapack changes of its pre-releases:", names...)
+	env.UI.Info("Added the Changes/Improvements, Bug Fixes and Script/Datapack changes of its pre-releases:", versions...)
+	return nil
+}
+
+// dropReleasedChangelog removes a released version's changelog once the next
+// version starts, when its record, which stays, has the same notes. One that
+// differs, such as one edited after the release, stays too.
+func dropReleasedChangelog(env *Env, v string) error {
+	p := env.Project
+	records, err := changelog.Records(p)
+	if err != nil {
+		return err
+	}
+	i := slices.IndexFunc(records, func(r changelog.Record) bool { return r.Version == v })
+	if i < 0 {
+		return nil
+	}
+	// By the record's Minecraft version, since Migrate has already moved the pack to its new one.
+	path := changelog.Path(p, v, records[i].Minecraft)
+	if !files.Exists(path) {
+		return nil
+	}
+	data, err := changelog.Load(path)
+	if err != nil {
+		return err
+	}
+	for _, s := range changelog.Sections {
+		if !slices.Equal(data.Lines(s.Key), records[i].Lines(s.Key)) {
+			env.UI.Info(fmt.Sprintf("Kept %s, since its notes differ from its record.", filepath.Base(path)))
+			return nil
+		}
+	}
+	if err := os.Remove(path); err != nil {
+		return err
+	}
+	env.UI.Info(fmt.Sprintf("Removed %s, since its record has the same notes.", filepath.Base(path)))
 	return nil
 }
 
