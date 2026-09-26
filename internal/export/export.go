@@ -504,7 +504,7 @@ func BuildModrinth(ctx context.Context, p *project.Project, contents *Contents, 
 
 func excluded(mod pack.Mod, exclude []string) bool {
 	names := map[string]bool{strings.ToLower(mod.Slug()): true, strings.ToLower(mod.Name()): true,
-		strings.ToLower(mod.DisplayName()): true, strings.ToLower(mod.Filename()): true}
+		strings.ToLower(mod.DisplayName()): true, strings.ToLower(mod.PlainName()): true, strings.ToLower(mod.Filename()): true}
 	for _, entry := range exclude {
 		if names[strings.ToLower(pycompat.Strip(entry))] {
 			return true

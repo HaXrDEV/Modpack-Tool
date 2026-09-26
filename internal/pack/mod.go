@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/BurntSushi/toml"
 
@@ -33,11 +34,39 @@ var LoaderLabels = []struct{ Key, Label string }{
 	{"fabric", "Fabric"}, {"quilt", "Quilt"}, {"forge", "Forge"}, {"neoforge", "NeoForge"}, {"liteloader", "LiteLoader"},
 }
 
-var bracketed = regexp.MustCompile(`\(.*?\)|\[.*?\]|\{.*?\}`)
+var (
+	bracketed = regexp.MustCompile(`\(.*?\)|\[.*?\]|\{.*?\}`)
+	// What dropping them can leave behind: runs of spaces, and separators at
+	// either end ("Mod - [Fabric]" -> "Mod -").
+	spaces   = regexp.MustCompile(` {2,}`)
+	dangling = regexp.MustCompile(`^[\s\-–—:|/,]+|[\s\-–—:|/,]+$`)
+	// A leading "[...]" such as "[Let's Do]" in "[Let's Do] Brewery".
+	leading = regexp.MustCompile(`^\s*\[([^\]]*)\]\s*`)
+	// What a loader tag such as "[Fabric & Forge]" or "[FABRIC/QUILT]" consists of.
+	loaderTag = regexp.MustCompile(`(?i)^(fabric|forge|neoforge|quilt|[\s/&+,|-])+$`)
+)
 
-// StripBrackets drops "(...)", "[...]" and "{...}" parts from a display name.
+// StripBrackets drops "(...)", "[...]" and "{...}" parts from a display name,
+// with the spaces and separators they leave behind.
 func StripBrackets(text string) string {
-	return pycompat.Strip(bracketed.ReplaceAllString(text, ""))
+	text = spaces.ReplaceAllString(bracketed.ReplaceAllString(text, ""), " ")
+	return pycompat.Strip(dangling.ReplaceAllString(pycompat.Strip(text), ""))
+}
+
+// TidyName is a name for display: without bracketed parts such as
+// "[Fabric]", but keeping a leading one that brands the mod or its series,
+// as in "[Let's Do] Brewery" or "[EMF] Entity Model Features". Loader tags
+// and bare numbers ("[1.20]") in front go too.
+func TidyName(name string) string {
+	m := leading.FindStringSubmatch(name)
+	if m == nil || loaderTag.MatchString(m[1]) || !strings.ContainsFunc(m[1], unicode.IsLetter) {
+		return StripBrackets(name)
+	}
+	rest := StripBrackets(name[len(m[0]):])
+	if rest == "" {
+		return StripBrackets(name)
+	}
+	return "[" + pycompat.Strip(m[1]) + "] " + rest
 }
 
 // Tree is part of a Packwiz folder as {slash path relative to it: bytes}.
@@ -66,8 +95,18 @@ func (m Mod) Category() string {
 // Name is the metafile's name, or its slug when it has none.
 func (m Mod) Name() string { return pycompat.Or(m.Data["name"], m.Slug()) }
 
-// DisplayName is the name without bracketed parts such as "[Fabric]".
+// DisplayName is the name without bracketed parts such as "[Fabric]", but
+// with a branding prefix such as "[Let's Do]" (see TidyName).
 func (m Mod) DisplayName() string {
+	if name := TidyName(m.Name()); name != "" {
+		return name
+	}
+	return m.Slug()
+}
+
+// PlainName is the name without any bracketed part, for labels that go in
+// brackets themselves ("[Brewery]").
+func (m Mod) PlainName() string {
 	if name := StripBrackets(m.Name()); name != "" {
 		return name
 	}

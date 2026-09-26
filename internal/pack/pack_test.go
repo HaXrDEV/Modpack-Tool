@@ -237,6 +237,44 @@ func TestGeneratedFiles(t *testing.T) {
 	}
 }
 
+// What dropping the brackets leaves behind goes too.
+func TestStripBracketsTidiesUp(t *testing.T) {
+	for name, want := range map[string]string{
+		"[ETF] Entity Texture Features - [Fabric & Forge]":            "Entity Texture Features",
+		"Quilted Fabric API (QFAPI) / Quilt Standard Libraries (QSL)": "Quilted Fabric API / Quilt Standard Libraries",
+		"Companion 🐕 (Fabric)":                                        "Companion 🐕",
+		"Shulker+":                                                    "Shulker+",
+		"Mod: Addon":                                                  "Mod: Addon",
+	} {
+		if got := StripBrackets(name); got != want {
+			t.Errorf("StripBrackets(%q) = %q", name, got)
+		}
+	}
+}
+
+// A leading bracket that brands a mod or its series stays; loader tags,
+// numbers and anything later go.
+func TestTidyName(t *testing.T) {
+	for name, want := range map[string]string{
+		"[Let's Do] Brewery":                           "[Let's Do] Brewery",
+		"[Let's Do] API ":                              "[Let's Do] API",
+		"[EMF] Entity Model Features [Fabric & Forge]": "[EMF] Entity Model Features",
+		"[FABRIC/QUILT] Disable Custom Worlds Advice":  "Disable Custom Worlds Advice",
+		"[Forge/Fabric] Structure Essentials":          "Structure Essentials",
+		"[1.20] Something":                             "Something",
+		"Friends&Foes (Copper Golem, Glare, Moobloom)": "Friends&Foes",
+		"[EMF]": "",
+	} {
+		if got := TidyName(name); got != want {
+			t.Errorf("TidyName(%q) = %q", name, got)
+		}
+	}
+	mod := Mod{Rel: "mods/brewery.pw.toml", Data: map[string]any{"name": "[Let's Do] Brewery"}}
+	if mod.DisplayName() != "[Let's Do] Brewery" || mod.PlainName() != "Brewery" {
+		t.Error(mod.DisplayName(), mod.PlainName())
+	}
+}
+
 // py: test_pack.py::test_strip_brackets
 func TestStripBrackets(t *testing.T) {
 	if got := StripBrackets("Entity Texture Features [Fabric] (beta)"); got != "Entity Texture Features" {
