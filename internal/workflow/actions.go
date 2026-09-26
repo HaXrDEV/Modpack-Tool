@@ -59,7 +59,7 @@ var Actions = []Action{
 		flags: func(fs *flag.FlagSet, a *Args) {
 			sinceFlag(fs, a)
 			fs.BoolVar(&a.SkipServer, "skip-server", false, "don't build the server pack")
-			fs.BoolVar(&a.NoReview, "no-review", false, "don't offer to open the changelog first")
+			fs.BoolVar(&a.NoReview, "no-review", false, "don't offer to open the changelog first or the Export folder after")
 		},
 		Run: func(ctx context.Context, env *Env, a Args) error {
 			_, err := Build(ctx, env, a.Since, a.SkipServer, !a.NoReview)

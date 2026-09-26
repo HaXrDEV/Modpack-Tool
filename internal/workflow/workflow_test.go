@@ -60,6 +60,7 @@ type fixture struct {
 	packwiz *fakePackwiz
 	api     *platform.Fake
 	session *uitest.Session
+	opened  []string // What OpenPath opened.
 }
 
 // answers gives the next prompts their answers (a fresh scripted session).
@@ -87,6 +88,10 @@ func newFixture(t *testing.T, root string) *fixture {
 		LookPath: func(string) (string, error) { return "", errors.New("not found") },
 		RunGH: func(context.Context, string, ...string) (string, string, int, error) {
 			return "", "", 1, errors.New("gh must not run in tests")
+		},
+		OpenPath: func(path string) error {
+			f.opened = append(f.opened, path)
+			return nil
 		},
 	}
 	f.answers()
@@ -330,6 +335,33 @@ func TestChangesSinceReleaseAndDraft(t *testing.T) {
 	data, _ := changelog.Load(changelog.Path(f.Project, "", ""))
 	if got := data.Lines("Update overview"); !slices.Equal(got, []string{"Added 'Beta Mod' mod."}) {
 		t.Error(got)
+	}
+}
+
+// Once packs are built, Build offers to open the Export folder. Enter opens
+// it; no, or no answer at all (the end of a script's input), doesn't. With
+// nothing built, there's no question.
+func TestOfferExportFolder(t *testing.T) {
+	f := repoProject(t)
+	for _, c := range []struct {
+		answers []string
+		built   []string
+		opens   bool
+	}{
+		{[]string{""}, []string{"Pack-1.0.mrpack"}, true},
+		{[]string{"n"}, []string{"Pack-1.0.mrpack"}, false},
+		{nil, []string{"Pack-1.0.mrpack"}, false},
+		{nil, nil, false},
+	} {
+		f.opened = nil
+		f.answers(c.answers...)
+		offerExportFolder(ctx, f.Env, c.built)
+		if opened := slices.Equal(f.opened, []string{f.Project.ExportDir()}); opened != c.opens || len(f.opened) > 1 {
+			t.Errorf("%q with %v built: opened %v", c.answers, c.built, f.opened)
+		}
+		if asked := strings.Contains(f.session.Text(), "Open the Export folder?"); asked != (len(c.built) > 0) {
+			t.Errorf("%v built: asked %v", c.built, asked)
+		}
 	}
 }
 

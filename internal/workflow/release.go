@@ -678,8 +678,25 @@ func Build(ctx context.Context, env *Env, since string, skipServer, review bool)
 	if err != nil {
 		return nil, err
 	}
+	if review {
+		offerExportFolder(ctx, env, built)
+	}
 	env.UI.Result(fmt.Sprintf("Release %s is built.", p.Version), "Publish (5): commit, push and create the GitHub release.")
 	return built, nil
+}
+
+// offerExportFolder offers to open the Export folder when packs were built.
+// They're built by then, so a canceled answer just counts as no.
+func offerExportFolder(ctx context.Context, env *Env, built []string) {
+	if len(built) == 0 {
+		return
+	}
+	if open, err := env.UI.Confirm(ctx, "Open the Export folder?", true); err != nil || !open {
+		return
+	}
+	if err := env.OpenPath(env.Project.ExportDir()); err != nil {
+		env.UI.Warn(fmt.Sprintf("Couldn't open %s: %v", env.Project.ExportDir(), err))
+	}
 }
 
 ////////////////////////////////////////////////////////////

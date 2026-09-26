@@ -31,6 +31,8 @@ type Env struct {
 	LookPath func(name string) (string, error)
 	// RunGH runs the GitHub CLI and returns its output.
 	RunGH func(ctx context.Context, dir string, args ...string) (stdout, stderr string, code int, err error)
+	// OpenPath opens a file or folder in its default app (a folder in Explorer).
+	OpenPath func(path string) error
 
 	warned map[string]bool // Unreadable metafiles already warned about (see loadMods).
 }
@@ -55,6 +57,7 @@ func NewEnv(session ui.Session, p *project.Project, packwizExe string, api platf
 		Now:      time.Now,
 		LookPath: proc.LookPath,
 		RunGH:    runGH,
+		OpenPath: ui.OpenFile,
 	}
 }
 
