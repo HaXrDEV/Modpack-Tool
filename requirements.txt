@@ -1,6 +1,0 @@
-toml
-mdutils
-requests
-ruamel.yaml
-packaging
-aiohttp==3.8.3

@@ -1,2 +1,4 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# Auto detect text files and use LF line endings in the working tree too
+* text=auto eol=lf
+# Golden fixtures are compared byte for byte
+**/testdata/** -text

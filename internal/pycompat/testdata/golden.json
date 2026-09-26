@@ -1,0 +1,102 @@
+{
+ "dumps": [
+  {"input": "{\"pack\": \"Breakneck\", \"version\": \"4.11.1\", \"loader\": {\"name\": \"Fabric\", \"version\": \"0.18.4\"}, \"released\": \"2026-09-25\", \"prerelease\": false, \"comparedTo\": null, \"overview\": [], \"n\": 5}", "indent": -1, "ascii": true, "output": "{\"pack\": \"Breakneck\", \"version\": \"4.11.1\", \"loader\": {\"name\": \"Fabric\", \"version\": \"0.18.4\"}, \"released\": \"2026-09-25\", \"prerelease\": false, \"comparedTo\": null, \"overview\": [], \"n\": 5}"},
+  {"input": "{\"pack\": \"Breakneck\", \"version\": \"4.11.1\", \"loader\": {\"name\": \"Fabric\", \"version\": \"0.18.4\"}, \"released\": \"2026-09-25\", \"prerelease\": false, \"comparedTo\": null, \"overview\": [], \"n\": 5}", "indent": -1, "ascii": false, "output": "{\"pack\": \"Breakneck\", \"version\": \"4.11.1\", \"loader\": {\"name\": \"Fabric\", \"version\": \"0.18.4\"}, \"released\": \"2026-09-25\", \"prerelease\": false, \"comparedTo\": null, \"overview\": [], \"n\": 5}"},
+  {"input": "{\"pack\": \"Breakneck\", \"version\": \"4.11.1\", \"loader\": {\"name\": \"Fabric\", \"version\": \"0.18.4\"}, \"released\": \"2026-09-25\", \"prerelease\": false, \"comparedTo\": null, \"overview\": [], \"n\": 5}", "indent": 1, "ascii": true, "output": "{\n \"pack\": \"Breakneck\",\n \"version\": \"4.11.1\",\n \"loader\": {\n  \"name\": \"Fabric\",\n  \"version\": \"0.18.4\"\n },\n \"released\": \"2026-09-25\",\n \"prerelease\": false,\n \"comparedTo\": null,\n \"overview\": [],\n \"n\": 5\n}"},
+  {"input": "{\"pack\": \"Breakneck\", \"version\": \"4.11.1\", \"loader\": {\"name\": \"Fabric\", \"version\": \"0.18.4\"}, \"released\": \"2026-09-25\", \"prerelease\": false, \"comparedTo\": null, \"overview\": [], \"n\": 5}", "indent": 1, "ascii": false, "output": "{\n \"pack\": \"Breakneck\",\n \"version\": \"4.11.1\",\n \"loader\": {\n  \"name\": \"Fabric\",\n  \"version\": \"0.18.4\"\n },\n \"released\": \"2026-09-25\",\n \"prerelease\": false,\n \"comparedTo\": null,\n \"overview\": [],\n \"n\": 5\n}"},
+  {"input": "{\"pack\": \"Breakneck\", \"version\": \"4.11.1\", \"loader\": {\"name\": \"Fabric\", \"version\": \"0.18.4\"}, \"released\": \"2026-09-25\", \"prerelease\": false, \"comparedTo\": null, \"overview\": [], \"n\": 5}", "indent": 2, "ascii": true, "output": "{\n  \"pack\": \"Breakneck\",\n  \"version\": \"4.11.1\",\n  \"loader\": {\n    \"name\": \"Fabric\",\n    \"version\": \"0.18.4\"\n  },\n  \"released\": \"2026-09-25\",\n  \"prerelease\": false,\n  \"comparedTo\": null,\n  \"overview\": [],\n  \"n\": 5\n}"},
+  {"input": "{\"pack\": \"Breakneck\", \"version\": \"4.11.1\", \"loader\": {\"name\": \"Fabric\", \"version\": \"0.18.4\"}, \"released\": \"2026-09-25\", \"prerelease\": false, \"comparedTo\": null, \"overview\": [], \"n\": 5}", "indent": 2, "ascii": false, "output": "{\n  \"pack\": \"Breakneck\",\n  \"version\": \"4.11.1\",\n  \"loader\": {\n    \"name\": \"Fabric\",\n    \"version\": \"0.18.4\"\n  },\n  \"released\": \"2026-09-25\",\n  \"prerelease\": false,\n  \"comparedTo\": null,\n  \"overview\": [],\n  \"n\": 5\n}"},
+  {"input": "{\"text\": \"A\\u00f1adido 'Sodium' \\u2014 \\u00fcn\\u00efc\\u00f6d\\u00e9 \\u2713 \\ud83c\\udf89\", \"quote\": \"say \\\"hi\\\" \\\\ back\", \"ctl\": \"\\u0000\\u0001\\u001f\\u007f\\u0080\", \"ws\": \"tab\\there\\nnew\\rret\\b\\f\", \"sep\": \"\\u2028\\u2029\", \"html\": \"<b>&amp;</b>\"}", "indent": -1, "ascii": true, "output": "{\"text\": \"A\\u00f1adido 'Sodium' \\u2014 \\u00fcn\\u00efc\\u00f6d\\u00e9 \\u2713 \\ud83c\\udf89\", \"quote\": \"say \\\"hi\\\" \\\\ back\", \"ctl\": \"\\u0000\\u0001\\u001f\\u007f\\u0080\", \"ws\": \"tab\\there\\nnew\\rret\\b\\f\", \"sep\": \"\\u2028\\u2029\", \"html\": \"<b>&amp;</b>\"}"},
+  {"input": "{\"text\": \"A\\u00f1adido 'Sodium' \\u2014 \\u00fcn\\u00efc\\u00f6d\\u00e9 \\u2713 \\ud83c\\udf89\", \"quote\": \"say \\\"hi\\\" \\\\ back\", \"ctl\": \"\\u0000\\u0001\\u001f\\u007f\\u0080\", \"ws\": \"tab\\there\\nnew\\rret\\b\\f\", \"sep\": \"\\u2028\\u2029\", \"html\": \"<b>&amp;</b>\"}", "indent": -1, "ascii": false, "output": "{\"text\": \"Añadido 'Sodium' — ünïcödé ✓ 🎉\", \"quote\": \"say \\\"hi\\\" \\\\ back\", \"ctl\": \"\\u0000\\u0001\\u001f\", \"ws\": \"tab\\there\\nnew\\rret\\b\\f\", \"sep\": \"  \", \"html\": \"<b>&amp;</b>\"}"},
+  {"input": "{\"text\": \"A\\u00f1adido 'Sodium' \\u2014 \\u00fcn\\u00efc\\u00f6d\\u00e9 \\u2713 \\ud83c\\udf89\", \"quote\": \"say \\\"hi\\\" \\\\ back\", \"ctl\": \"\\u0000\\u0001\\u001f\\u007f\\u0080\", \"ws\": \"tab\\there\\nnew\\rret\\b\\f\", \"sep\": \"\\u2028\\u2029\", \"html\": \"<b>&amp;</b>\"}", "indent": 1, "ascii": true, "output": "{\n \"text\": \"A\\u00f1adido 'Sodium' \\u2014 \\u00fcn\\u00efc\\u00f6d\\u00e9 \\u2713 \\ud83c\\udf89\",\n \"quote\": \"say \\\"hi\\\" \\\\ back\",\n \"ctl\": \"\\u0000\\u0001\\u001f\\u007f\\u0080\",\n \"ws\": \"tab\\there\\nnew\\rret\\b\\f\",\n \"sep\": \"\\u2028\\u2029\",\n \"html\": \"<b>&amp;</b>\"\n}"},
+  {"input": "{\"text\": \"A\\u00f1adido 'Sodium' \\u2014 \\u00fcn\\u00efc\\u00f6d\\u00e9 \\u2713 \\ud83c\\udf89\", \"quote\": \"say \\\"hi\\\" \\\\ back\", \"ctl\": \"\\u0000\\u0001\\u001f\\u007f\\u0080\", \"ws\": \"tab\\there\\nnew\\rret\\b\\f\", \"sep\": \"\\u2028\\u2029\", \"html\": \"<b>&amp;</b>\"}", "indent": 1, "ascii": false, "output": "{\n \"text\": \"Añadido 'Sodium' — ünïcödé ✓ 🎉\",\n \"quote\": \"say \\\"hi\\\" \\\\ back\",\n \"ctl\": \"\\u0000\\u0001\\u001f\",\n \"ws\": \"tab\\there\\nnew\\rret\\b\\f\",\n \"sep\": \"  \",\n \"html\": \"<b>&amp;</b>\"\n}"},
+  {"input": "{\"text\": \"A\\u00f1adido 'Sodium' \\u2014 \\u00fcn\\u00efc\\u00f6d\\u00e9 \\u2713 \\ud83c\\udf89\", \"quote\": \"say \\\"hi\\\" \\\\ back\", \"ctl\": \"\\u0000\\u0001\\u001f\\u007f\\u0080\", \"ws\": \"tab\\there\\nnew\\rret\\b\\f\", \"sep\": \"\\u2028\\u2029\", \"html\": \"<b>&amp;</b>\"}", "indent": 2, "ascii": true, "output": "{\n  \"text\": \"A\\u00f1adido 'Sodium' \\u2014 \\u00fcn\\u00efc\\u00f6d\\u00e9 \\u2713 \\ud83c\\udf89\",\n  \"quote\": \"say \\\"hi\\\" \\\\ back\",\n  \"ctl\": \"\\u0000\\u0001\\u001f\\u007f\\u0080\",\n  \"ws\": \"tab\\there\\nnew\\rret\\b\\f\",\n  \"sep\": \"\\u2028\\u2029\",\n  \"html\": \"<b>&amp;</b>\"\n}"},
+  {"input": "{\"text\": \"A\\u00f1adido 'Sodium' \\u2014 \\u00fcn\\u00efc\\u00f6d\\u00e9 \\u2713 \\ud83c\\udf89\", \"quote\": \"say \\\"hi\\\" \\\\ back\", \"ctl\": \"\\u0000\\u0001\\u001f\\u007f\\u0080\", \"ws\": \"tab\\there\\nnew\\rret\\b\\f\", \"sep\": \"\\u2028\\u2029\", \"html\": \"<b>&amp;</b>\"}", "indent": 2, "ascii": false, "output": "{\n  \"text\": \"Añadido 'Sodium' — ünïcödé ✓ 🎉\",\n  \"quote\": \"say \\\"hi\\\" \\\\ back\",\n  \"ctl\": \"\\u0000\\u0001\\u001f\",\n  \"ws\": \"tab\\there\\nnew\\rret\\b\\f\",\n  \"sep\": \"  \",\n  \"html\": \"<b>&amp;</b>\"\n}"},
+  {"input": "[]", "indent": -1, "ascii": true, "output": "[]"},
+  {"input": "[]", "indent": -1, "ascii": false, "output": "[]"},
+  {"input": "[]", "indent": 1, "ascii": true, "output": "[]"},
+  {"input": "[]", "indent": 1, "ascii": false, "output": "[]"},
+  {"input": "[]", "indent": 2, "ascii": true, "output": "[]"},
+  {"input": "[]", "indent": 2, "ascii": false, "output": "[]"},
+  {"input": "{}", "indent": -1, "ascii": true, "output": "{}"},
+  {"input": "{}", "indent": -1, "ascii": false, "output": "{}"},
+  {"input": "{}", "indent": 1, "ascii": true, "output": "{}"},
+  {"input": "{}", "indent": 1, "ascii": false, "output": "{}"},
+  {"input": "{}", "indent": 2, "ascii": true, "output": "{}"},
+  {"input": "{}", "indent": 2, "ascii": false, "output": "{}"},
+  {"input": "[[], {}, [1, [2, {}]]]", "indent": -1, "ascii": true, "output": "[[], {}, [1, [2, {}]]]"},
+  {"input": "[[], {}, [1, [2, {}]]]", "indent": -1, "ascii": false, "output": "[[], {}, [1, [2, {}]]]"},
+  {"input": "[[], {}, [1, [2, {}]]]", "indent": 1, "ascii": true, "output": "[\n [],\n {},\n [\n  1,\n  [\n   2,\n   {}\n  ]\n ]\n]"},
+  {"input": "[[], {}, [1, [2, {}]]]", "indent": 1, "ascii": false, "output": "[\n [],\n {},\n [\n  1,\n  [\n   2,\n   {}\n  ]\n ]\n]"},
+  {"input": "[[], {}, [1, [2, {}]]]", "indent": 2, "ascii": true, "output": "[\n  [],\n  {},\n  [\n    1,\n    [\n      2,\n      {}\n    ]\n  ]\n]"},
+  {"input": "[[], {}, [1, [2, {}]]]", "indent": 2, "ascii": false, "output": "[\n  [],\n  {},\n  [\n    1,\n    [\n      2,\n      {}\n    ]\n  ]\n]"},
+  {"input": "\"plain\"", "indent": -1, "ascii": true, "output": "\"plain\""},
+  {"input": "\"plain\"", "indent": -1, "ascii": false, "output": "\"plain\""},
+  {"input": "\"plain\"", "indent": 1, "ascii": true, "output": "\"plain\""},
+  {"input": "\"plain\"", "indent": 1, "ascii": false, "output": "\"plain\""},
+  {"input": "\"plain\"", "indent": 2, "ascii": true, "output": "\"plain\""},
+  {"input": "\"plain\"", "indent": 2, "ascii": false, "output": "\"plain\""},
+  {"input": "12345678901234", "indent": -1, "ascii": true, "output": "12345678901234"},
+  {"input": "12345678901234", "indent": -1, "ascii": false, "output": "12345678901234"},
+  {"input": "12345678901234", "indent": 1, "ascii": true, "output": "12345678901234"},
+  {"input": "12345678901234", "indent": 1, "ascii": false, "output": "12345678901234"},
+  {"input": "12345678901234", "indent": 2, "ascii": true, "output": "12345678901234"},
+  {"input": "12345678901234", "indent": 2, "ascii": false, "output": "12345678901234"},
+  {"input": "true", "indent": -1, "ascii": true, "output": "true"},
+  {"input": "true", "indent": -1, "ascii": false, "output": "true"},
+  {"input": "true", "indent": 1, "ascii": true, "output": "true"},
+  {"input": "true", "indent": 1, "ascii": false, "output": "true"},
+  {"input": "true", "indent": 2, "ascii": true, "output": "true"},
+  {"input": "true", "indent": 2, "ascii": false, "output": "true"},
+  {"input": "null", "indent": -1, "ascii": true, "output": "null"},
+  {"input": "null", "indent": -1, "ascii": false, "output": "null"},
+  {"input": "null", "indent": 1, "ascii": true, "output": "null"},
+  {"input": "null", "indent": 1, "ascii": false, "output": "null"},
+  {"input": "null", "indent": 2, "ascii": true, "output": "null"},
+  {"input": "null", "indent": 2, "ascii": false, "output": "null"},
+  {"input": "{\"modpackVersion\": \"1.1.0\", \"projectID\": 1, \"modpackName\": \"MyPack\", \"useMetadata\": true}", "indent": -1, "ascii": true, "output": "{\"modpackVersion\": \"1.1.0\", \"projectID\": 1, \"modpackName\": \"MyPack\", \"useMetadata\": true}"},
+  {"input": "{\"modpackVersion\": \"1.1.0\", \"projectID\": 1, \"modpackName\": \"MyPack\", \"useMetadata\": true}", "indent": -1, "ascii": false, "output": "{\"modpackVersion\": \"1.1.0\", \"projectID\": 1, \"modpackName\": \"MyPack\", \"useMetadata\": true}"},
+  {"input": "{\"modpackVersion\": \"1.1.0\", \"projectID\": 1, \"modpackName\": \"MyPack\", \"useMetadata\": true}", "indent": 1, "ascii": true, "output": "{\n \"modpackVersion\": \"1.1.0\",\n \"projectID\": 1,\n \"modpackName\": \"MyPack\",\n \"useMetadata\": true\n}"},
+  {"input": "{\"modpackVersion\": \"1.1.0\", \"projectID\": 1, \"modpackName\": \"MyPack\", \"useMetadata\": true}", "indent": 1, "ascii": false, "output": "{\n \"modpackVersion\": \"1.1.0\",\n \"projectID\": 1,\n \"modpackName\": \"MyPack\",\n \"useMetadata\": true\n}"},
+  {"input": "{\"modpackVersion\": \"1.1.0\", \"projectID\": 1, \"modpackName\": \"MyPack\", \"useMetadata\": true}", "indent": 2, "ascii": true, "output": "{\n  \"modpackVersion\": \"1.1.0\",\n  \"projectID\": 1,\n  \"modpackName\": \"MyPack\",\n  \"useMetadata\": true\n}"},
+  {"input": "{\"modpackVersion\": \"1.1.0\", \"projectID\": 1, \"modpackName\": \"MyPack\", \"useMetadata\": true}", "indent": 2, "ascii": false, "output": "{\n  \"modpackVersion\": \"1.1.0\",\n  \"projectID\": 1,\n  \"modpackName\": \"MyPack\",\n  \"useMetadata\": true\n}"},
+  {"input": "[\"a-1.jar\", \"b-1.jar\"]", "indent": -1, "ascii": true, "output": "[\"a-1.jar\", \"b-1.jar\"]"},
+  {"input": "[\"a-1.jar\", \"b-1.jar\"]", "indent": -1, "ascii": false, "output": "[\"a-1.jar\", \"b-1.jar\"]"},
+  {"input": "[\"a-1.jar\", \"b-1.jar\"]", "indent": 1, "ascii": true, "output": "[\n \"a-1.jar\",\n \"b-1.jar\"\n]"},
+  {"input": "[\"a-1.jar\", \"b-1.jar\"]", "indent": 1, "ascii": false, "output": "[\n \"a-1.jar\",\n \"b-1.jar\"\n]"},
+  {"input": "[\"a-1.jar\", \"b-1.jar\"]", "indent": 2, "ascii": true, "output": "[\n  \"a-1.jar\",\n  \"b-1.jar\"\n]"},
+  {"input": "[\"a-1.jar\", \"b-1.jar\"]", "indent": 2, "ascii": false, "output": "[\n  \"a-1.jar\",\n  \"b-1.jar\"\n]"}
+ ],
+ "lines": [
+  {"text": "", "splitlines": [], "strip": "", "split": []},
+  {"text": "a", "splitlines": ["a"], "strip": "a", "split": ["a"]},
+  {"text": "a\n", "splitlines": ["a"], "strip": "a", "split": ["a"]},
+  {"text": "a\nb", "splitlines": ["a", "b"], "strip": "a\nb", "split": ["a", "b"]},
+  {"text": "a\r\nb\rc\n\nd", "splitlines": ["a", "b", "c", "", "d"], "strip": "a\r\nb\rc\n\nd", "split": ["a", "b", "c", "d"]},
+  {"text": "\n", "splitlines": [""], "strip": "", "split": []},
+  {"text": "x\u000by\fz\u001cw\u001d\u001eq r s", "splitlines": ["x", "y", "z", "w", "", "", "q", "r", "s"], "strip": "x\u000by\fz\u001cw\u001d\u001eq r s", "split": ["x", "y", "z", "w", "q", "r", "s"]},
+  {"text": "trailing\r\n", "splitlines": ["trailing"], "strip": "trailing", "split": ["trailing"]},
+  {"text": "  both  ", "splitlines": ["  both  "], "strip": "both", "split": ["both"]},
+  {"text": "\t\u001c\u001f text  　", "splitlines": ["\t", "\u001f text  　"], "strip": "text", "split": ["text"]},
+  {"text": "\u001bnot space\u001b", "splitlines": ["\u001bnot space\u001b"], "strip": "\u001bnot space\u001b", "split": ["\u001bnot", "space\u001b"]}
+ ],
+ "paths": [
+  {"path": "a/b.tar.gz", "suffix": ".gz", "stem": "b.tar"},
+  {"path": ".json", "suffix": "", "stem": ".json"},
+  {"path": "name.", "suffix": "", "stem": "name."},
+  {"path": "a/.hidden", "suffix": "", "stem": ".hidden"},
+  {"path": "plain", "suffix": "", "stem": "plain"},
+  {"path": "dir/", "suffix": "", "stem": "dir"},
+  {"path": "x.JSON", "suffix": ".JSON", "stem": "x"},
+  {"path": "a.b.c", "suffix": ".c", "stem": "a.b"},
+  {"path": "", "suffix": "", "stem": ""}
+ ],
+ "capitalize": [
+  {"text": "hello", "capitalize": "Hello"},
+  {"text": "HELLO wORLD", "capitalize": "Hello world"},
+  {"text": "ǆemal", "capitalize": "ǅemal"},
+  {"text": "", "capitalize": ""},
+  {"text": "1abc", "capitalize": "1abc"},
+  {"text": "élan", "capitalize": "Élan"}
+ ]
+}
