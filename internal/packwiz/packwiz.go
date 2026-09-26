@@ -4,7 +4,6 @@ package packwiz
 import (
 	"context"
 	"errors"
-	"os"
 	"strings"
 
 	"github.com/HaXrDEV/Modpack-Tool/internal/fail"
@@ -33,12 +32,6 @@ type CLI struct {
 }
 
 func (c *CLI) run(ctx context.Context, echo, check bool, args ...string) error {
-	if _, err := os.Stat(c.Exe); err != nil {
-		if _, err := proc.LookPath(c.Exe); err != nil {
-			return fail.Errorf("packwiz was not found at '%s'. Install it with "+
-				"'go install github.com/packwiz/packwiz@latest' or set packwiz_exe_path in the tool's config.yml.", c.Exe)
-		}
-	}
 	log := c.Log
 	if log == nil {
 		log = func(string) {}
@@ -51,7 +44,8 @@ func (c *CLI) run(ctx context.Context, echo, check bool, args ...string) error {
 	// packwiz changes files, so a cancel lets it finish instead of killing it halfway.
 	result, err := proc.Run(ctx, proc.Spec{Name: c.Exe, Args: args, Dir: c.PackDir, Output: output, Changes: true})
 	if errors.Is(err, proc.ErrNotFound) {
-		return fail.Errorf("packwiz was not found at '%s'.", c.Exe)
+		return fail.Errorf("packwiz was not found at '%s'. Install it with "+
+			"'go install github.com/packwiz/packwiz@latest' or set packwiz_exe_path in the tool's config.yml.", c.Exe)
 	} else if err != nil {
 		return fail.Wrapf(err, "Could not start packwiz: %v", err)
 	}

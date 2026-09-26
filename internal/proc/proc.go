@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"os/exec"
 	"strings"
@@ -17,6 +16,8 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/HaXrDEV/Modpack-Tool/internal/files"
 )
 
 // Spec describes one command.
@@ -55,20 +56,13 @@ func Run(ctx context.Context, spec Spec) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
-	name := spec.Name
-	if !strings.ContainsAny(name, `\/`) {
-		path, err := LookPath(name)
-		if err != nil {
-			return Result{}, ErrNotFound
-		}
-		name = path
-	} else if _, err := os.Stat(name); errors.Is(err, fs.ErrNotExist) {
+	// Explicit paths go through LookPath too, so "C:\tools\packwiz" finds packwiz.exe.
+	name, err := LookPath(spec.Name)
+	if err != nil {
 		return Result{}, ErrNotFound
 	}
-	if spec.Dir != "" {
-		if info, err := os.Stat(spec.Dir); err != nil || !info.IsDir() {
-			return Result{}, fmt.Errorf("can't run %s in %s: the folder doesn't exist", spec.Name, spec.Dir)
-		}
+	if spec.Dir != "" && !files.IsDir(spec.Dir) {
+		return Result{}, fmt.Errorf("can't run %s in %s: the folder doesn't exist", spec.Name, spec.Dir)
 	}
 	runCtx := ctx
 	if spec.Changes {
@@ -98,7 +92,7 @@ func Run(ctx context.Context, spec Spec) (Result, error) {
 	} else {
 		cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	}
-	err := cmd.Run()
+	err = cmd.Run()
 	if lines != nil {
 		lines.Flush()
 	}

@@ -1,7 +1,6 @@
 package project
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -41,10 +40,6 @@ func windowsNewlines(t *testing.T) {
 // The goldens are what the Python tool wrote for each input (scripts/golden.py at the python-final tag).
 func TestSettingsMatchPython(t *testing.T) {
 	windowsNewlines(t)
-	data, err := os.ReadFile("testdata/settings.json")
-	if err != nil {
-		t.Fatal(err)
-	}
 	var golden struct {
 		Cases []struct {
 			Name     string          `json:"name"`
@@ -57,9 +52,7 @@ func TestSettingsMatchPython(t *testing.T) {
 			Error    string          `json:"error"`
 		} `json:"cases"`
 	}
-	if err := json.Unmarshal(data, &golden); err != nil {
-		t.Fatal(err)
-	}
+	testutil.ReadJSON(t, "testdata/settings.json", &golden)
 	for _, c := range golden.Cases {
 		root := filepath.Join(t.TempDir(), "Pack")
 		os.MkdirAll(filepath.Join(root, "Packwiz", "mods"), 0o755)

@@ -14,8 +14,6 @@ func wrap(text string, width int) string { return ansi.Wrap(text, max(10, width)
 // truncate shortens a line to width with an ellipsis.
 func truncate(text string, width int) string { return ansi.Truncate(text, max(1, width), "…") }
 
-func lipHeight(s string) int { return lipgloss.Height(s) }
-
 // box draws a bordered panel with a title and an optional counter in the top
 // border: ╭ Title ───── 2 of 5 ╮.
 func box(t *Theme, border color.Color, title, counter, body string, width int) string {

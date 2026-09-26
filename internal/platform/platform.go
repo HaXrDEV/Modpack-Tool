@@ -5,19 +5,24 @@ package platform
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/HaXrDEV/Modpack-Tool/internal/fail"
 )
@@ -157,20 +162,20 @@ func (c *Client) cfHeaders() map[string]string {
 }
 
 // request sends a request with retries for rate limits, network hiccups and
-// server errors, and decodes the JSON answer into out. It returns false when
-// the resource doesn't exist (404).
-func (c *Client) request(ctx context.Context, method, target string, body any, headers map[string]string, out any) (bool, error) {
+// server errors, and decodes the JSON answer into out. A resource that doesn't
+// exist (404) leaves out as it is.
+func (c *Client) request(ctx context.Context, method, target string, body any, headers map[string]string, out any) error {
 	var payload []byte
 	if body != nil {
 		var err error
 		if payload, err = json.Marshal(body); err != nil {
-			return false, err
+			return err
 		}
 	}
 	for attempt := 0; attempt < 5; attempt++ {
 		req, err := http.NewRequestWithContext(ctx, method, target, bytes.NewReader(payload))
 		if err != nil {
-			return false, err
+			return err
 		}
 		req.Header.Set("User-Agent", UserAgent)
 		if body != nil {
@@ -182,13 +187,13 @@ func (c *Client) request(ctx context.Context, method, target string, body any, h
 		resp, err := c.HTTP.Do(req)
 		if err != nil {
 			if ctx.Err() != nil {
-				return false, ctx.Err()
+				return ctx.Err()
 			}
 			if attempt == 4 {
-				return false, fail.Wrapf(err, "Network error talking to %s: %v", target, err)
+				return fail.Wrapf(err, "Network error talking to %s: %v", target, err)
 			}
 			if err := c.Sleep(ctx, backoff(attempt)); err != nil {
-				return false, err
+				return err
 			}
 			continue
 		}
@@ -197,13 +202,13 @@ func (c *Client) request(ctx context.Context, method, target string, body any, h
 		switch {
 		case err != nil:
 			if attempt == 4 {
-				return false, fail.Wrapf(err, "Network error talking to %s: %v", target, err)
+				return fail.Wrapf(err, "Network error talking to %s: %v", target, err)
 			}
 			err = c.Sleep(ctx, backoff(attempt))
 		case resp.StatusCode == http.StatusTooManyRequests:
 			err = c.Sleep(ctx, retryAfter(resp.Header, attempt))
 		case resp.StatusCode == http.StatusNotFound:
-			return false, nil
+			return nil
 		case resp.StatusCode >= 500 && attempt < 4:
 			err = c.Sleep(ctx, backoff(attempt))
 		case resp.StatusCode >= 400:
@@ -211,18 +216,18 @@ func (c *Client) request(ctx context.Context, method, target string, body any, h
 			if len(text) > 200 {
 				text = text[:200]
 			}
-			return false, fail.Errorf("%s %s returned HTTP %d: %s", method, target, resp.StatusCode, text)
+			return fail.Errorf("%s %s returned HTTP %d: %s", method, target, resp.StatusCode, text)
 		default:
 			if err := json.Unmarshal(data, out); err != nil {
-				return false, fail.Wrapf(err, "%s %s returned something that isn't JSON: %v", method, target, err)
+				return fail.Wrapf(err, "%s %s returned something that isn't JSON: %v", method, target, err)
 			}
-			return true, nil
+			return nil
 		}
 		if err != nil {
-			return false, err
+			return err
 		}
 	}
-	return false, fail.Errorf("%s kept rate-limiting requests; try again in a minute.", target)
+	return fail.Errorf("%s kept rate-limiting requests; try again in a minute.", target)
 }
 
 func backoff(attempt int) time.Duration { return time.Duration(1<<attempt) * time.Second }
@@ -245,58 +250,61 @@ func retryAfter(header http.Header, attempt int) time.Duration {
 	return min(max(wait, time.Second), time.Minute)
 }
 
-func uniqueSorted[T string | int64 | uint32](values []T) []T {
-	seen := map[T]bool{}
-	var result []T
-	for _, v := range values {
-		var zero T
-		if v != zero && !seen[v] {
-			seen[v] = true
-			result = append(result, v)
-		}
+// batch looks ids up in chunks of size, a few chunks at a time: the ids
+// without duplicates and zero values, and the answers merged.
+func batch[K cmp.Ordered, V any](ctx context.Context, ids []K, size int, fetch func(context.Context, []K) (map[K]V, error)) (map[K]V, error) {
+	var zero K
+	unique := slices.DeleteFunc(slices.Clone(ids), func(id K) bool { return id == zero })
+	slices.Sort(unique)
+	found := map[K]V{}
+	var mu sync.Mutex
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(4)
+	for chunk := range slices.Chunk(slices.Compact(unique), size) {
+		group.Go(func() error {
+			part, err := fetch(groupCtx, chunk)
+			if err != nil {
+				return err
+			}
+			mu.Lock()
+			maps.Copy(found, part)
+			mu.Unlock()
+			return nil
+		})
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
-	return result
+	if err := group.Wait(); err != nil {
+		return nil, err
+	}
+	return found, nil
 }
 
-func chunks[T any](values []T, size int) [][]T {
-	var result [][]T
-	for start := 0; start < len(values); start += size {
-		result = append(result, values[start:min(start+size, len(values))])
+// byID indexes items by their id.
+func byID[K comparable, V any](items []V, id func(V) K) map[K]V {
+	result := make(map[K]V, len(items))
+	for _, item := range items {
+		result[id(item)] = item
 	}
 	return result
 }
 
 // ModrinthVersions returns {version id: version} for the given ids.
 func (c *Client) ModrinthVersions(ctx context.Context, ids []string) (map[string]Version, error) {
-	found := map[string]Version{}
-	for _, chunk := range chunks(uniqueSorted(ids), 100) {
+	return batch(ctx, ids, 100, func(ctx context.Context, chunk []string) (map[string]Version, error) {
 		encoded, _ := json.Marshal(chunk)
 		var versions []Version
-		if _, err := c.request(ctx, "GET", c.Modrinth+"/versions?ids="+url.QueryEscape(string(encoded)), nil, nil, &versions); err != nil {
-			return nil, err
-		}
-		for _, v := range versions {
-			found[v.ID] = v
-		}
-	}
-	return found, nil
+		err := c.request(ctx, "GET", c.Modrinth+"/versions?ids="+url.QueryEscape(string(encoded)), nil, nil, &versions)
+		return byID(versions, func(v Version) string { return v.ID }), err
+	})
 }
 
 // ModrinthProjects returns {project id: project} for the given ids.
 func (c *Client) ModrinthProjects(ctx context.Context, ids []string) (map[string]Project, error) {
-	found := map[string]Project{}
-	for _, chunk := range chunks(uniqueSorted(ids), 100) {
+	return batch(ctx, ids, 100, func(ctx context.Context, chunk []string) (map[string]Project, error) {
 		encoded, _ := json.Marshal(chunk)
 		var projects []Project
-		if _, err := c.request(ctx, "GET", c.Modrinth+"/projects?ids="+url.QueryEscape(string(encoded)), nil, nil, &projects); err != nil {
-			return nil, err
-		}
-		for _, p := range projects {
-			found[p.ID] = p
-		}
-	}
-	return found, nil
+		err := c.request(ctx, "GET", c.Modrinth+"/projects?ids="+url.QueryEscape(string(encoded)), nil, nil, &projects)
+		return byID(projects, func(p Project) string { return p.ID }), err
+	})
 }
 
 // ModrinthProjectVersions returns a project's versions, newest first,
@@ -316,7 +324,7 @@ func (c *Client) ModrinthProjectVersions(ctx context.Context, projectID string, 
 		target += "?" + query.Encode()
 	}
 	var versions []Version
-	if _, err := c.request(ctx, "GET", target, nil, nil, &versions); err != nil {
+	if err := c.request(ctx, "GET", target, nil, nil, &versions); err != nil {
 		return nil, err
 	}
 	return versions, nil
@@ -324,39 +332,26 @@ func (c *Client) ModrinthProjectVersions(ctx context.Context, projectID string, 
 
 // CurseForgeFiles returns {file id: file} for the given CurseForge file ids.
 func (c *Client) CurseForgeFiles(ctx context.Context, ids []int64) (map[int64]CFFile, error) {
-	found := map[int64]CFFile{}
-	for _, chunk := range chunks(uniqueSorted(ids), 250) {
+	return batch(ctx, ids, 250, func(ctx context.Context, chunk []int64) (map[int64]CFFile, error) {
 		var answer struct{ Data []CFFile }
-		if _, err := c.request(ctx, "POST", c.CurseForge+"/mods/files", map[string]any{"fileIds": chunk}, c.cfHeaders(), &answer); err != nil {
-			return nil, err
-		}
-		for _, f := range answer.Data {
-			found[f.ID] = f
-		}
-	}
-	return found, nil
+		err := c.request(ctx, "POST", c.CurseForge+"/mods/files", map[string]any{"fileIds": chunk}, c.cfHeaders(), &answer)
+		return byID(answer.Data, func(f CFFile) int64 { return f.ID }), err
+	})
 }
 
 // CurseForgeMods returns {project id: project} for the given CurseForge project ids.
 func (c *Client) CurseForgeMods(ctx context.Context, ids []int64) (map[int64]CFMod, error) {
-	found := map[int64]CFMod{}
-	for _, chunk := range chunks(uniqueSorted(ids), 250) {
+	return batch(ctx, ids, 250, func(ctx context.Context, chunk []int64) (map[int64]CFMod, error) {
 		var answer struct{ Data []CFMod }
-		if _, err := c.request(ctx, "POST", c.CurseForge+"/mods", map[string]any{"modIds": chunk}, c.cfHeaders(), &answer); err != nil {
-			return nil, err
-		}
-		for _, m := range answer.Data {
-			found[m.ID] = m
-		}
-	}
-	return found, nil
+		err := c.request(ctx, "POST", c.CurseForge+"/mods", map[string]any{"modIds": chunk}, c.cfHeaders(), &answer)
+		return byID(answer.Data, func(m CFMod) int64 { return m.ID }), err
+	})
 }
 
 // CurseForgeFingerprints returns {fingerprint: match} for the fingerprints
 // CurseForge knows exactly.
 func (c *Client) CurseForgeFingerprints(ctx context.Context, fingerprints []uint32) (map[uint32]Match, error) {
-	found := map[uint32]Match{}
-	for _, chunk := range chunks(uniqueSorted(fingerprints), 50) {
+	return batch(ctx, fingerprints, 50, func(ctx context.Context, chunk []uint32) (map[uint32]Match, error) {
 		var answer struct {
 			Data struct {
 				ExactMatches []struct {
@@ -365,9 +360,10 @@ func (c *Client) CurseForgeFingerprints(ctx context.Context, fingerprints []uint
 				ExactFingerprints []uint32 `json:"exactFingerprints"`
 			} `json:"data"`
 		}
-		if _, err := c.request(ctx, "POST", c.CurseForge+"/fingerprints", map[string]any{"fingerprints": chunk}, c.cfHeaders(), &answer); err != nil {
+		if err := c.request(ctx, "POST", c.CurseForge+"/fingerprints", map[string]any{"fingerprints": chunk}, c.cfHeaders(), &answer); err != nil {
 			return nil, err
 		}
+		found := map[uint32]Match{}
 		for i, match := range answer.Data.ExactMatches {
 			file := match.File
 			if file.ID == 0 || file.ModID == 0 {
@@ -380,13 +376,13 @@ func (c *Client) CurseForgeFingerprints(ctx context.Context, fingerprints []uint
 			}
 			found[fingerprint] = Match{ProjectID: file.ModID, FileID: file.ID}
 		}
-	}
-	return found, nil
+		return found, nil
+	})
 }
 
 // Download fetches a file with the same kind of retries as the API calls.
 func (c *Client) Download(ctx context.Context, target string, newWriter func() (io.Writer, error)) error {
-	for attempt := 0; attempt < 4; attempt++ {
+	for attempt := 0; ; attempt++ {
 		err := c.downloadOnce(ctx, target, newWriter)
 		var retry retryable
 		switch {
@@ -403,7 +399,6 @@ func (c *Client) Download(ctx context.Context, target string, newWriter func() (
 			return err
 		}
 	}
-	return fail.Errorf("Downloading %s kept failing; try again later.", target)
 }
 
 type retryable struct{ err error }

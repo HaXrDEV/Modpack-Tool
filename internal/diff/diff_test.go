@@ -58,8 +58,8 @@ func TestSideTagsAndSummary(t *testing.T) {
 func TestHashOnlyUpdateIsLabelled(t *testing.T) {
 	old := tree(map[string]string{"mods/a.pw.toml": testutil.Metafile("A", "a.jar")})
 	now := tree(map[string]string{"mods/a.pw.toml": strings.Replace(testutil.Metafile("A", "a.jar"), `hash = "ahash"`, `hash = "0123456789abcdef"`, 1)})
-	if want := []Update{{"A", "a.jar (hash ahash)", "a.jar (hash 0123456789ab)"}}; !reflect.DeepEqual(Category(old, now, "mods").Updated, want) {
-		t.Error(Category(old, now, "mods").Updated)
+	if want := []Update{{"A", "a.jar (hash ahash)", "a.jar (hash 0123456789ab)"}}; !reflect.DeepEqual(Compare(old, now, "", "", "", false).Mods.Updated, want) {
+		t.Error(Compare(old, now, "", "", "", false).Mods.Updated)
 	}
 }
 
@@ -81,12 +81,12 @@ func TestConfigDetectsYOSBRMoves(t *testing.T) {
 func TestConfigDiffIsFastOnBigRewrites(t *testing.T) {
 	var oldLines, newLines []string
 	for i := 0; i < 3000; i++ {
-		oldLines = append(oldLines, `"key`+itoa(i)+`": `+itoa(i)+`,`)
+		oldLines = append(oldLines, `"key`+strconv.Itoa(i)+`": `+strconv.Itoa(i)+`,`)
 		value := i
 		if i%2 == 0 {
 			value = i + 1
 		}
-		newLines = append(newLines, `"key`+itoa(i)+`": `+itoa(value)+`,`)
+		newLines = append(newLines, `"key`+strconv.Itoa(i)+`": `+strconv.Itoa(value)+`,`)
 	}
 	old := map[string][]byte{"big.json": []byte(strings.Join(oldLines, "\n"))}
 	now := map[string][]byte{"big.json": []byte(strings.Join(newLines, "\n"))}
@@ -103,5 +103,3 @@ func TestConfigDiffIsFastOnBigRewrites(t *testing.T) {
 		t.Error(summary)
 	}
 }
-
-func itoa(n int) string { return strconv.Itoa(n) }

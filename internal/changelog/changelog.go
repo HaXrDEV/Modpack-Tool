@@ -20,6 +20,7 @@ import (
 
 	"github.com/HaXrDEV/Modpack-Tool/internal/diff"
 	"github.com/HaXrDEV/Modpack-Tool/internal/fail"
+	"github.com/HaXrDEV/Modpack-Tool/internal/files"
 	"github.com/HaXrDEV/Modpack-Tool/internal/project"
 	"github.com/HaXrDEV/Modpack-Tool/internal/pycompat"
 	"github.com/HaXrDEV/Modpack-Tool/internal/version"
@@ -62,24 +63,6 @@ func Stem(v, minecraft string) string {
 	return v + "+" + minecraft
 }
 
-// ParseFilename returns (version, minecraft) from a changelog file name, or
-// empty strings.
-func ParseFilename(filename string) (string, string) {
-	stem := pycompat.Stem(filename)
-	if strings.Contains(stem, "+") {
-		v, mc, _ := strings.Cut(stem, "+")
-		if v, mc = pycompat.Strip(v), pycompat.Strip(mc); v != "" && mc != "" {
-			return v, mc
-		}
-		return "", ""
-	}
-	if version.IsMCPrefixed(stem) {
-		mc, _, _ := strings.Cut(stem, "-")
-		return stem, mc
-	}
-	return "", ""
-}
-
 // Path is the changelog YAML of a version (the current one when empty),
 // whether it exists or not.
 func Path(p *project.Project, v, minecraft string) string {
@@ -90,9 +73,9 @@ func Path(p *project.Project, v, minecraft string) string {
 		minecraft = p.Minecraft
 	}
 	canonical := filepath.Join(p.ChangelogDir(), Stem(v, minecraft)+".yml")
-	if _, err := os.Stat(canonical); err != nil {
+	if !files.Exists(canonical) {
 		for _, name := range []string{v + "+" + minecraft + ".yml", v + ".yml", v + "+" + minecraft + ".yaml"} {
-			if _, err := os.Stat(filepath.Join(p.ChangelogDir(), name)); err == nil {
+			if files.Exists(filepath.Join(p.ChangelogDir(), name)) {
 				return filepath.Join(p.ChangelogDir(), name)
 			}
 		}
@@ -169,12 +152,6 @@ func parse(path, text string) (*Changelog, error) {
 		c.values[key] = root.Content[i+1]
 	}
 	return c, nil
-}
-
-// Exists reports whether a file exists.
-func Exists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
 }
 
 // Keys are the top-level keys in file order.
@@ -467,9 +444,8 @@ func BuildRecord(p *project.Project, c *Changelog, d *diff.PackDiff, released st
 	r.BugFixes = nonNil(c.Lines("Bug Fixes"))
 	r.ScriptChanges = nonNil(c.Lines("Script/Datapack changes"))
 	r.ConfigChanges = nonNil(c.Lines("Config Changes"))
-	empty := diff.CategoryDiff{}
 	if d == nil {
-		d = &diff.PackDiff{Mods: empty, ResourcePacks: empty, ShaderPacks: empty}
+		d = &diff.PackDiff{}
 	}
 	r.Mods = recordDiff(d.Mods, p.Settings.SideTags)
 	r.ResourcePacks = recordDiff(d.ResourcePacks, p.Settings.SideTags)
@@ -555,6 +531,16 @@ func ReleaseNotes(p *project.Project, c *Changelog, platform string, warn func(s
 // NotesFiles are the release notes files, by platform.
 var NotesFiles = []struct{ Platform, Name string }{
 	{"curseforge", "CurseForge-Release.md"}, {"modrinth", "Modrinth-Release.md"},
+}
+
+// NotesFile is the name of a platform's release notes file.
+func NotesFile(platform string) string {
+	for _, f := range NotesFiles {
+		if f.Platform == platform {
+			return f.Name
+		}
+	}
+	return ""
 }
 
 // WriteReleaseNotes writes both release notes files and returns their paths.

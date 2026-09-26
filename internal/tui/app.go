@@ -14,8 +14,6 @@ import (
 
 	"github.com/HaXrDEV/Modpack-Tool/internal/app"
 	"github.com/HaXrDEV/Modpack-Tool/internal/config"
-	"github.com/HaXrDEV/Modpack-Tool/internal/fail"
-	"github.com/HaXrDEV/Modpack-Tool/internal/git"
 	"github.com/HaXrDEV/Modpack-Tool/internal/ui"
 	"github.com/HaXrDEV/Modpack-Tool/internal/workflow"
 )
@@ -199,9 +197,6 @@ func (a *App) open(root string) tea.Cmd {
 		defer a.runs.Done()
 		var err error
 		env, notes, err = app.Open(ctx, a.cfg, root, session)
-		if err == nil && env == nil {
-			err = fail.Errorf("Couldn't open %s.", root)
-		}
 		for _, n := range notes {
 			session.Info(n)
 		}
@@ -228,11 +223,8 @@ func (a *App) loadStatus(seq int) tea.Cmd {
 
 func (a *App) statusEnv() *workflow.Env {
 	projectCopy := *a.env.Project
-	env := *a.env
-	env.Project = &projectCopy
-	env.UI = ui.Discard
-	env.Git = git.New(projectCopy.Root) // Fresh, so tags made by a run are seen.
-	return &env
+	// A fresh env (and git repo, so tags made by a run are seen) that shows nothing.
+	return workflow.NewEnv(ui.Discard, &projectCopy, a.cfg.PackwizExe(), a.env.API, config.CacheDir())
 }
 
 // start runs an action in its own goroutine, reporting to a run screen.

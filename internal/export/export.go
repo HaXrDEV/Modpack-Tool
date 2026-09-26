@@ -10,11 +10,12 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"net/url"
 	"os"
 	"path"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 	"github.com/HaXrDEV/Modpack-Tool/internal/platform"
 	"github.com/HaXrDEV/Modpack-Tool/internal/project"
 	"github.com/HaXrDEV/Modpack-Tool/internal/pycompat"
+	"github.com/HaXrDEV/Modpack-Tool/internal/ui"
 )
 
 // Hosts a .mrpack may download from; anything else must be bundled.
@@ -141,15 +143,11 @@ func installPath(mod pack.Mod) string {
 	return filename
 }
 
-func sortByRel(mods []pack.Mod) {
-	sort.SliceStable(mods, func(i, j int) bool { return strings.ToLower(mods[i].Rel) < strings.ToLower(mods[j].Rel) })
-}
-
-// writeZip writes an archive to path via a ".part" file, so a failed build
+// writeZip writes an archive to path via a temporary file, so a failed build
 // never leaves a broken pack behind.
 func writeZip(path string, build func(zipWriter) error) error {
-	return files.WriteAtomicFrom(path, func(w io.Writer) error {
-		archive := zip.NewWriter(w)
+	return files.WriteAtomicFrom(path, func(f *os.File) error {
+		archive := zip.NewWriter(f)
 		if err := build(zipWriter{archive}); err != nil {
 			archive.Close()
 			return err
@@ -213,7 +211,7 @@ func ResolveOnCurseForge(ctx context.Context, mods []pack.Mod, store *Store) (ma
 		if err != nil {
 			return nil, err
 		}
-		step := store.Session.Step(fmt.Sprintf("Fingerprinting %d file%s for CurseForge", len(needBytes), plural(len(needBytes))))
+		step := store.Session.Step(fmt.Sprintf("Fingerprinting %d file%s for CurseForge", len(needBytes), ui.Plural(len(needBytes))))
 		for i, mod := range needBytes {
 			data, err := os.ReadFile(fetched[mod.Rel])
 			if err != nil {
@@ -285,8 +283,8 @@ func BuildCurseForge(ctx context.Context, p *project.Project, contents *Contents
 	var listed []listedMod
 	var others []pack.Mod
 	for _, mod := range contents.ForSide("client") {
-		if cf := mod.CurseForge(); cf != nil {
-			listed = append(listed, listedMod{mod, platform.Match{ProjectID: pack.Int(cf["project-id"]), FileID: pack.Int(cf["file-id"])}})
+		if mod.CurseForge() != nil {
+			listed = append(listed, listedMod{mod, platform.Match{ProjectID: mod.CurseForgeProject(), FileID: mod.CurseForgeFile()}})
 		} else {
 			others = append(others, mod)
 		}
@@ -322,7 +320,7 @@ func BuildCurseForge(ctx context.Context, p *project.Project, contents *Contents
 	manifest.ManifestType, manifest.ManifestVersion = "minecraftModpack", 1
 	manifest.Name, manifest.Version, manifest.Author = p.Name, p.Version, contents.Author
 	manifest.Overrides = "overrides"
-	sort.SliceStable(listed, func(i, j int) bool { return strings.ToLower(listed[i].mod.Rel) < strings.ToLower(listed[j].mod.Rel) })
+	pycompat.SortLowerBy(listed, func(l listedMod) string { return l.mod.Rel })
 	manifest.Files = []cfFile{}
 	for _, l := range listed {
 		required := !(l.mod.Optional() && !l.mod.OptionalDefault())
@@ -409,8 +407,8 @@ func BuildModrinth(ctx context.Context, p *project.Project, contents *Contents, 
 	for _, mod := range contents.Mods {
 		if mod.InstallsOn("client") || mod.InstallsOn("server") {
 			mods = append(mods, mod)
-			if mr := mod.Modrinth(); mr != nil {
-				versionIDs = append(versionIDs, pycompat.Or(mr["version"], ""))
+			if mod.Modrinth() != nil {
+				versionIDs = append(versionIDs, mod.ModrinthVersion())
 			}
 		}
 	}
@@ -437,9 +435,9 @@ func BuildModrinth(ctx context.Context, p *project.Project, contents *Contents, 
 			continue
 		}
 		var info *platform.File
-		if mr := mod.Modrinth(); mr != nil {
+		if mod.Modrinth() != nil {
 			format, value := mod.Hash()
-			version := versions[pycompat.Or(mr["version"], "")]
+			version := versions[mod.ModrinthVersion()]
 			for i, f := range version.Files {
 				if f.Hashes[format] == value || f.Filename == mod.Filename() {
 					info = &version.Files[i]
@@ -456,7 +454,7 @@ func BuildModrinth(ctx context.Context, p *project.Project, contents *Contents, 
 	fetched := map[string]string{}
 	if len(needBytes)+len(bundled) > 0 {
 		var err error
-		if fetched, err = store.Fetch(ctx, append(append([]pack.Mod{}, needBytes...), bundled...)); err != nil {
+		if fetched, err = store.Fetch(ctx, slices.Concat(needBytes, bundled)); err != nil {
 			return nil, "", err
 		}
 	}
@@ -476,7 +474,7 @@ func BuildModrinth(ctx context.Context, p *project.Project, contents *Contents, 
 		}
 		index.Dependencies.Set(key, p.LoaderVersion)
 	}
-	sort.SliceStable(entries, func(i, j int) bool { return strings.ToLower(entries[i].mod.Rel) < strings.ToLower(entries[j].mod.Rel) })
+	pycompat.SortLowerBy(entries, func(e entry) string { return e.mod.Rel })
 	for _, e := range entries {
 		index.Files = append(index.Files, mrFile{installPath(e.mod), mrHashes{e.sha1, e.sha512}, env(e.mod), []string{e.url}, e.size})
 	}
@@ -536,7 +534,7 @@ func BuildServer(ctx context.Context, p *project.Project, contents *Contents, st
 	}
 	entries := map[string]string{} // Archive name -> source file.
 	templateJars := 0
-	if info, err := os.Stat(template); err == nil && info.IsDir() {
+	if files.IsDir(template) {
 		err := filepath.WalkDir(template, func(source string, entry fs.DirEntry, err error) error {
 			if err != nil || !entry.Type().IsRegular() {
 				return err
@@ -561,13 +559,8 @@ func BuildServer(ctx context.Context, p *project.Project, contents *Contents, st
 			entries[name] = fetched[mod.Rel]
 		}
 	}
-	names := make([]string, 0, len(entries))
-	for name := range entries {
-		names = append(names, name)
-	}
-	sort.Slice(names, func(i, j int) bool { return strings.ToLower(names[i]) < strings.ToLower(names[j]) })
 	err = writeZip(output, func(z zipWriter) error {
-		for _, name := range names {
+		for _, name := range pycompat.SortedLower(slices.Collect(maps.Keys(entries))) {
 			if err := z.addFile(name, entries[name]); err != nil {
 				return err
 			}
@@ -579,11 +572,7 @@ func BuildServer(ctx context.Context, p *project.Project, contents *Contents, st
 		summary += fmt.Sprintf(" + %d from %s", templateJars, filepath.Base(template))
 	}
 	if len(skipped) > 0 {
-		var skippedNames []string
-		for _, mod := range skipped {
-			skippedNames = append(skippedNames, mod.Name())
-		}
-		summary += ", left out: " + strings.Join(skippedNames, ", ")
+		summary += ", left out: " + strings.Join(pack.Names(skipped), ", ")
 	}
 	return nil, summary, err
 }
@@ -664,7 +653,7 @@ func Export(ctx context.Context, p *project.Project, kinds []string, store *Stor
 	} else {
 		lines = append(lines, "No files are bundled; everything is downloaded from CurseForge or Modrinth.", "")
 	}
-	if _, err := os.Stat(report); len(bundles) > 0 || err == nil { // An old list must never describe a new release.
+	if len(bundles) > 0 || files.Exists(report) { // An old list must never describe a new release.
 		if err := pycompat.WriteText(report, strings.Join(lines, "\n")); err != nil {
 			return nil, err
 		}

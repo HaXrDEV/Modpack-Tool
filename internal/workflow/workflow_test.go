@@ -2,7 +2,6 @@ package workflow
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/HaXrDEV/Modpack-Tool/internal/changelog"
 	"github.com/HaXrDEV/Modpack-Tool/internal/export"
+	"github.com/HaXrDEV/Modpack-Tool/internal/files"
 	"github.com/HaXrDEV/Modpack-Tool/internal/git"
 	"github.com/HaXrDEV/Modpack-Tool/internal/pack"
 	"github.com/HaXrDEV/Modpack-Tool/internal/platform"
@@ -106,9 +106,7 @@ func repoProject(t *testing.T) *fixture {
 	testutil.Write(t, filepath.Join(root, "modlist.md"), "old")
 	testutil.Write(t, filepath.Join(root, "Changelogs", "1.0.0+1.21.11.yml"), "Update overview:\n  - First.\n")
 	testutil.Write(t, filepath.Join(root, "modpack-tool.yml"), "exports: []\n")
-	testutil.Git(t, root, "init", "-q", "-b", "main")
-	testutil.Git(t, root, "config", "user.email", "t@example.com")
-	testutil.Git(t, root, "config", "user.name", "Test")
+	testutil.InitRepo(t, root)
 	testutil.Git(t, root, "add", "-A")
 	testutil.Git(t, root, "commit", "-q", "-m", "1.0.0")
 	testutil.Git(t, root, "tag", "1.0.0")
@@ -124,13 +122,6 @@ func mustNewVersion(t *testing.T, f *fixture, v string) {
 	}
 }
 
-func readJSON(t *testing.T, path string, into any) {
-	t.Helper()
-	if err := json.Unmarshal([]byte(testutil.Read(t, path)), into); err != nil {
-		t.Fatal(err)
-	}
-}
-
 // py: test_workflows.py::test_new_version_bumps_after_a_release
 func TestNewVersionBumpsAfterARelease(t *testing.T) {
 	f := repoProject(t)
@@ -141,11 +132,11 @@ func TestNewVersionBumpsAfterARelease(t *testing.T) {
 	if f.Project.Version != "1.0.1" {
 		t.Error(f.Project.Version)
 	}
-	if !changelog.Exists(filepath.Join(f.Project.ChangelogDir(), "1.0.1+1.21.11.yml")) {
+	if !files.Exists(filepath.Join(f.Project.ChangelogDir(), "1.0.1+1.21.11.yml")) {
 		t.Error("no changelog")
 	}
 	var bcc map[string]string
-	readJSON(t, filepath.Join(f.Project.PackDir(), "config", "bcc.json"), &bcc)
+	testutil.ReadJSON(t, filepath.Join(f.Project.PackDir(), "config", "bcc.json"), &bcc)
 	if bcc["modpackVersion"] != "1.0.1" {
 		t.Error(bcc)
 	}
@@ -160,12 +151,12 @@ func TestNewVersionRenamesAnUnreleasedVersion(t *testing.T) {
 	}
 	f.answers("r")
 	mustNewVersion(t, f, "2.0.0")
-	if changelog.Exists(filepath.Join(f.Project.ChangelogDir(), "1.1.0+1.21.11.yml")) ||
-		!changelog.Exists(filepath.Join(f.Project.ChangelogDir(), "2.0.0+1.21.11.yml")) {
+	if files.Exists(filepath.Join(f.Project.ChangelogDir(), "1.1.0+1.21.11.yml")) ||
+		!files.Exists(filepath.Join(f.Project.ChangelogDir(), "2.0.0+1.21.11.yml")) {
 		t.Error("changelog not renamed")
 	}
 	var record map[string]string
-	readJSON(t, filepath.Join(f.Project.DataDir(), "2.0.0+1.21.11.json"), &record)
+	testutil.ReadJSON(t, filepath.Join(f.Project.DataDir(), "2.0.0+1.21.11.json"), &record)
 	if record["version"] != "2.0.0" {
 		t.Error(record)
 	}
@@ -208,7 +199,7 @@ func TestBuildWritesRecordNotesAndPackFiles(t *testing.T) {
 		t.Fatal(err, f.session.Text())
 	}
 	var record changelog.Record
-	readJSON(t, filepath.Join(f.Project.DataDir(), "1.1.0+1.21.11.json"), &record)
+	testutil.ReadJSON(t, filepath.Join(f.Project.DataDir(), "1.1.0+1.21.11.json"), &record)
 	if !slices.Equal(record.Mods.Added, []string{"Beta Mod"}) || !slices.Equal(record.Overview, []string{"Added 'Beta Mod' mod."}) {
 		t.Error(record.Mods, record.Overview)
 	}
@@ -219,7 +210,7 @@ func TestBuildWritesRecordNotesAndPackFiles(t *testing.T) {
 		t.Error("modlist.md")
 	}
 	var modlist []string
-	readJSON(t, filepath.Join(f.Project.PackDir(), "config", "crash_assistant", "modlist.json"), &modlist)
+	testutil.ReadJSON(t, filepath.Join(f.Project.PackDir(), "config", "crash_assistant", "modlist.json"), &modlist)
 	if !slices.Equal(modlist, []string{"a-1.jar", "b-1.jar"}) {
 		t.Error(modlist)
 	}
@@ -361,7 +352,7 @@ func TestAlphaGuardRedirectsAndReverts(t *testing.T) {
 	pw := testutil.PackDir(t)
 	f := newFixture(t, filepath.Dir(pw))
 	f.Project.Settings.AlphaUpdates = "never"
-	mods, before, err := snapshot(f.Env)
+	mods, before, err := loadMods(f.Env)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -450,4 +441,19 @@ type cancelingPackwiz struct {
 func (c *cancelingPackwiz) UpdateAll(context.Context) error {
 	c.cancel()
 	return context.Canceled
+}
+
+// An action that looks at the mods several times warns about a broken metafile once.
+func TestUnreadableMetafilesAreWarnedAboutOnce(t *testing.T) {
+	pw := testutil.PackDir(t)
+	testutil.Write(t, filepath.Join(pw, "mods", "broken.pw.toml"), "name = \n")
+	f := newFixture(t, filepath.Dir(pw))
+	for range 3 {
+		if _, _, err := loadMods(f.Env); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := strings.Count(f.session.Text(), "broken.pw.toml"); n != 1 {
+		t.Errorf("warned %d times:\n%s", n, f.session.Text())
+	}
 }

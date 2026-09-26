@@ -1,11 +1,12 @@
 package pycompat
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
 	"testing"
+
+	"github.com/HaXrDEV/Modpack-Tool/internal/testutil"
 )
 
 type golden struct {
@@ -34,14 +35,8 @@ type golden struct {
 
 func loadGolden(t *testing.T) golden {
 	t.Helper()
-	data, err := os.ReadFile("testdata/golden.json")
-	if err != nil {
-		t.Fatal(err)
-	}
 	var g golden
-	if err := json.Unmarshal(data, &g); err != nil {
-		t.Fatal(err)
-	}
+	testutil.ReadJSON(t, "testdata/golden.json", &g)
 	return g
 }
 

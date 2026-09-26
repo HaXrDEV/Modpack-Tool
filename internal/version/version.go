@@ -11,7 +11,9 @@
 package version
 
 import (
+	"cmp"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -58,43 +60,11 @@ type Key struct {
 	Text    string // The lowercased version, the final tie-breaker.
 }
 
-// Compare orders keys: -1, 0 or +1.
+// Compare orders keys: -1, 0 or +1. The number lists compare like Python
+// tuples, element by element and then shorter first, as slices.Compare does.
 func Compare(a, b Key) int {
-	if c := compareInts([]int{a.Kind}, []int{b.Kind}); c != 0 {
-		return c
-	}
-	if c := compareInts(a.Main, b.Main); c != 0 {
-		return c
-	}
-	if c := compareInts(a.Release, b.Release); c != 0 {
-		return c
-	}
-	if c := compareInts(a.Pre[:], b.Pre[:]); c != 0 {
-		return c
-	}
-	if c := compareInts([]int{a.Post}, []int{b.Post}); c != 0 {
-		return c
-	}
-	return strings.Compare(a.Text, b.Text)
-}
-
-// compareInts compares like Python tuples: element by element, then shorter first.
-func compareInts(a, b []int) int {
-	for i := 0; i < len(a) && i < len(b); i++ {
-		if a[i] != b[i] {
-			if a[i] < b[i] {
-				return -1
-			}
-			return 1
-		}
-	}
-	switch {
-	case len(a) < len(b):
-		return -1
-	case len(a) > len(b):
-		return 1
-	}
-	return 0
+	return cmp.Or(cmp.Compare(a.Kind, b.Kind), slices.Compare(a.Main, b.Main), slices.Compare(a.Release, b.Release),
+		slices.Compare(a.Pre[:], b.Pre[:]), cmp.Compare(a.Post, b.Post), strings.Compare(a.Text, b.Text))
 }
 
 // Less reports whether version a sorts before version b.
@@ -137,9 +107,14 @@ func splitPreTag(text string) (string, [2]int) {
 // pep440Version is the part of packaging.Version the sort key uses.
 type pep440Version struct {
 	release []int
-	pre     *[2]any // (letter, number) or nil
+	pre     *preRelease // nil when there is none
 	post    *int
 	dev     *int
+}
+
+type preRelease struct {
+	letter string
+	number int
 }
 
 func parsePEP440(text string) (pep440Version, bool) {
@@ -157,7 +132,7 @@ func parsePEP440(text string) (pep440Version, bool) {
 		v.release = append(v.release, n)
 	}
 	if letter, number, ok := letterVersion(group("pre_l"), group("pre_n")); ok {
-		v.pre = &[2]any{letter, number}
+		v.pre = &preRelease{letter, number}
 	}
 	postNumber := group("post_n1")
 	if postNumber == "" {
@@ -203,11 +178,11 @@ func ParseKey(v string) Key {
 		pre := finalPre
 		switch {
 		case parsed.pre != nil:
-			rank, known := preRanks[parsed.pre[0].(string)]
+			rank, known := preRanks[parsed.pre.letter]
 			if !known {
 				rank = 3
 			}
-			pre = [2]int{rank, parsed.pre[1].(int)}
+			pre = [2]int{rank, parsed.pre.number}
 		case parsed.dev != nil:
 			pre = [2]int{0, *parsed.dev}
 		}
@@ -338,12 +313,8 @@ func NextVersion(current string) string {
 	if m := letterSuffix.FindStringSubmatch(current); m != nil {
 		current = m[1]
 	}
-	parts := strings.Split(current, ".")
-	last := parts[len(parts)-1]
-	if !pycompat.IsDigits(last) {
+	if parts := strings.Split(current, "."); !pycompat.IsDigits(parts[len(parts)-1]) {
 		return ""
 	}
-	n, _ := strconv.Atoi(last)
-	parts[len(parts)-1] = strconv.Itoa(n + 1)
-	return strings.Join(parts, ".")
+	return bumpRelease(current)
 }

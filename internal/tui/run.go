@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -85,9 +86,19 @@ func (r *runScreen) init() tea.Cmd { return tea.Batch(listen(r.events), r.spinne
 func (r *runScreen) update(msg tea.Msg) (screen, tea.Cmd) {
 	switch msg := msg.(type) {
 	case eventsMsg:
+		atBottom := r.showLog && r.log.AtBottom()
+		logged := false
 		var cmds []tea.Cmd
 		for _, e := range msg {
+			_, isLog := e.(logLine)
+			logged = logged || isLog
 			cmds = append(cmds, r.apply(e))
+		}
+		if logged && r.showLog { // Once per batch: a burst of output can be hundreds of lines.
+			r.log.SetContentLines(r.logs)
+			if atBottom {
+				r.log.GotoBottom()
+			}
 		}
 		if !r.done {
 			cmds = append(cmds, listen(r.events))
@@ -223,16 +234,12 @@ func (r *runScreen) apply(e event) tea.Cmd {
 			s.done, s.total = e.done, e.total
 		}
 	case stepEnded:
-		s := r.step(e.id)
-		if s == nil {
+		i := slices.IndexFunc(r.steps, func(s *runningStep) bool { return s.id == e.id })
+		if i < 0 {
 			break
 		}
-		for i, other := range r.steps {
-			if other == s {
-				r.steps = append(r.steps[:i], r.steps[i+1:]...)
-				break
-			}
-		}
+		s := r.steps[i]
+		r.steps = slices.Delete(r.steps, i, i+1)
 		switch {
 		case e.err != nil: // The reason is shown once, when the run ends.
 			r.history = append(r.history, entry{kind: "fail", text: s.title})
@@ -242,23 +249,10 @@ func (r *runScreen) apply(e event) tea.Cmd {
 			r.history = append(r.history, entry{kind: "ok", text: s.title})
 		}
 	case logLine:
-		r.logs = append(r.logs, e.text)
-		if len(r.logs) > logLimit {
-			r.logs = r.logs[len(r.logs)-logLimit:]
-		}
+		r.logs = bottom(append(r.logs, e.text), logLimit)
 		if len(r.steps) > 0 {
 			s := r.steps[len(r.steps)-1]
-			s.tail = append(s.tail, e.text)
-			if len(s.tail) > logTailLines {
-				s.tail = s.tail[len(s.tail)-logTailLines:]
-			}
-		}
-		if r.showLog {
-			atBottom := r.log.AtBottom()
-			r.log.SetContentLines(r.logs)
-			if atBottom {
-				r.log.GotoBottom()
-			}
+			s.tail = bottom(append(s.tail, e.text), logTailLines)
 		}
 	case note:
 		kind := "info"

@@ -11,7 +11,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -55,12 +55,7 @@ func (m Mod) Slug() string {
 }
 
 // Folder is the folder the metafile is in, e.g. "mods".
-func (m Mod) Folder() string {
-	if dir := path.Dir(m.Rel); dir != "" {
-		return dir
-	}
-	return "."
-}
+func (m Mod) Folder() string { return path.Dir(m.Rel) }
 
 // Category is the first folder of the path, e.g. "resourcepacks".
 func (m Mod) Category() string {
@@ -89,7 +84,7 @@ func (m Mod) SideRaw() string { return pycompat.Strip(pycompat.Or(m.Data["side"]
 // installs count as active, so "both(disabled)", "none" and typos don't.
 func (m Mod) Disabled() bool {
 	side := strings.ToLower(m.SideRaw())
-	return side != "" && !contains(validSides, side)
+	return side != "" && !slices.Contains(validSides, side)
 }
 
 // BaseSide is the side without the "(disabled)" marker; empty means both.
@@ -104,13 +99,13 @@ func (m Mod) BaseSide() string {
 // SideValid reports whether the side is one packwiz accepts ("none" is how
 // older packs marked disabled mods).
 func (m Mod) SideValid() bool {
-	return contains(validSides, m.BaseSide()) || m.BaseSide() == "none"
+	return slices.Contains(validSides, m.BaseSide()) || m.BaseSide() == "none"
 }
 
 // Side is the side used for installs and when re-enabling; anything else
 // counts as "both".
 func (m Mod) Side() string {
-	if contains(validSides, m.BaseSide()) {
+	if slices.Contains(validSides, m.BaseSide()) {
 		return m.BaseSide()
 	}
 	return "both"
@@ -158,6 +153,18 @@ func (m Mod) CurseForge() map[string]any { return m.source("curseforge") }
 // GitHub is the [update.github] table, or nil.
 func (m Mod) GitHub() map[string]any { return m.source("github") }
 
+// ModrinthVersion is the installed Modrinth version id ("" without one).
+func (m Mod) ModrinthVersion() string { return pycompat.Or(m.Modrinth()["version"], "") }
+
+// ModrinthProject is the Modrinth project id ("" without one).
+func (m Mod) ModrinthProject() string { return pycompat.Or(m.Modrinth()["mod-id"], "") }
+
+// CurseForgeFile is the installed CurseForge file id (0 without one).
+func (m Mod) CurseForgeFile() int64 { return Int(m.CurseForge()["file-id"]) }
+
+// CurseForgeProject is the CurseForge project id (0 without one).
+func (m Mod) CurseForgeProject() int64 { return Int(m.CurseForge()["project-id"]) }
+
 // Table returns value as a TOML table, or an empty one.
 func Table(value any) map[string]any {
 	if table, ok := value.(map[string]any); ok {
@@ -186,31 +193,28 @@ func Int(value any) int64 {
 	return 0
 }
 
-func contains(values []string, value string) bool {
-	for _, v := range values {
-		if v == value {
-			return true
-		}
+// Names are the mods' names.
+func Names(mods []Mod) []string {
+	names := make([]string, 0, len(mods))
+	for _, mod := range mods {
+		names = append(names, mod.Name())
 	}
-	return false
+	return names
 }
 
 // ParseMods returns the metafiles directly inside the category folders of a
 // tree, sorted by path. Unreadable metafiles are skipped with a warning.
 func ParseMods(tree Tree, categories []string) ([]Mod, []string) {
-	rels := make([]string, 0, len(tree))
+	var rels []string
 	for rel := range tree {
-		rels = append(rels, rel)
+		parts := strings.Split(rel, "/")
+		if len(parts) == 2 && slices.Contains(categories, parts[0]) && strings.HasSuffix(parts[1], ".toml") {
+			rels = append(rels, rel)
+		}
 	}
-	sort.Strings(rels)
-	pycompat.SortLower(rels)
 	var mods []Mod
 	var warnings []string
-	for _, rel := range rels {
-		parts := strings.Split(rel, "/")
-		if len(parts) != 2 || !contains(categories, parts[0]) || !strings.HasSuffix(parts[1], ".toml") {
-			continue
-		}
+	for _, rel := range pycompat.SortedLower(rels) {
 		data, err := DecodeTOML(tree[rel])
 		if err != nil {
 			warnings = append(warnings, "Skipping unreadable metafile "+rel+": "+err.Error())
@@ -230,7 +234,19 @@ func DecodeTOML(content []byte) (map[string]any, error) {
 	return data, nil
 }
 
-// ReadTree reads parts of a Packwiz folder.
+// InTree reports whether a file (a path relative to the Packwiz folder)
+// belongs in a Tree. A category folder contributes only its metafiles, the
+// .toml files directly inside it, which is all ParseMods reads; the other
+// parts contribute every file.
+func InTree(rel string) bool {
+	category, name, ok := strings.Cut(rel, "/")
+	if !ok || !slices.Contains(Categories, category) {
+		return true
+	}
+	return !strings.Contains(name, "/") && strings.HasSuffix(name, ".toml")
+}
+
+// ReadTree reads parts of a Packwiz folder (see InTree).
 func ReadTree(packDir string, parts []string) (Tree, error) {
 	tree := Tree{}
 	for _, part := range parts {
@@ -248,15 +264,22 @@ func ReadTree(packDir string, parts []string) (Tree, error) {
 			continue
 		}
 		err = filepath.WalkDir(root, func(p string, entry fs.DirEntry, err error) error {
-			if err != nil || !entry.Type().IsRegular() {
+			if err != nil {
 				return err
+			}
+			if entry.IsDir() && p != root && slices.Contains(Categories, part) {
+				return fs.SkipDir // Metafiles are directly inside a category folder.
+			}
+			rel, _ := filepath.Rel(packDir, p)
+			rel = filepath.ToSlash(rel)
+			if !entry.Type().IsRegular() || !InTree(rel) {
+				return nil
 			}
 			data, err := os.ReadFile(p)
 			if err != nil {
 				return err
 			}
-			rel, _ := filepath.Rel(packDir, p)
-			tree[filepath.ToSlash(rel)] = data
+			tree[rel] = data
 			return nil
 		})
 		if err != nil {
@@ -274,18 +297,4 @@ func LoadMods(packDir string, categories []string) ([]Mod, []string, error) {
 	}
 	mods, warnings := ParseMods(tree, categories)
 	return mods, warnings, nil
-}
-
-// SnapshotTexts returns the raw bytes of each metafile, so an update can be
-// compared and reverted.
-func SnapshotTexts(packDir string, mods []Mod) (map[string][]byte, error) {
-	texts := map[string][]byte{}
-	for _, mod := range mods {
-		data, err := os.ReadFile(filepath.Join(packDir, filepath.FromSlash(mod.Rel)))
-		if err != nil {
-			return nil, err
-		}
-		texts[mod.Rel] = data
-	}
-	return texts, nil
 }

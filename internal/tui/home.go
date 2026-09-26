@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
@@ -75,13 +76,9 @@ func (h *homeScreen) update(msg tea.Msg) (screen, tea.Cmd) {
 	return h, nil
 }
 
+// actionIndex is the position of the action whose key is k, or -1.
 func actionIndex(k string) int {
-	for i, a := range workflow.Actions {
-		if a.Key == k {
-			return i
-		}
-	}
-	return 0
+	return slices.IndexFunc(workflow.Actions, func(a workflow.Action) bool { return a.Key == k })
 }
 
 func (h *homeScreen) key(k string) tea.Cmd {
@@ -90,9 +87,6 @@ func (h *homeScreen) key(k string) tea.Cmd {
 		h.cursor = (h.cursor + len(workflow.Actions) - 1) % len(workflow.Actions)
 	case "down", "j":
 		h.cursor = (h.cursor + 1) % len(workflow.Actions)
-	case "1", "2", "3", "4", "5", "6", "7", "8":
-		// Digits only move the cursor, so a stray key never starts a workflow.
-		h.cursor = actionIndex(k)
 	case "enter":
 		if h.app.env == nil {
 			return func() tea.Msg { return showProjects{} }
@@ -108,6 +102,11 @@ func (h *homeScreen) key(k string) tea.Cmd {
 		return func() tea.Msg { return showHelp{} }
 	case "q", "ctrl+c", "esc":
 		return func() tea.Msg { return quitApp{} }
+	default:
+		// An action's digit only moves the cursor, so a stray key never starts a workflow.
+		if i := actionIndex(k); i >= 0 {
+			h.cursor = i
+		}
 	}
 	return nil
 }
@@ -164,7 +163,7 @@ func (h *homeScreen) card(width int) string {
 			lines = append(lines, t.Faint.Render("Changelog  ")+s.ChangelogName+t.Faint.Render(" doesn't exist yet"))
 		default:
 			lines = append(lines, t.Faint.Render("Changelog  ")+fmt.Sprintf("overview %s · config changes %s",
-				lineCount(s.OverviewLines), lineCount(s.ConfigLines)))
+				workflow.LineCount(s.OverviewLines), workflow.LineCount(s.ConfigLines)))
 		}
 		next := t.AccentText.Bold(true).Render("Next  ") + s.Next
 		if h.loading {
@@ -176,16 +175,6 @@ func (h *homeScreen) card(width int) string {
 		lines[i] = truncate(line, inner)
 	}
 	return t.Card.Width(width).Render(strings.Join(lines, "\n"))
-}
-
-func lineCount(n int) string {
-	switch n {
-	case 0:
-		return "empty"
-	case 1:
-		return "1 line"
-	}
-	return fmt.Sprintf("%d lines", n)
 }
 
 func firstLine(text string) string {

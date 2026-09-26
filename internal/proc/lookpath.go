@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/HaXrDEV/Modpack-Tool/internal/files"
 )
 
 // LookPath finds an executable the way cmd.exe does. Go's exec.LookPath
@@ -25,7 +27,7 @@ func LookPath(name string) (string, error) {
 	for _, dir := range pathDirs() {
 		for _, ext := range extensions {
 			candidate := filepath.Join(dir, name+ext)
-			if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
+			if files.IsFile(candidate) {
 				return candidate, nil
 			}
 		}

@@ -2,7 +2,7 @@ package pack
 
 import (
 	"encoding/json"
-	"os"
+	"maps"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -21,16 +21,10 @@ var modrinthFiles = []ModrinthFile{
 // The goldens are tomlkit's edits of real metafiles from both packs, in both
 // line endings (scripts/golden.py at the python-final tag).
 func TestEditsMatchTomlkit(t *testing.T) {
-	data, err := os.ReadFile("testdata/tomledits.json")
-	if err != nil {
-		t.Fatal(err)
-	}
 	var golden struct {
 		Cases []struct{ Name, Op, Input, Output string } `json:"cases"`
 	}
-	if err := json.Unmarshal(data, &golden); err != nil {
-		t.Fatal(err)
-	}
+	testutil.ReadJSON(t, "testdata/tomledits.json", &golden)
 	pw := t.TempDir()
 	for _, c := range golden.Cases {
 		rel := "mods/x.pw.toml"
@@ -263,5 +257,22 @@ func TestEditRefusesUnintendedChanges(t *testing.T) {
 	}
 	if want := "a = \"y\" # keep\nlist = [\n  1,\n]\nb = 2\n\n[t]\nc = 3\n"; got != want {
 		t.Errorf("got %q", got)
+	}
+}
+
+// Category folders contribute only their metafiles to a tree; the other parts
+// contribute every file.
+func TestTreesHoldWhatComparisonsRead(t *testing.T) {
+	pw := t.TempDir()
+	for _, rel := range []string{"pack.toml", "mods/a.pw.toml", "mods/disabled/old.pw.toml", "resourcepacks/Bundled.zip",
+		"shaderpacks/BSL/shaders/final.fsh", "config/yosbr/config/x.json"} {
+		testutil.Write(t, filepath.Join(pw, filepath.FromSlash(rel)), "x")
+	}
+	tree, err := ReadTree(pw, TreeParts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := slices.Sorted(maps.Keys(tree)); !slices.Equal(got, []string{"config/yosbr/config/x.json", "mods/a.pw.toml", "pack.toml"}) {
+		t.Error(got)
 	}
 }

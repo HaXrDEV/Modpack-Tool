@@ -1,7 +1,6 @@
 package changelog
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -47,14 +46,8 @@ type golden struct {
 
 func loadGolden(t *testing.T) golden {
 	t.Helper()
-	data, err := os.ReadFile("testdata/golden.json")
-	if err != nil {
-		t.Fatal(err)
-	}
 	var g golden
-	if err := json.Unmarshal(data, &g); err != nil {
-		t.Fatal(err)
-	}
+	testutil.ReadJSON(t, "testdata/golden.json", &g)
 	return g
 }
 
@@ -204,13 +197,6 @@ func windowsNewlines(t *testing.T) {
 func TestFilenames(t *testing.T) {
 	if Stem("4.11.1", "1.21.11")+".yml" != "4.11.1+1.21.11.yml" || Stem("26.1.1-1.2", "26.1.1")+".json" != "26.1.1-1.2.json" {
 		t.Error("Stem")
-	}
-	for name, want := range map[string][2]string{
-		"4.11.1+1.21.11.yml": {"4.11.1", "1.21.11"}, "26.1-1.0.yml": {"26.1-1.0", "26.1"}, "changelog_mods_4.11.1.md": {"", ""},
-	} {
-		if v, mc := ParseFilename(name); v != want[0] || mc != want[1] {
-			t.Errorf("ParseFilename(%q) = %q, %q", name, v, mc)
-		}
 	}
 }
 

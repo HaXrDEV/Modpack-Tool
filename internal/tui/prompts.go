@@ -7,6 +7,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/HaXrDEV/Modpack-Tool/internal/ui"
 )
@@ -36,19 +37,25 @@ func keyText(msg tea.Msg) string {
 	return ""
 }
 
+// basePrompt is a prompt's question, with the counter and init most prompts
+// share (no counter, nothing to start).
+type basePrompt struct{ text string }
+
+func (p basePrompt) question() string { return p.text }
+func (p basePrompt) counter() string  { return "" }
+func (p basePrompt) init() tea.Cmd    { return nil }
+
 ////////////////////////////////////////////////////////////
 // Confirm
 
 type confirmPrompt struct {
-	text  string
+	basePrompt
 	value bool
 }
 
-func newConfirm(question string, def bool) *confirmPrompt { return &confirmPrompt{question, def} }
-
-func (p *confirmPrompt) question() string { return p.text }
-func (p *confirmPrompt) counter() string  { return "" }
-func (p *confirmPrompt) init() tea.Cmd    { return nil }
+func newConfirm(question string, def bool) *confirmPrompt {
+	return &confirmPrompt{basePrompt{question}, def}
+}
 
 func (p *confirmPrompt) update(msg tea.Msg) (bool, any, tea.Cmd) {
 	switch keyText(msg) {
@@ -82,13 +89,13 @@ func (p *confirmPrompt) keys() []key.Binding {
 // Choose
 
 type choosePrompt struct {
-	text    string
+	basePrompt
 	options []ui.Option
 	cursor  int
 }
 
 func newChoose(question string, options []ui.Option, def string) *choosePrompt {
-	p := &choosePrompt{text: question, options: options}
+	p := &choosePrompt{basePrompt: basePrompt{question}, options: options}
 	for i, o := range options {
 		if o.Key == def {
 			p.cursor = i
@@ -96,10 +103,6 @@ func newChoose(question string, options []ui.Option, def string) *choosePrompt {
 	}
 	return p
 }
-
-func (p *choosePrompt) question() string { return p.text }
-func (p *choosePrompt) counter() string  { return "" }
-func (p *choosePrompt) init() tea.Cmd    { return nil }
 
 func (p *choosePrompt) update(msg tea.Msg) (bool, any, tea.Cmd) {
 	switch k := keyText(msg); k {
@@ -140,7 +143,7 @@ func (p *choosePrompt) keys() []key.Binding {
 // Pick many
 
 type pickPrompt struct {
-	text    string
+	basePrompt
 	labels  []string
 	checked []bool
 	cursor  int
@@ -148,11 +151,8 @@ type pickPrompt struct {
 }
 
 func newPickMany(question string, labels []string) *pickPrompt {
-	return &pickPrompt{text: question, labels: labels, checked: make([]bool, len(labels))}
+	return &pickPrompt{basePrompt: basePrompt{question}, labels: labels, checked: make([]bool, len(labels))}
 }
-
-func (p *pickPrompt) question() string { return p.text }
-func (p *pickPrompt) init() tea.Cmd    { return nil }
 
 func (p *pickPrompt) counter() string {
 	n := 0
@@ -198,7 +198,7 @@ func (p *pickPrompt) update(msg tea.Msg) (bool, any, tea.Cmd) {
 
 func (p *pickPrompt) view(t *Theme, width, height int) string {
 	header := wrap(p.text, width)
-	visible := max(3, height-lipHeight(header)-1)
+	visible := max(3, height-lipgloss.Height(header)-1)
 	if p.cursor < p.offset {
 		p.offset = p.cursor
 	}
@@ -232,7 +232,7 @@ func (p *pickPrompt) keys() []key.Binding {
 // Text and path input
 
 type textPrompt struct {
-	text  string
+	basePrompt
 	input textinput.Model
 	path  bool
 }
@@ -245,12 +245,10 @@ func newText(question, def string, path bool) *textPrompt {
 	if path {
 		input.Placeholder = "type or drop a folder here"
 	}
-	return &textPrompt{text: question, input: input, path: path}
+	return &textPrompt{basePrompt{question}, input, path}
 }
 
-func (p *textPrompt) question() string { return p.text }
-func (p *textPrompt) counter() string  { return "" }
-func (p *textPrompt) init() tea.Cmd    { return p.input.Focus() }
+func (p *textPrompt) init() tea.Cmd { return p.input.Focus() }
 
 func (p *textPrompt) update(msg tea.Msg) (bool, any, tea.Cmd) {
 	if keyText(msg) == "enter" {
@@ -276,13 +274,9 @@ func (p *textPrompt) keys() []key.Binding {
 ////////////////////////////////////////////////////////////
 // Wait for an edit
 
-type waitPrompt struct{ text string }
+type waitPrompt struct{ basePrompt }
 
-func newWait(message string) *waitPrompt { return &waitPrompt{message} }
-
-func (p *waitPrompt) question() string { return p.text }
-func (p *waitPrompt) counter() string  { return "" }
-func (p *waitPrompt) init() tea.Cmd    { return nil }
+func newWait(message string) *waitPrompt { return &waitPrompt{basePrompt{message}} }
 
 func (p *waitPrompt) update(msg tea.Msg) (bool, any, tea.Cmd) {
 	return keyText(msg) == "enter", "done", nil

@@ -4,7 +4,6 @@ package files
 
 import (
 	"errors"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -15,14 +14,15 @@ import (
 // WriteAtomic writes data to a temporary file next to path, then renames it
 // over path.
 func WriteAtomic(path string, data []byte) error {
-	return WriteAtomicFrom(path, func(w io.Writer) error {
-		_, err := w.Write(data)
+	return WriteAtomicFrom(path, func(f *os.File) error {
+		_, err := f.Write(data)
 		return err
 	})
 }
 
-// WriteAtomicFrom is WriteAtomic for content produced by write.
-func WriteAtomicFrom(path string, write func(io.Writer) error) error {
+// WriteAtomicFrom is WriteAtomic for content that write puts into the
+// temporary file (which it may rewind, e.g. to retry a download).
+func WriteAtomicFrom(path string, write func(*os.File) error) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}

@@ -67,13 +67,13 @@ func LogPath() string { return filepath.Join(CacheDir(), "last-run.log") }
 // a read-only config instead of an error, so a typo never locks you out.
 func Load(path string) (*Config, string) {
 	c := &Config{Path: path}
-	content, err := os.ReadFile(path)
+	content, err := pycompat.ReadText(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return c, ""
 	}
 	var raw any
 	if err == nil {
-		err = yaml.Unmarshal([]byte(pycompat.UniversalNewlines(string(content))), &raw)
+		err = yaml.Unmarshal([]byte(content), &raw)
 	}
 	values, ok := raw.(map[string]any)
 	if err == nil && !ok && raw != nil {

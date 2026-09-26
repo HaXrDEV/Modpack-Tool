@@ -50,7 +50,7 @@ func TestStrayQuoteInPath(t *testing.T) {
 }
 
 func TestRunStreamsLines(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
+	if _, err := LookPath("git"); err != nil {
 		t.Skip("git is not installed")
 	}
 	var lines []string

@@ -56,11 +56,10 @@ type session struct {
 	log     io.Writer // The full log of the run, or nil.
 	logMu   sync.Mutex
 	steps   atomic.Int32
-	open    func(string) error
 }
 
 func newSession(appDone <-chan struct{}, log io.Writer) *session {
-	return &session{events: make(chan event, 1024), appDone: appDone, log: log, open: ui.OpenFile}
+	return &session{events: make(chan event, 1024), appDone: appDone, log: log}
 }
 
 var _ ui.Session = (*session)(nil)
@@ -112,20 +111,18 @@ func (s *session) Log(line string) {
 	s.emit(logLine{line})
 }
 
-func (s *session) Info(msg string, items ...string) {
-	s.writeLog("  %s", msg)
-	for _, item := range items {
-		s.writeLog("    - %s", item)
-	}
-	s.emit(note{msg: msg, items: items})
-}
+func (s *session) Info(msg string, items ...string) { s.addNote(note{msg: msg, items: items}, "  ") }
 
 func (s *session) Warn(msg string, items ...string) {
-	s.writeLog("! %s", msg)
-	for _, item := range items {
+	s.addNote(note{warn: true, msg: msg, items: items}, "! ")
+}
+
+func (s *session) addNote(n note, prefix string) {
+	s.writeLog("%s%s", prefix, n.msg)
+	for _, item := range n.items {
 		s.writeLog("    - %s", item)
 	}
-	s.emit(note{warn: true, msg: msg, items: items})
+	s.emit(n)
 }
 
 func (s *session) Result(summary, next string) {
@@ -202,7 +199,7 @@ func (s *session) AskPath(ctx context.Context, question string) (string, error) 
 
 func (s *session) WaitForEdit(ctx context.Context, path string) error {
 	message := "Save your edits in the editor, then press Enter."
-	if s.open == nil || s.open(path) != nil {
+	if ui.OpenFile(path) != nil {
 		message = "Open " + path + " in your editor, save your edits, then press Enter."
 	}
 	_, err := s.ask(ctx, newWait(message))

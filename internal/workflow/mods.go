@@ -1,10 +1,13 @@
 package workflow
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"slices"
 	"strings"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/HaXrDEV/Modpack-Tool/internal/pack"
 	"github.com/HaXrDEV/Modpack-Tool/internal/platform"
@@ -23,7 +26,7 @@ func UpdateMods(ctx context.Context, env *Env) error {
 	if err := env.Packwiz.Refresh(ctx); err != nil {
 		return err
 	}
-	mods, before, err := snapshot(env)
+	mods, before, err := loadMods(env)
 	if err != nil {
 		return err
 	}
@@ -53,19 +56,64 @@ func UpdateMods(ctx context.Context, env *Env) error {
 	return nil
 }
 
-func snapshot(env *Env) ([]pack.Mod, map[string][]byte, error) {
-	mods, warnings, err := pack.LoadMods(env.Project.PackDir(), pack.Categories)
+// loadMods reads the pack's metafiles; the tree holds their bytes, so a later
+// look can tell which ones changed. Each unreadable metafile is warned about
+// once per action, however often the action looks.
+func loadMods(env *Env) ([]pack.Mod, pack.Tree, error) {
+	tree, err := pack.ReadTree(env.Project.PackDir(), pack.Categories)
 	if err != nil {
 		return nil, nil, err
 	}
+	mods, warnings := pack.ParseMods(tree, pack.Categories)
 	for _, warning := range warnings {
-		env.UI.Warn(warning)
+		if env.warned == nil {
+			env.warned = map[string]bool{}
+		}
+		if !env.warned[warning] {
+			env.warned[warning] = true
+			env.UI.Warn(warning)
+		}
 	}
-	before, err := pack.SnapshotTexts(env.Project.PackDir(), mods)
-	return mods, before, err
+	return mods, tree, nil
 }
 
-func modName(mod pack.Mod) string { return mod.Name() }
+// installed is the platform data of the files the mods have installed.
+type installed struct {
+	versions map[string]platform.Version // Modrinth, by version id.
+	files    map[int64]platform.CFFile   // CurseForge, by file id.
+}
+
+// lookUpInstalled fetches each mod's installed file from Modrinth and CurseForge.
+func lookUpInstalled(ctx context.Context, env *Env, mods []pack.Mod) (installed, error) {
+	var modrinthIDs []string
+	var curseforgeIDs []int64
+	for _, mod := range mods {
+		if mod.Modrinth() != nil {
+			modrinthIDs = append(modrinthIDs, mod.ModrinthVersion())
+		}
+		if mod.CurseForge() != nil {
+			curseforgeIDs = append(curseforgeIDs, mod.CurseForgeFile())
+		}
+	}
+	var found installed
+	err := together(ctx, func(ctx context.Context) (err error) {
+		found.versions, err = env.API.ModrinthVersions(ctx, modrinthIDs)
+		return err
+	}, func(ctx context.Context) (err error) {
+		found.files, err = env.API.CurseForgeFiles(ctx, curseforgeIDs)
+		return err
+	})
+	return found, err
+}
+
+// together runs independent lookups at the same time.
+func together(ctx context.Context, lookups ...func(context.Context) error) error {
+	group, groupCtx := errgroup.WithContext(ctx)
+	for _, lookup := range lookups {
+		group.Go(func() error { return lookup(groupCtx) })
+	}
+	return group.Wait()
+}
 
 func choosePinned(ctx context.Context, env *Env, mods []pack.Mod, reason string) ([]pack.Mod, error) {
 	var pinned []pack.Mod
@@ -78,7 +126,7 @@ func choosePinned(ctx context.Context, env *Env, mods []pack.Mod, reason string)
 		return nil, nil
 	}
 	env.UI.Info(fmt.Sprintf("%s Pinned: %d", reason, len(pinned)))
-	return ui.Pick(ctx, env.UI, "Unpin any of them for this run?", pinned, modName)
+	return ui.Pick(ctx, env.UI, "Unpin any of them for this run?", pinned, pack.Mod.Name)
 }
 
 // runUnpinned runs action with mods temporarily unpinned; the pins always
@@ -105,13 +153,10 @@ func runUnpinned(ctx context.Context, env *Env, mods []pack.Mod, action func() e
 type modPair struct{ old, current pack.Mod }
 
 // changed returns (old, new) pairs for metafiles whose content changed.
-func changed(env *Env, order []pack.Mod, before map[string][]byte) ([]modPair, error) {
-	now, warnings, err := pack.LoadMods(env.Project.PackDir(), pack.Categories)
+func changed(env *Env, order []pack.Mod, before pack.Tree) ([]modPair, error) {
+	now, tree, err := loadMods(env)
 	if err != nil {
 		return nil, err
-	}
-	for _, warning := range warnings {
-		env.UI.Warn(warning)
 	}
 	current := map[string]pack.Mod{}
 	for _, mod := range now {
@@ -119,16 +164,11 @@ func changed(env *Env, order []pack.Mod, before map[string][]byte) ([]modPair, e
 	}
 	var pairs []modPair
 	for _, mod := range order {
-		oldBytes := before[mod.Rel]
 		next, ok := current[mod.Rel]
-		if !ok {
+		if !ok || bytes.Equal(tree[mod.Rel], before[mod.Rel]) {
 			continue
 		}
-		nowBytes, err := readMetafile(env, mod.Rel)
-		if err != nil || string(nowBytes) == string(oldBytes) {
-			continue
-		}
-		data, err := pack.DecodeTOML(oldBytes)
+		data, err := pack.DecodeTOML(before[mod.Rel])
 		if err != nil {
 			continue
 		}
@@ -137,12 +177,7 @@ func changed(env *Env, order []pack.Mod, before map[string][]byte) ([]modPair, e
 	return pairs, nil
 }
 
-func readMetafile(env *Env, rel string) ([]byte, error) {
-	texts, err := pack.SnapshotTexts(env.Project.PackDir(), []pack.Mod{{Rel: rel}})
-	return texts[rel], err
-}
-
-func afterUpdate(ctx context.Context, env *Env, order []pack.Mod, before map[string][]byte, migration bool) error {
+func afterUpdate(ctx context.Context, env *Env, order []pack.Mod, before pack.Tree, migration bool) error {
 	pairs, err := changed(env, order, before)
 	if err != nil {
 		return err
@@ -153,7 +188,7 @@ func afterUpdate(ctx context.Context, env *Env, order []pack.Mod, before map[str
 			active = append(active, pair)
 		}
 	}
-	env.UI.Info(fmt.Sprintf("%d active file%s updated.", len(active), plural(len(active))))
+	env.UI.Info(fmt.Sprintf("%d active file%s updated.", len(active), ui.Plural(len(active))))
 	if err := alphaGuard(ctx, env, before, active, migration); err != nil {
 		return err
 	}
@@ -171,8 +206,8 @@ func afterUpdate(ctx context.Context, env *Env, order []pack.Mod, before map[str
 		return nil
 	}
 	env.UI.Info(fmt.Sprintf("%d disabled mod%s received an update, so packwiz found a build for Minecraft %s:",
-		len(updatedDisabled), plural(len(updatedDisabled)), env.Project.Minecraft))
-	picked, err := ui.Pick(ctx, env.UI, "Enable any of them?", updatedDisabled, modName)
+		len(updatedDisabled), ui.Plural(len(updatedDisabled)), env.Project.Minecraft))
+	picked, err := ui.Pick(ctx, env.UI, "Enable any of them?", updatedDisabled, pack.Mod.Name)
 	if err != nil {
 		return err
 	}
@@ -187,11 +222,7 @@ func afterUpdate(ctx context.Context, env *Env, order []pack.Mod, before map[str
 		return err
 	}
 	if len(picked) > 0 {
-		var names []string
-		for _, mod := range picked {
-			names = append(names, mod.Name())
-		}
-		env.UI.Info("Enabled " + strings.Join(names, ", ") + ".")
+		env.UI.Info("Enabled " + strings.Join(pack.Names(picked), ", ") + ".")
 	}
 	return nil
 }
@@ -211,37 +242,20 @@ func editing(ctx context.Context, env *Env, edit func() error) error {
 // channels returns {metafile path: (old channel, new channel)} from Modrinth
 // version types and CurseForge release types.
 func channels(ctx context.Context, env *Env, pairs []modPair) (map[string][2]string, error) {
-	var modrinthIDs []string
-	var curseforgeIDs []int64
+	var mods []pack.Mod
 	for _, pair := range pairs {
-		for _, mod := range []pack.Mod{pair.old, pair.current} {
-			if mr := mod.Modrinth(); mr != nil {
-				modrinthIDs = append(modrinthIDs, pycompat.Or(mr["version"], ""))
-			}
-			if cf := mod.CurseForge(); cf != nil {
-				curseforgeIDs = append(curseforgeIDs, pack.Int(cf["file-id"]))
-			}
-		}
+		mods = append(mods, pair.old, pair.current)
 	}
-	versions := map[string]platform.Version{}
-	files := map[int64]platform.CFFile{}
-	var err error
-	if len(modrinthIDs) > 0 {
-		if versions, err = env.API.ModrinthVersions(ctx, modrinthIDs); err != nil {
-			return nil, err
-		}
-	}
-	if len(curseforgeIDs) > 0 {
-		if files, err = env.API.CurseForgeFiles(ctx, curseforgeIDs); err != nil {
-			return nil, err
-		}
+	found, err := lookUpInstalled(ctx, env, mods)
+	if err != nil {
+		return nil, err
 	}
 	channel := func(mod pack.Mod) string {
-		if mr := mod.Modrinth(); mr != nil {
-			return versions[pycompat.Or(mr["version"], "")].VersionType
+		if mod.Modrinth() != nil {
+			return found.versions[mod.ModrinthVersion()].VersionType
 		}
-		if cf := mod.CurseForge(); cf != nil {
-			return platform.CurseForgeReleaseTypes[files[pack.Int(cf["file-id"])].ReleaseType]
+		if mod.CurseForge() != nil {
+			return platform.CurseForgeReleaseTypes[found.files[mod.CurseForgeFile()].ReleaseType]
 		}
 		return ""
 	}
@@ -252,7 +266,7 @@ func channels(ctx context.Context, env *Env, pairs []modPair) (map[string][2]str
 	return result, nil
 }
 
-func alphaGuard(ctx context.Context, env *Env, before map[string][]byte, pairs []modPair, migration bool) error {
+func alphaGuard(ctx context.Context, env *Env, before pack.Tree, pairs []modPair, migration bool) error {
 	var candidates []modPair
 	for _, pair := range pairs {
 		if pair.old.Modrinth() != nil || pair.old.CurseForge() != nil {
@@ -279,7 +293,7 @@ func alphaGuard(ctx context.Context, env *Env, before map[string][]byte, pairs [
 	for _, pair := range alphas {
 		listing = append(listing, fmt.Sprintf("%s: %s -> %s", pair.current.Name(), pair.old.Filename(), pair.current.Filename()))
 	}
-	env.UI.Warn(fmt.Sprintf("%d update%s landed on an alpha version:", len(alphas), plural(len(alphas))), listing...)
+	env.UI.Warn(fmt.Sprintf("%d update%s landed on an alpha version:", len(alphas), ui.Plural(len(alphas))), listing...)
 	undo := alphas
 	switch env.Project.Settings.AlphaUpdates {
 	case "always":
@@ -300,34 +314,36 @@ func alphaGuard(ctx context.Context, env *Env, before map[string][]byte, pairs [
 			return slices.ContainsFunc(keep, func(k modPair) bool { return k.current.Rel == pair.current.Rel })
 		})
 	}
-	for _, pair := range undo {
-		applied := false
-		if pair.current.Modrinth() != nil && pair.old.Modrinth() != nil && !migration {
-			target, err := newestAllowed(ctx, env, pair.old, found[pair.current.Rel][0])
-			if err != nil {
-				return err
-			}
-			if target != nil && target.ID != pycompat.Or(pair.old.Modrinth()["version"], "") {
-				var files []pack.ModrinthFile
-				for _, f := range target.Files {
-					files = append(files, pack.ModrinthFile{URL: f.URL, Filename: f.Filename, Primary: f.Primary, Hashes: f.Hashes})
-				}
-				if applied, err = pack.ApplyModrinthVersion(env.Project.PackDir(), pair.current, target.ID, files); err != nil {
+	return editing(ctx, env, func() error {
+		for _, pair := range undo {
+			applied := false
+			if pair.current.Modrinth() != nil && pair.old.Modrinth() != nil && !migration {
+				target, err := newestAllowed(ctx, env, pair.old, found[pair.current.Rel][0])
+				if err != nil {
 					return err
 				}
-				if applied {
-					env.UI.Info(fmt.Sprintf("%s: using %s (%s) instead.", pair.current.Name(), target.VersionNumber, target.VersionType))
+				if target != nil && target.ID != pair.old.ModrinthVersion() {
+					var files []pack.ModrinthFile
+					for _, f := range target.Files {
+						files = append(files, pack.ModrinthFile{URL: f.URL, Filename: f.Filename, Primary: f.Primary, Hashes: f.Hashes})
+					}
+					if applied, err = pack.ApplyModrinthVersion(env.Project.PackDir(), pair.current, target.ID, files); err != nil {
+						return err
+					}
+					if applied {
+						env.UI.Info(fmt.Sprintf("%s: using %s (%s) instead.", pair.current.Name(), target.VersionNumber, target.VersionType))
+					}
 				}
 			}
-		}
-		if !applied {
-			if err := pack.Restore(env.Project.PackDir(), pair.current.Rel, before[pair.current.Rel]); err != nil {
-				return err
+			if !applied {
+				if err := pack.Restore(env.Project.PackDir(), pair.current.Rel, before[pair.current.Rel]); err != nil {
+					return err
+				}
+				env.UI.Info(fmt.Sprintf("%s: reverted to %s.", pair.current.Name(), pair.old.Filename()))
 			}
-			env.UI.Info(fmt.Sprintf("%s: reverted to %s.", pair.current.Name(), pair.old.Filename()))
 		}
-	}
-	return env.Packwiz.Refresh(context.WithoutCancel(ctx))
+		return nil
+	})
 }
 
 // newestAllowed is the newest Modrinth version on an allowed channel for the
@@ -338,7 +354,7 @@ func newestAllowed(ctx context.Context, env *Env, mod pack.Mod, currentChannel s
 	if p.Loader == "quilt" {
 		loaders = append(loaders, "fabric")
 	}
-	versions, err := env.API.ModrinthProjectVersions(ctx, pycompat.Or(mod.Modrinth()["mod-id"], ""),
+	versions, err := env.API.ModrinthProjectVersions(ctx, mod.ModrinthProject(),
 		append([]string{p.Minecraft}, p.AcceptableVersions...), loaders)
 	if err != nil {
 		return nil, err
@@ -366,25 +382,8 @@ func IncompatibleMods(ctx context.Context, env *Env) ([]pack.Mod, []pack.Mod, er
 	if err != nil {
 		return nil, nil, err
 	}
-	var mods []pack.Mod
-	var modrinthIDs []string
-	var curseforgeIDs []int64
-	for _, mod := range all {
-		if mod.Disabled() {
-			continue
-		}
-		mods = append(mods, mod)
-		if mr := mod.Modrinth(); mr != nil {
-			modrinthIDs = append(modrinthIDs, pycompat.Or(mr["version"], ""))
-		} else if cf := mod.CurseForge(); cf != nil {
-			curseforgeIDs = append(curseforgeIDs, pack.Int(cf["file-id"]))
-		}
-	}
-	versions, err := env.API.ModrinthVersions(ctx, modrinthIDs)
-	if err != nil {
-		return nil, nil, err
-	}
-	files, err := env.API.CurseForgeFiles(ctx, curseforgeIDs)
+	mods := slices.DeleteFunc(all, pack.Mod.Disabled)
+	found, err := lookUpInstalled(ctx, env, mods)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -395,10 +394,10 @@ func IncompatibleMods(ctx context.Context, env *Env) ([]pack.Mod, []pack.Mod, er
 	var incompatible, unknown []pack.Mod
 	for _, mod := range mods {
 		var gameVersions []string
-		if mr := mod.Modrinth(); mr != nil {
-			gameVersions = versions[pycompat.Or(mr["version"], "")].GameVersions
-		} else if cf := mod.CurseForge(); cf != nil {
-			gameVersions = files[pack.Int(cf["file-id"])].GameVersions
+		if mod.Modrinth() != nil {
+			gameVersions = found.versions[mod.ModrinthVersion()].GameVersions
+		} else if mod.CurseForge() != nil {
+			gameVersions = found.files[mod.CurseForgeFile()].GameVersions
 		}
 		if len(gameVersions) == 0 {
 			unknown = append(unknown, mod)
@@ -430,21 +429,15 @@ func Migrate(ctx context.Context, env *Env, target string) error {
 	oldMinecraft, oldVersion := p.Minecraft, p.Version
 
 	// Acceptable versions: a patch (26.1 -> 26.1.1) can usually use builds for its content update.
-	var keep []string
 	for _, v := range p.AcceptableVersions {
-		if version.ContentKey(v) == version.ContentKey(target) {
-			keep = append(keep, v)
-		}
-	}
-	for _, v := range p.AcceptableVersions {
-		if !slices.Contains(keep, v) {
+		if version.ContentKey(v) != version.ContentKey(target) {
 			if err := env.Packwiz.RemoveAcceptableVersion(ctx, v); err != nil {
 				return err
 			}
 			env.UI.Info(fmt.Sprintf("No longer accepting builds for %s (a different content update).", v))
 		}
 	}
-	if version.ContentKey(oldMinecraft) == version.ContentKey(target) && !slices.Contains(keep, oldMinecraft) {
+	if version.ContentKey(oldMinecraft) == version.ContentKey(target) && !slices.Contains(p.AcceptableVersions, oldMinecraft) {
 		accept, err := env.UI.Confirm(ctx, fmt.Sprintf("Also accept mods built for %s? Patch updates usually work with them", oldMinecraft), true)
 		if err != nil {
 			return err
@@ -456,7 +449,7 @@ func Migrate(ctx context.Context, env *Env, target string) error {
 		}
 	}
 
-	mods, before, err := snapshot(env)
+	mods, before, err := loadMods(env)
 	if err != nil {
 		return err
 	}
@@ -497,18 +490,14 @@ func Migrate(ctx context.Context, env *Env, target string) error {
 	}
 	step.Done("")
 	if len(unknown) > 0 {
-		var names []string
-		for _, mod := range unknown {
-			names = append(names, mod.Name())
-		}
-		env.UI.Warn("Couldn't check these (no Modrinth/CurseForge data); test them yourself:", names...)
+		env.UI.Warn("Couldn't check these (no Modrinth/CurseForge data); test them yourself:", pack.Names(unknown)...)
 	}
 	if len(incompatible) > 0 {
 		var names []string
 		for _, mod := range incompatible {
 			names = append(names, fmt.Sprintf("%s (%s)", mod.Name(), mod.Filename()))
 		}
-		env.UI.Warn(fmt.Sprintf("%d mod%s have no build for %s:", len(incompatible), plural(len(incompatible)), p.Minecraft), names...)
+		env.UI.Warn(fmt.Sprintf("%d mod%s have no build for %s:", len(incompatible), ui.Plural(len(incompatible)), p.Minecraft), names...)
 		disable, err := env.UI.Confirm(ctx, "Disable them? They stay in the pack and packwiz keeps checking for updates", true)
 		if err != nil {
 			return err
@@ -524,7 +513,7 @@ func Migrate(ctx context.Context, env *Env, target string) error {
 			}); err != nil {
 				return err
 			}
-			env.UI.Info(fmt.Sprintf("Disabled %d mod%s.", len(incompatible), plural(len(incompatible))))
+			env.UI.Info(fmt.Sprintf("Disabled %d mod%s.", len(incompatible), ui.Plural(len(incompatible))))
 		}
 	}
 	if err := env.Packwiz.Refresh(ctx); err != nil {

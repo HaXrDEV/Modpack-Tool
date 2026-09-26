@@ -3,11 +3,11 @@
 package project
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/HaXrDEV/Modpack-Tool/internal/fail"
+	"github.com/HaXrDEV/Modpack-Tool/internal/files"
 	"github.com/HaXrDEV/Modpack-Tool/internal/pack"
 	"github.com/HaXrDEV/Modpack-Tool/internal/pycompat"
 	"github.com/HaXrDEV/Modpack-Tool/internal/version"
@@ -96,7 +96,7 @@ func Open(root string, ask AskFunc) (*Project, []string, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	if info, err := os.Stat(filepath.Join(abs, "Packwiz", "pack.toml")); err != nil || !info.Mode().IsRegular() {
+	if !files.IsFile(filepath.Join(abs, "Packwiz", "pack.toml")) {
 		return nil, nil, fail.Errorf("No Packwiz\\pack.toml in %s. Choose the modpack folder that contains 'Packwiz'.", abs)
 	}
 	data, err := pack.ReadPackTOML(filepath.Join(abs, "Packwiz"))
@@ -123,7 +123,7 @@ func FindRoot(dir string) string {
 		return ""
 	}
 	for {
-		if info, err := os.Stat(filepath.Join(dir, "Packwiz", "pack.toml")); err == nil && info.Mode().IsRegular() {
+		if files.IsFile(filepath.Join(dir, "Packwiz", "pack.toml")) {
 			return dir
 		}
 		parent := filepath.Dir(dir)

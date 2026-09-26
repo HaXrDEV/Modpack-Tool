@@ -11,13 +11,13 @@ import (
 	"context"
 	"errors"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/HaXrDEV/Modpack-Tool/internal/fail"
+	"github.com/HaXrDEV/Modpack-Tool/internal/files"
 	"github.com/HaXrDEV/Modpack-Tool/internal/pack"
 	"github.com/HaXrDEV/Modpack-Tool/internal/proc"
 )
@@ -42,8 +42,7 @@ func New(root string) *Repo {
 
 // IsRepo reports whether the folder is a git repository.
 func (r *Repo) IsRepo() bool {
-	_, err := os.Stat(filepath.Join(r.Root, ".git"))
-	return err == nil
+	return files.Exists(filepath.Join(r.Root, ".git"))
 }
 
 type options struct {
@@ -199,11 +198,15 @@ func (r *Repo) Snapshot(ctx context.Context, ref string, parts []string, prefix 
 			if header.Typeflag != tar.TypeReg || !strings.HasPrefix(header.Name, prefix+"/") {
 				continue
 			}
-			data, err := io.ReadAll(reader)
-			if err != nil {
+			rel := header.Name[len(prefix)+1:]
+			if !pack.InTree(rel) {
+				continue
+			}
+			data := make([]byte, header.Size)
+			if _, err := io.ReadFull(reader, data); err != nil {
 				return nil, err
 			}
-			tree[header.Name[len(prefix)+1:]] = data
+			tree[rel] = data
 		}
 	}
 	r.mu.Lock()
@@ -244,12 +247,6 @@ func (r *Repo) Status(ctx context.Context) ([]string, error) {
 		}
 	}
 	return lines, nil
-}
-
-// HasChanges reports whether path has uncommitted changes.
-func (r *Repo) HasChanges(ctx context.Context, path string) (bool, error) {
-	out, err := r.output(ctx, "status", "--porcelain", "--", path)
-	return strings.TrimSpace(out) != "", err
 }
 
 func (r *Repo) change(ctx context.Context, timeout time.Duration, args ...string) error {

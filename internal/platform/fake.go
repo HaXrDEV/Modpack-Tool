@@ -20,24 +20,23 @@ type Fake struct {
 	Downloads       []string          // Every URL downloaded, in order.
 }
 
-func (f *Fake) ModrinthVersions(_ context.Context, ids []string) (map[string]Version, error) {
-	found := map[string]Version{}
+// pick returns the entries of m that ids name.
+func pick[K comparable, V any](m map[K]V, ids []K) map[K]V {
+	found := map[K]V{}
 	for _, id := range ids {
-		if v, ok := f.Versions[id]; ok {
+		if v, ok := m[id]; ok {
 			found[id] = v
 		}
 	}
-	return found, nil
+	return found
+}
+
+func (f *Fake) ModrinthVersions(_ context.Context, ids []string) (map[string]Version, error) {
+	return pick(f.Versions, ids), nil
 }
 
 func (f *Fake) ModrinthProjects(_ context.Context, ids []string) (map[string]Project, error) {
-	found := map[string]Project{}
-	for _, id := range ids {
-		if p, ok := f.Projects[id]; ok {
-			found[id] = p
-		}
-	}
-	return found, nil
+	return pick(f.Projects, ids), nil
 }
 
 func (f *Fake) ModrinthProjectVersions(_ context.Context, projectID string, _, _ []string) ([]Version, error) {
@@ -45,33 +44,15 @@ func (f *Fake) ModrinthProjectVersions(_ context.Context, projectID string, _, _
 }
 
 func (f *Fake) CurseForgeFiles(_ context.Context, ids []int64) (map[int64]CFFile, error) {
-	found := map[int64]CFFile{}
-	for _, id := range ids {
-		if file, ok := f.Files[id]; ok {
-			found[id] = file
-		}
-	}
-	return found, nil
+	return pick(f.Files, ids), nil
 }
 
 func (f *Fake) CurseForgeMods(_ context.Context, ids []int64) (map[int64]CFMod, error) {
-	found := map[int64]CFMod{}
-	for _, id := range ids {
-		if m, ok := f.Mods[id]; ok {
-			found[id] = m
-		}
-	}
-	return found, nil
+	return pick(f.Mods, ids), nil
 }
 
 func (f *Fake) CurseForgeFingerprints(_ context.Context, fingerprints []uint32) (map[uint32]Match, error) {
-	found := map[uint32]Match{}
-	for _, fp := range fingerprints {
-		if m, ok := f.Fingerprints[fp]; ok {
-			found[fp] = m
-		}
-	}
-	return found, nil
+	return pick(f.Fingerprints, fingerprints), nil
 }
 
 func (f *Fake) Download(_ context.Context, url string, newWriter func() (io.Writer, error)) error {

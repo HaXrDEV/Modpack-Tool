@@ -1,12 +1,12 @@
 package version
 
 import (
-	"encoding/json"
-	"os"
 	"reflect"
 	"slices"
 	"sort"
 	"testing"
+
+	"github.com/HaXrDEV/Modpack-Tool/internal/testutil"
 )
 
 type goldenCase struct {
@@ -33,17 +33,11 @@ func ints(value any) []int {
 // The goldens come from the Python implementation (scripts/golden.py at the python-final tag) over
 // every tag of both packs plus edge cases.
 func TestGolden(t *testing.T) {
-	data, err := os.ReadFile("testdata/golden.json")
-	if err != nil {
-		t.Fatal(err)
-	}
 	var golden struct {
 		Cases  []goldenCase `json:"cases"`
 		Sorted []string     `json:"sorted"`
 	}
-	if err := json.Unmarshal(data, &golden); err != nil {
-		t.Fatal(err)
-	}
+	testutil.ReadJSON(t, "testdata/golden.json", &golden)
 	for _, c := range golden.Cases {
 		want := Key{
 			Kind: int(c.Key[0].(float64)), Main: ints(c.Key[1]), Release: ints(c.Key[2]),

@@ -6,11 +6,13 @@ package draft
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/HaXrDEV/Modpack-Tool/internal/diff"
 	"github.com/HaXrDEV/Modpack-Tool/internal/pack"
 	"github.com/HaXrDEV/Modpack-Tool/internal/pycompat"
+	"github.com/HaXrDEV/Modpack-Tool/internal/ui"
 )
 
 const maxBulletsPerFile = 4
@@ -76,13 +78,6 @@ func names(entries []diff.Named) []string {
 	return result
 }
 
-func s(n int) string {
-	if n > 1 {
-		return "s"
-	}
-	return ""
-}
-
 // UpdateOverview is one sentence per kind of change, e.g. "Added 'Sodium' &
 // 'Lithium' mods.".
 func UpdateOverview(d *diff.PackDiff) []string {
@@ -91,7 +86,7 @@ func UpdateOverview(d *diff.PackDiff) []string {
 		lines = append(lines, "Updated to Minecraft "+d.Minecraft+".")
 	}
 	if mods := dedupe(d.NewlyAdded); len(mods) > 0 {
-		lines = append(lines, fmt.Sprintf("Added %s mod%s.", quotedList(mods), s(len(mods))))
+		lines = append(lines, fmt.Sprintf("Added %s mod%s.", quotedList(mods), ui.Plural(len(mods))))
 	}
 	if len(d.Reenabled) > 0 {
 		if alphaBeta.MatchString(d.CurrentVersion) {
@@ -103,9 +98,9 @@ func UpdateOverview(d *diff.PackDiff) []string {
 	if removed := dedupe(names(d.Mods.Removed)); len(removed) > 0 {
 		if d.Migration() {
 			// No ": " in the sentence, so YAML can keep it unquoted.
-			lines = append(lines, fmt.Sprintf("Temporarily removed incompatible mod%s %s.", s(len(removed)), quotedList(removed)))
+			lines = append(lines, fmt.Sprintf("Temporarily removed incompatible mod%s %s.", ui.Plural(len(removed)), quotedList(removed)))
 		} else {
-			lines = append(lines, fmt.Sprintf("Removed %s mod%s.", quotedList(removed), s(len(removed))))
+			lines = append(lines, fmt.Sprintf("Removed %s mod%s.", quotedList(removed), ui.Plural(len(removed))))
 		}
 	}
 	var updated []string
@@ -268,8 +263,6 @@ func (l *Labels) ForConfig(path string) string {
 ////////////////////////////////////////////////////////////
 // Config Changes
 
-func isYOSBR(path string) bool { return strings.HasPrefix(strings.ToLower(path), "yosbr/") }
-
 // arrayValueOf returns the string of a JSON array element line such as
 // '"file/Pack.zip",'.
 func arrayValueOf(line string) (string, bool) {
@@ -310,7 +303,7 @@ func arraySections(content, path string) map[string][]string {
 	pop := func(kind string) {
 		for i := len(stack) - 1; i >= 0; i-- {
 			if stack[i].kind == kind {
-				stack = append(stack[:i], stack[i+1:]...)
+				stack = slices.Delete(stack, i, i+1)
 				return
 			}
 		}
@@ -331,7 +324,7 @@ func arraySections(content, path string) map[string][]string {
 		}
 		if value, ok := arrayValueOf(line); ok && len(path) > 0 {
 			k, joined := strings.ToLower(value), strings.Join(path, ".")
-			if !contains(sections[k], joined) {
+			if !slices.Contains(sections[k], joined) {
 				sections[k] = append(sections[k], joined)
 			}
 		}
@@ -373,7 +366,7 @@ func keyValues(lines []string) []pair {
 func fileBullets(entry diff.LineDiff, label string) []string {
 	path := entry.Path
 	def := ""
-	if isYOSBR(path) {
+	if diff.IsYOSBR(path) {
 		def = "default "
 	}
 	if strings.Contains("/"+strings.ToLower(path)+"/", "/fancymenu/customization/") {
@@ -441,16 +434,9 @@ func fileBullets(entry diff.LineDiff, label string) []string {
 	}
 	removedPairs := keyValues(unused(entry.RemovedLines, usedRemoved))
 	for _, added := range keyValues(unused(entry.AddedLines, usedAdded)) {
-		match := -1
-		for i, p := range removedPairs {
-			if p.key == added.key {
-				match = i
-				break
-			}
-		}
-		if match >= 0 {
+		if match := slices.IndexFunc(removedPairs, func(p pair) bool { return p.key == added.key }); match >= 0 {
 			old := removedPairs[match]
-			removedPairs = append(removedPairs[:match], removedPairs[match+1:]...)
+			removedPairs = slices.Delete(removedPairs, match, match+1)
 			if old.value != added.value {
 				bullets = append(bullets, fmt.Sprintf(`- Changed %s"%s" from %s to %s: [%s]`, def, added.key, old.value, added.value, label))
 			}
@@ -467,12 +453,8 @@ func fileBullets(entry diff.LineDiff, label string) []string {
 	}
 	if len(bullets) > maxBulletsPerFile {
 		extra := len(bullets) - maxBulletsPerFile
-		plural := "s"
-		if extra == 1 {
-			plural = ""
-		}
 		bullets = append(bullets[:maxBulletsPerFile],
-			fmt.Sprintf("- …and %d more change%s in %s: [%s]", extra, plural, pycompat.Name(path), label))
+			fmt.Sprintf("- …and %d more change%s in %s: [%s]", extra, ui.Plural(extra), pycompat.Name(path), label))
 	}
 	return bullets
 }
@@ -497,15 +479,6 @@ func ConfigChanges(d *diff.PackDiff, labels *Labels) []string {
 		bullets = append(bullets, fileBullets(entry, labels.ForConfig(entry.Path))...)
 	}
 	return bullets
-}
-
-func contains(values []string, value string) bool {
-	for _, v := range values {
-		if v == value {
-			return true
-		}
-	}
-	return false
 }
 
 func unique(values []string) []string {

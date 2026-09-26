@@ -63,8 +63,8 @@ func digest(data []byte, format string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// fileDigest hashes a file on disk; "" when it can't be read.
-func fileDigest(path, format string) string {
+// FileDigest hashes a file on disk in a packwiz hash format; "" when it can't be read.
+func FileDigest(path, format string) string {
 	if h := hasher(format); h != nil {
 		f, err := os.Open(path)
 		if err != nil {
@@ -115,34 +115,39 @@ func (s *Store) Path(mod pack.Mod) string {
 // Cached returns the cached copy of a file, if there is one.
 func (s *Store) Cached(mod pack.Mod) (string, bool) {
 	path := s.Path(mod)
-	info, err := os.Stat(path)
-	return path, err == nil && info.Mode().IsRegular()
+	return path, files.IsFile(path)
 }
 
 // Add caches a file's bytes after checking them against the metafile's hash.
 func (s *Store) Add(mod pack.Mod, data []byte) error {
-	format, value := mod.Hash()
-	if format != "" && !strings.EqualFold(digest(data, format), value) {
-		return fail.Errorf("%s: the file doesn't match the hash in %s.", fileLabel(mod), mod.Rel)
+	if !matchesHash(mod, data) {
+		return hashMismatch(mod)
 	}
 	return files.WriteAtomic(s.Path(mod), data)
 }
 
-func fileLabel(mod pack.Mod) string {
-	if mod.Filename() != "" {
-		return mod.Filename()
+// matchesHash reports whether data is mod's file (always true without a hash).
+func matchesHash(mod pack.Mod, data []byte) bool {
+	format, value := mod.Hash()
+	return format == "" || strings.EqualFold(digest(data, format), value)
+}
+
+func hashMismatch(mod pack.Mod) error {
+	label := mod.Filename()
+	if label == "" {
+		label = mod.Name()
 	}
-	return mod.Name()
+	return fail.Errorf("%s: the file doesn't match the hash in %s.", label, mod.Rel)
 }
 
 func (s *Store) downloadURL(mod pack.Mod) string {
 	if url := mod.DownloadURL(); url != "" {
 		return url
 	}
-	if cf := mod.CurseForge(); cf != nil {
+	if mod.CurseForge() != nil {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		return s.cfFiles[pack.Int(cf["file-id"])].DownloadURL
+		return s.cfFiles[mod.CurseForgeFile()].DownloadURL
 	}
 	return ""
 }
@@ -164,8 +169,8 @@ func (s *Store) Fetch(ctx context.Context, mods []pack.Mod) (map[string]string, 
 	}
 	var cfIDs []int64
 	for _, mod := range needed {
-		if cf := mod.CurseForge(); cf != nil && mod.DownloadURL() == "" {
-			cfIDs = append(cfIDs, pack.Int(cf["file-id"]))
+		if mod.CurseForge() != nil && mod.DownloadURL() == "" {
+			cfIDs = append(cfIDs, mod.CurseForgeFile())
 		}
 	}
 	if len(cfIDs) > 0 {
@@ -207,16 +212,9 @@ func (s *Store) Fetch(ctx context.Context, mods []pack.Mod) (map[string]string, 
 	return result, nil
 }
 
-func plural(n int) string {
-	if n == 1 {
-		return ""
-	}
-	return "s"
-}
-
 // download fetches files 8 at a time; every failure is reported together.
 func (s *Store) download(ctx context.Context, mods []pack.Mod) error {
-	step := s.Session.Step(fmt.Sprintf("Downloading %d file%s", len(mods), plural(len(mods))))
+	step := s.Session.Step(fmt.Sprintf("Downloading %d file%s", len(mods), ui.Plural(len(mods))))
 	var mu sync.Mutex
 	var failures []string
 	done := 0
@@ -247,56 +245,48 @@ func (s *Store) download(ctx context.Context, mods []pack.Mod) error {
 		step.Fail(err)
 		return err
 	}
-	step.Done(fmt.Sprintf("Downloaded %d file%s", len(mods), plural(len(mods))))
+	step.Done(fmt.Sprintf("Downloaded %d file%s", len(mods), ui.Plural(len(mods))))
 	return nil
 }
 
 func (s *Store) downloadOne(ctx context.Context, mod pack.Mod) error {
-	target := s.Path(mod)
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return err
-	}
-	part, err := os.CreateTemp(filepath.Dir(target), filepath.Base(target)+".*.part")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(part.Name())
-	defer part.Close()
 	format, value := mod.Hash()
-	var h hash.Hash
-	err = s.API.Download(ctx, s.downloadURL(mod), func() (io.Writer, error) {
-		if _, err := part.Seek(0, io.SeekStart); err != nil {
-			return nil, err
-		}
-		if err := part.Truncate(0); err != nil {
-			return nil, err
-		}
-		if h = hasher(format); h == nil {
-			return part, nil
-		}
-		return io.MultiWriter(part, h), nil
-	})
-	if err != nil {
-		return err
-	}
-	if err := part.Close(); err != nil {
-		return err
-	}
-	switch {
-	case h != nil:
-		if !strings.EqualFold(hex.EncodeToString(h.Sum(nil)), value) {
-			return fail.Errorf("%s: the file doesn't match the hash in %s.", fileLabel(mod), mod.Rel)
-		}
-	case format != "":
-		data, err := os.ReadFile(part.Name())
+	return files.WriteAtomicFrom(s.Path(mod), func(part *os.File) error {
+		var h hash.Hash
+		err := s.API.Download(ctx, s.downloadURL(mod), func() (io.Writer, error) {
+			if _, err := part.Seek(0, io.SeekStart); err != nil {
+				return nil, err
+			}
+			if err := part.Truncate(0); err != nil {
+				return nil, err
+			}
+			if h = hasher(format); h == nil {
+				return part, nil
+			}
+			return io.MultiWriter(part, h), nil
+		})
 		if err != nil {
 			return err
 		}
-		if !strings.EqualFold(digest(data, format), value) {
-			return fail.Errorf("%s: the file doesn't match the hash in %s.", fileLabel(mod), mod.Rel)
+		switch {
+		case h != nil:
+			if !strings.EqualFold(hex.EncodeToString(h.Sum(nil)), value) {
+				return hashMismatch(mod)
+			}
+		case format != "": // murmur2 is computed over the whole file.
+			if _, err := part.Seek(0, io.SeekStart); err != nil {
+				return err
+			}
+			data, err := io.ReadAll(part)
+			if err != nil {
+				return err
+			}
+			if !matchesHash(mod, data) {
+				return hashMismatch(mod)
+			}
 		}
-	}
-	return files.Rename(part.Name(), target)
+		return nil
+	})
 }
 
 // askForFiles gets the files whose authors block third-party downloads:
@@ -305,7 +295,7 @@ func (s *Store) downloadOne(ctx context.Context, mod pack.Mod) error {
 // points to (for example a CurseForge app instance's mods).
 func (s *Store) askForFiles(ctx context.Context, mods []pack.Mod) (map[string]string, error) {
 	s.Session.Warn(fmt.Sprintf("%d file%s can't be downloaded automatically (their authors block third-party downloads):",
-		len(mods), plural(len(mods))), missingNames(mods, nil)...)
+		len(mods), ui.Plural(len(mods))), missingNames(mods, nil)...)
 	choice, err := s.Session.Choose(ctx, "How do you want to get them?", []ui.Option{
 		{Key: "b", Label: "download them in the browser"},
 		{Key: "f", Label: "pick a folder that has them"},
@@ -359,7 +349,7 @@ func (s *Store) fromFolders(ctx context.Context, mods []pack.Mod) (map[string]st
 		if folder == "" {
 			break
 		}
-		if info, err := os.Stat(folder); err != nil || !info.IsDir() {
+		if !files.IsDir(folder) {
 			s.Session.Warn(folder + " is not a folder.")
 			continue
 		}
@@ -378,7 +368,7 @@ func (s *Store) fromFolders(ctx context.Context, mods []pack.Mod) (map[string]st
 		if still := missingNames(mods, found); len(still) > 0 {
 			s.Session.Warn("Still missing:", still...)
 		} else {
-			s.Session.Info(fmt.Sprintf("Found all %d file%s; they are cached for next time.", len(found), plural(len(found))))
+			s.Session.Info(fmt.Sprintf("Found all %d file%s; they are cached for next time.", len(found), ui.Plural(len(found))))
 		}
 	}
 	return found, nil
@@ -426,7 +416,7 @@ func (s *Store) fromBrowser(ctx context.Context, mods []pack.Mod) (map[string]st
 	}
 	if opened > 0 {
 		s.Session.Info(fmt.Sprintf("Opened %d download page%s in your browser (if it warns about the file%s, choose Keep).\n"+
-			"Finished downloads are picked up from %s.", opened, plural(opened), plural(opened), dir))
+			"Finished downloads are picked up from %s.", opened, ui.Plural(opened), ui.Plural(opened), dir))
 	}
 	if len(unopened) > 0 {
 		s.Session.Warn("Couldn't open the browser; open these pages yourself and save the files to "+dir+":", unopened...)
@@ -461,7 +451,7 @@ func (s *Store) fromBrowser(ctx context.Context, mods []pack.Mod) (map[string]st
 		}
 		step.Progress(len(found), len(mods))
 	}
-	step.Done(fmt.Sprintf("Picked up %d file%s from %s (cached for next time)", len(mods), plural(len(mods)), dir))
+	step.Done(fmt.Sprintf("Picked up %d file%s from %s (cached for next time)", len(mods), ui.Plural(len(mods)), dir))
 	return found, nil
 }
 
@@ -470,8 +460,8 @@ func (s *Store) fromBrowser(ctx context.Context, mods []pack.Mod) (map[string]st
 func (s *Store) downloadPages(ctx context.Context, mods []pack.Mod) (map[string]string, error) {
 	var ids []int64
 	for _, mod := range mods {
-		if cf := mod.CurseForge(); cf != nil {
-			ids = append(ids, pack.Int(cf["project-id"]))
+		if mod.CurseForge() != nil {
+			ids = append(ids, mod.CurseForgeProject())
 		}
 	}
 	projects, err := s.API.CurseForgeMods(ctx, ids)
@@ -480,15 +470,13 @@ func (s *Store) downloadPages(ctx context.Context, mods []pack.Mod) (map[string]
 	}
 	pages := map[string]string{}
 	for _, mod := range mods {
-		cf := mod.CurseForge()
-		if cf == nil {
+		if mod.CurseForge() == nil {
 			continue
 		}
-		projectID, fileID := pack.Int(cf["project-id"]), pack.Int(cf["file-id"])
-		if site := strings.TrimRight(projects[projectID].Links.WebsiteURL, "/"); site != "" {
-			pages[mod.Rel] = fmt.Sprintf("%s/download/%d", site, fileID)
+		if site := strings.TrimRight(projects[mod.CurseForgeProject()].Links.WebsiteURL, "/"); site != "" {
+			pages[mod.Rel] = fmt.Sprintf("%s/download/%d", site, mod.CurseForgeFile())
 		} else {
-			pages[mod.Rel] = fmt.Sprintf("https://www.curseforge.com/projects/%d", projectID)
+			pages[mod.Rel] = fmt.Sprintf("https://www.curseforge.com/projects/%d", mod.CurseForgeProject())
 		}
 	}
 	return pages, nil
@@ -566,7 +554,7 @@ func (s *Store) match(mods []pack.Mod, candidates []candidate, found map[string]
 				if !ok {
 					// A file that can't be read yet (a virus scan may hold it
 					// right after a download) is tried again next time.
-					if sum = strings.ToLower(fileDigest(c.path, format)); sum != "" {
+					if sum = strings.ToLower(FileDigest(c.path, format)); sum != "" {
 						digests[key] = sum
 					}
 				}
@@ -575,10 +563,10 @@ func (s *Store) match(mods []pack.Mod, candidates []candidate, found map[string]
 				}
 			}
 			data, err := os.ReadFile(c.path)
-			if err != nil || (format != "" && !strings.EqualFold(digest(data, format), value)) {
+			if err != nil || !matchesHash(mod, data) {
 				continue // Gone, or changed since it was hashed.
 			}
-			if err := s.Add(mod, data); err != nil {
+			if err := files.WriteAtomic(s.Path(mod), data); err != nil {
 				return err
 			}
 			found[mod.Rel] = s.Path(mod)

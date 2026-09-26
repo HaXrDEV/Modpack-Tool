@@ -12,16 +12,16 @@ import (
 // Glyphs are the symbols the UI draws: Unicode where the terminal can show
 // it, ASCII in the classic Windows console (which has no font fallback).
 type Glyphs struct {
-	OK, Fail, Warn, Cursor, Bullet, Dot, Arrow string
-	Checked, Unchecked                         string
-	Spinner                                    spinner.Spinner
-	Border                                     lipgloss.Border
+	OK, Fail, Warn, Cursor, Bullet string
+	Checked, Unchecked             string
+	Spinner                        spinner.Spinner
+	Border                         lipgloss.Border
 }
 
-var unicodeGlyphs = Glyphs{OK: "✓", Fail: "✗", Warn: "!", Cursor: "›", Bullet: "·", Dot: "•", Arrow: "→",
+var unicodeGlyphs = Glyphs{OK: "✓", Fail: "✗", Warn: "!", Cursor: "›", Bullet: "·",
 	Checked: "[x]", Unchecked: "[ ]", Spinner: spinner.MiniDot, Border: lipgloss.RoundedBorder()}
 
-var asciiGlyphs = Glyphs{OK: "+", Fail: "x", Warn: "!", Cursor: ">", Bullet: "-", Dot: "*", Arrow: "->",
+var asciiGlyphs = Glyphs{OK: "+", Fail: "x", Warn: "!", Cursor: ">", Bullet: "-",
 	Checked: "[x]", Unchecked: "[ ]", Spinner: spinner.Line, Border: lipgloss.NormalBorder()}
 
 // fancyTerminal reports whether the terminal draws Unicode symbols well:
@@ -37,7 +37,7 @@ type Theme struct {
 	Accent, Muted, Line, OK, Warn, Error color.Color
 
 	Title, Bold, Faint, AccentText, OKText, WarnText, ErrorText lipgloss.Style
-	Card, Panel                                                 lipgloss.Style
+	Card                                                        lipgloss.Style
 }
 
 // NewTheme builds the theme for a dark or light terminal background.
@@ -63,6 +63,5 @@ func NewTheme(dark, fancy bool) *Theme {
 	t.WarnText = lipgloss.NewStyle().Foreground(t.Warn)
 	t.ErrorText = lipgloss.NewStyle().Foreground(t.Error)
 	t.Card = lipgloss.NewStyle().Border(t.G.Border).BorderForeground(t.Line).Padding(0, 1)
-	t.Panel = lipgloss.NewStyle().Border(t.G.Border).BorderForeground(t.Accent).Padding(0, 1)
 	return t
 }

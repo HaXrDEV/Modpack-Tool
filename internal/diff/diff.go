@@ -4,16 +4,17 @@
 package diff
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
+	"bytes"
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/pmezard/go-difflib/difflib"
 
 	"github.com/HaXrDEV/Modpack-Tool/internal/pack"
 	"github.com/HaXrDEV/Modpack-Tool/internal/pycompat"
+	"github.com/HaXrDEV/Modpack-Tool/internal/ui"
 )
 
 var textExtensions = map[string]bool{".json": true, ".json5": true, ".yaml": true, ".yml": true, ".toml": true,
@@ -68,32 +69,25 @@ func (d *PackDiff) Migration() bool {
 	return d.PreviousMinecraft != "" && d.PreviousMinecraft != d.Minecraft
 }
 
-func plural(n int) string {
-	if n == 1 {
-		return ""
-	}
-	return "s"
-}
-
 // Summary is a one-line count of the changes, e.g. "+3 mods, 22 updated, 4
 // config files changed".
 func (d *PackDiff) Summary() string {
 	var parts []string
 	if n := len(d.Mods.Added); n > 0 {
-		parts = append(parts, fmt.Sprintf("+%d mod%s", n, plural(n)))
+		parts = append(parts, fmt.Sprintf("+%d mod%s", n, ui.Plural(n)))
 	}
 	if n := len(d.Mods.Removed); n > 0 {
-		parts = append(parts, fmt.Sprintf("-%d mod%s", n, plural(n)))
+		parts = append(parts, fmt.Sprintf("-%d mod%s", n, ui.Plural(n)))
 	}
 	if n := len(d.Mods.Updated) + len(d.ResourcePacks.Updated) + len(d.ShaderPacks.Updated); n > 0 {
 		parts = append(parts, fmt.Sprintf("%d updated", n))
 	}
 	packs := len(d.ResourcePacks.Added) + len(d.ResourcePacks.Removed) + len(d.ShaderPacks.Added) + len(d.ShaderPacks.Removed)
 	if packs > 0 {
-		parts = append(parts, fmt.Sprintf("%d resource/shader pack%s added or removed", packs, plural(packs)))
+		parts = append(parts, fmt.Sprintf("%d resource/shader pack%s added or removed", packs, ui.Plural(packs)))
 	}
-	if n := len(d.ChangedConfigs()); n > 0 {
-		parts = append(parts, fmt.Sprintf("%d config file%s changed", n, plural(n)))
+	if n := d.changedConfigs(); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d config file%s changed", n, ui.Plural(n)))
 	}
 	if len(parts) == 0 {
 		return "no changes"
@@ -101,8 +95,8 @@ func (d *PackDiff) Summary() string {
 	return strings.Join(parts, ", ")
 }
 
-// ChangedConfigs are the modified, removed and moved config files.
-func (d *PackDiff) ChangedConfigs() []string {
+// changedConfigs counts the modified, removed and moved config files.
+func (d *PackDiff) changedConfigs() int {
 	set := map[string]bool{}
 	for _, p := range d.Config.Modified {
 		set[p] = true
@@ -113,12 +107,7 @@ func (d *PackDiff) ChangedConfigs() []string {
 	for _, m := range d.Config.MovedToYOSBR {
 		set[m.To] = true
 	}
-	paths := make([]string, 0, len(set))
-	for p := range set {
-		paths = append(paths, p)
-	}
-	sort.Strings(paths)
-	return paths
+	return len(set)
 }
 
 // Tagged is a name for changelogs, with a `Client`/`Server` tag when side tags are on.
@@ -129,28 +118,38 @@ func Tagged(n Named, sideTags bool) string {
 	return n.Name
 }
 
-// metafiles returns a category's metafiles by file name, in path order.
-func metafiles(tree pack.Tree, category string) ([]string, map[string]pack.Mod) {
-	mods, _ := pack.ParseMods(tree, []string{category})
-	var names []string
-	byName := map[string]pack.Mod{}
-	for _, mod := range mods {
-		name := pycompat.Name(mod.Rel)
-		if _, seen := byName[name]; !seen {
-			names = append(names, name)
-		}
-		byName[name] = mod
-	}
-	return names, byName
+// metafiles are one category's metafiles by file name, in path order.
+type metafiles struct {
+	names  []string
+	byName map[string]pack.Mod
 }
 
-func active(names []string, mods map[string]pack.Mod) ([]string, map[string]pack.Mod) {
+// byCategory parses a tree's metafiles once, grouped by category.
+func byCategory(tree pack.Tree) map[string]metafiles {
+	mods, _ := pack.ParseMods(tree, pack.Categories)
+	result := map[string]metafiles{}
+	for _, mod := range mods {
+		m, ok := result[mod.Category()]
+		if !ok {
+			m.byName = map[string]pack.Mod{}
+		}
+		name := pycompat.Name(mod.Rel)
+		if _, seen := m.byName[name]; !seen {
+			m.names = append(m.names, name)
+		}
+		m.byName[name] = mod
+		result[mod.Category()] = m
+	}
+	return result
+}
+
+func active(m metafiles) ([]string, map[string]pack.Mod) {
 	var kept []string
 	result := map[string]pack.Mod{}
-	for _, name := range names {
-		if !mods[name].Disabled() {
+	for _, name := range m.names {
+		if !m.byName[name].Disabled() {
 			kept = append(kept, name)
-			result[name] = mods[name]
+			result[name] = m.byName[name]
 		}
 	}
 	return kept, result
@@ -166,13 +165,11 @@ func hashLabel(filename, hash string) string {
 	return filename + " (hash " + hash + ")"
 }
 
-// Category returns the added, removed and updated active files of one
+// category returns the added, removed and updated active files of one
 // category (mods, resourcepacks, shaderpacks).
-func Category(oldTree, newTree pack.Tree, category string) CategoryDiff {
-	oldNames, oldAll := metafiles(oldTree, category)
-	newNames, newAll := metafiles(newTree, category)
-	oldNames, old := active(oldNames, oldAll)
-	newNames, current := active(newNames, newAll)
+func category(oldFiles, newFiles metafiles) CategoryDiff {
+	oldNames, old := active(oldFiles)
+	newNames, current := active(newFiles)
 	var added, removed []Named
 	for _, name := range newNames {
 		if _, ok := old[name]; !ok {
@@ -234,22 +231,20 @@ func Category(oldTree, newTree pack.Tree, category string) CategoryDiff {
 	return result
 }
 
-// AdditionBreakdown returns the mods that are new to the pack and the ones
+// additionBreakdown returns the mods that are new to the pack and the ones
 // that were disabled before, each sorted without duplicates.
-func AdditionBreakdown(oldTree, newTree pack.Tree) ([]string, []string) {
-	oldNames, old := metafiles(oldTree, "mods")
+func additionBreakdown(oldMods, newMods metafiles) ([]string, []string) {
 	byDisplay := map[string]pack.Mod{}
-	for _, name := range oldNames {
-		byDisplay[old[name].DisplayName()] = old[name]
+	for _, name := range oldMods.names {
+		byDisplay[oldMods.byName[name].DisplayName()] = oldMods.byName[name]
 	}
 	newlyAdded, reenabled := map[string]bool{}, map[string]bool{}
-	newNames, current := metafiles(newTree, "mods")
-	for _, name := range newNames {
-		mod := current[name]
+	for _, name := range newMods.names {
+		mod := newMods.byName[name]
 		if mod.Disabled() {
 			continue
 		}
-		previous, ok := old[name]
+		previous, ok := oldMods.byName[name]
 		if !ok {
 			previous, ok = byDisplay[mod.DisplayName()] // Also follow renamed files.
 		}
@@ -260,20 +255,11 @@ func AdditionBreakdown(oldTree, newTree pack.Tree) ([]string, []string) {
 			reenabled[mod.DisplayName()] = true
 		}
 	}
-	return sortedKeys(newlyAdded), sortedKeys(reenabled)
+	return pycompat.SortedLower(slices.Collect(maps.Keys(newlyAdded))), pycompat.SortedLower(slices.Collect(maps.Keys(reenabled)))
 }
 
-func sortedKeys(set map[string]bool) []string {
-	keys := []string{}
-	for key := range set {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	pycompat.SortLower(keys)
-	return keys
-}
-
-func isYOSBR(path string) bool { return strings.HasPrefix(strings.ToLower(path), "yosbr/") }
+// IsYOSBR reports whether a config path is in the YOSBR defaults folder.
+func IsYOSBR(path string) bool { return strings.HasPrefix(strings.ToLower(path), "yosbr/") }
 
 // generatedByTool: files the tool rewrites itself (bcc.json, the Crash
 // Assistant modlist) aren't config changes.
@@ -323,41 +309,35 @@ func lineDiff(path string, oldContent, newContent []byte) *LineDiff {
 	}
 }
 
-func hashes(files map[string][]byte) map[string]string {
-	result := map[string]string{}
+// withoutGenerated leaves out the files the tool writes itself.
+func withoutGenerated(files map[string][]byte) map[string][]byte {
+	result := map[string][]byte{}
 	for path, data := range files {
 		if !generatedByTool(path) {
-			sum := sha256.Sum256(data)
-			result[path] = hex.EncodeToString(sum[:])
+			result[path] = data
 		}
 	}
 	return result
 }
 
-func sortedLower(values []string) []string {
-	sort.Strings(values)
-	pycompat.SortLower(values)
-	return values
-}
-
 // Config compares two config folders ({path relative to config/: bytes}).
 // details=false skips the line-by-line diffs (enough for a summary).
 func Config(oldFiles, newFiles map[string][]byte, details bool) ConfigDiff {
-	old, current := hashes(oldFiles), hashes(newFiles)
+	old, current := withoutGenerated(oldFiles), withoutGenerated(newFiles)
 	var added, removed, modified []string
 	for path := range current {
 		if _, ok := old[path]; !ok {
 			added = append(added, path)
 		}
 	}
-	for path, hash := range old {
-		if newHash, ok := current[path]; !ok {
+	for path, data := range old {
+		if newData, ok := current[path]; !ok {
 			removed = append(removed, path)
-		} else if newHash != hash {
+		} else if !bytes.Equal(newData, data) {
 			modified = append(modified, path)
 		}
 	}
-	added, removed, modified = sortedLower(added), sortedLower(removed), sortedLower(modified)
+	added, removed, modified = pycompat.SortedLower(added), pycompat.SortedLower(removed), pycompat.SortedLower(modified)
 
 	// Moving a config into the YOSBR overlay ("config/x" -> "config/yosbr/x"
 	// or "config/yosbr/config/x") makes it a first-launch default. That is a
@@ -370,7 +350,7 @@ func Config(oldFiles, newFiles map[string][]byte, details bool) ConfigDiff {
 	consumed := map[string]bool{}
 	for _, path := range removed {
 		target := ""
-		if !isYOSBR(path) {
+		if !IsYOSBR(path) {
 			for _, candidate := range []string{"yosbr/" + path, "yosbr/config/" + path} {
 				if found, ok := addedLookup[strings.ToLower(candidate)]; ok {
 					target = found
@@ -383,7 +363,7 @@ func Config(oldFiles, newFiles map[string][]byte, details bool) ConfigDiff {
 			continue
 		}
 		consumed[strings.ToLower(target)] = true
-		result.MovedToYOSBR = append(result.MovedToYOSBR, Move{From: path, To: target, ContentChanged: old[path] != current[target]})
+		result.MovedToYOSBR = append(result.MovedToYOSBR, Move{From: path, To: target, ContentChanged: !bytes.Equal(old[path], current[target])})
 	}
 	for _, path := range added {
 		if !consumed[strings.ToLower(path)] {
@@ -412,23 +392,10 @@ func Config(oldFiles, newFiles map[string][]byte, details bool) ConfigDiff {
 			}
 		}
 	}
-	unique := map[string]bool{}
-	for _, path := range modified {
-		if !unique[path] {
-			unique[path] = true
-			result.Modified = append(result.Modified, path)
-		}
-	}
-	result.Modified = sortedLower(result.Modified)
-	sort.SliceStable(result.MovedToYOSBR, func(i, j int) bool {
-		return strings.ToLower(result.MovedToYOSBR[i].To) < strings.ToLower(result.MovedToYOSBR[j].To)
-	})
-	keys := make([]string, 0, len(lineDiffs))
-	for key := range lineDiffs {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
+	// Sorting puts duplicates next to each other.
+	result.Modified = slices.Compact(pycompat.SortedLower(modified))
+	pycompat.SortLowerBy(result.MovedToYOSBR, func(m Move) string { return m.To })
+	for _, key := range slices.Sorted(maps.Keys(lineDiffs)) {
 		result.LineDiffs = append(result.LineDiffs, lineDiffs[key])
 	}
 	return result
@@ -454,15 +421,16 @@ func Compare(oldTree, newTree pack.Tree, previousVersion, currentVersion, minecr
 			previousMinecraft = pycompat.Or(pack.Table(data["versions"])["minecraft"], "")
 		}
 	}
-	newlyAdded, reenabled := AdditionBreakdown(oldTree, newTree)
+	old, current := byCategory(oldTree), byCategory(newTree)
+	newlyAdded, reenabled := additionBreakdown(old["mods"], current["mods"])
 	return &PackDiff{
 		PreviousVersion:   previousVersion,
 		PreviousMinecraft: previousMinecraft,
 		CurrentVersion:    currentVersion,
 		Minecraft:         minecraft,
-		Mods:              Category(oldTree, newTree, "mods"),
-		ResourcePacks:     Category(oldTree, newTree, "resourcepacks"),
-		ShaderPacks:       Category(oldTree, newTree, "shaderpacks"),
+		Mods:              category(old["mods"], current["mods"]),
+		ResourcePacks:     category(old["resourcepacks"], current["resourcepacks"]),
+		ShaderPacks:       category(old["shaderpacks"], current["shaderpacks"]),
 		NewlyAdded:        newlyAdded,
 		Reenabled:         reenabled,
 		Config:            Config(subtree(oldTree, "config"), subtree(newTree, "config"), details),

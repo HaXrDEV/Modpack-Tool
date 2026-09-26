@@ -15,9 +15,7 @@ func makeRepo(t *testing.T) string {
 	testutil.RequireGit(t)
 	root := filepath.Join(t.TempDir(), "repo")
 	testutil.Write(t, filepath.Join(root, ".keep"), "")
-	testutil.Git(t, root, "init", "-q", "-b", "main")
-	testutil.Git(t, root, "config", "user.email", "t@example.com")
-	testutil.Git(t, root, "config", "user.name", "Test")
+	testutil.InitRepo(t, root)
 	commit := func(version string, mods []string, tag string) {
 		testutil.Write(t, filepath.Join(root, "Packwiz", "pack.toml"), "name = \"P\"\nversion = \""+version+"\"\n[versions]\nminecraft = \"1.21\"\n")
 		for _, name := range mods {
@@ -93,7 +91,7 @@ func TestStatusAndCommit(t *testing.T) {
 		t.Fatal(status, err)
 	}
 	testutil.Write(t, filepath.Join(root, "Packwiz", "mods", "d.pw.toml"), "name = \"d\"\n")
-	if changed, _ := repo.HasChanges(ctx, "Packwiz"); !changed {
+	if status, _ := repo.Status(ctx); len(status) == 0 {
 		t.Error("expected changes")
 	}
 	if err := repo.CommitAll(ctx, "Add d"); err != nil {

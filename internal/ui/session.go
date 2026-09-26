@@ -79,6 +79,14 @@ func Limit(items []string, n int) []string {
 	return append(append([]string{}, items[:n]...), fmt.Sprintf("… and %d more", len(items)-n))
 }
 
+// Plural is "s" unless n is 1: fmt.Sprintf("%d file%s", n, ui.Plural(n)).
+func Plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+
 // Discard is a Session that shows nothing and cancels every prompt, for
 // background work such as loading the status.
 var Discard Session = discard{}

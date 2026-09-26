@@ -6,8 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -219,10 +220,8 @@ func (p *Plain) Choose(ctx context.Context, question string, options []Option, d
 		if answer = strings.ToLower(answer); answer == "" {
 			answer = def
 		}
-		for _, o := range options {
-			if o.Key == answer {
-				return answer, nil
-			}
+		if slices.Contains(keys, answer) {
+			return answer, nil
 		}
 		p.println("  Please enter one of: " + strings.Join(keys, ", ") + ".")
 	}
@@ -279,12 +278,7 @@ func ParseNumbers(text string, count int) ([]int, bool) {
 			picked[i] = true
 		}
 	}
-	indexes := make([]int, 0, len(picked))
-	for i := range picked {
-		indexes = append(indexes, i)
-	}
-	sort.Ints(indexes)
-	return indexes, true
+	return slices.Sorted(maps.Keys(picked)), true
 }
 
 func (p *Plain) Ask(ctx context.Context, question, def string) (string, error) {

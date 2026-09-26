@@ -2,8 +2,6 @@ package workflow
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/HaXrDEV/Modpack-Tool/internal/changelog"
@@ -18,6 +17,7 @@ import (
 	"github.com/HaXrDEV/Modpack-Tool/internal/draft"
 	"github.com/HaXrDEV/Modpack-Tool/internal/export"
 	"github.com/HaXrDEV/Modpack-Tool/internal/fail"
+	"github.com/HaXrDEV/Modpack-Tool/internal/files"
 	"github.com/HaXrDEV/Modpack-Tool/internal/pack"
 	"github.com/HaXrDEV/Modpack-Tool/internal/pycompat"
 	"github.com/HaXrDEV/Modpack-Tool/internal/ui"
@@ -104,15 +104,18 @@ func suggestVersion(env *Env) string {
 // SetVersion writes the version to pack.toml and the BetterCompatibilityChecker configs.
 func SetVersion(ctx context.Context, env *Env, v string) error {
 	p := env.Project
-	if err := pack.SetPackVersion(p.PackDir(), v); err != nil {
-		return err
-	}
-	for _, path := range bccFiles(env) {
-		if _, err := pack.WriteBCCVersion(path, v); err != nil {
+	err := editing(ctx, env, func() error {
+		if err := pack.SetPackVersion(p.PackDir(), v); err != nil {
 			return err
 		}
-	}
-	if err := env.Packwiz.Refresh(ctx); err != nil {
+		for _, path := range bccFiles(env) {
+			if _, err := pack.WriteBCCVersion(path, v); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
 		return err
 	}
 	return p.Reload()
@@ -158,7 +161,7 @@ func NewVersion(ctx context.Context, env *Env, suggestion, newVersion string) (b
 	oldVersion := p.Version
 	oldChangelog := changelog.Path(p, "", "")
 	rename := false
-	if currentTag == "" && changelog.Exists(oldChangelog) {
+	if currentTag == "" && files.Exists(oldChangelog) {
 		choice, err := env.UI.Choose(ctx, fmt.Sprintf("%s was never released. Rename it to %s (keeps its changelog), "+
 			"or start %s as a separate version?", oldVersion, newVersion, newVersion),
 			[]ui.Option{{Key: "r", Label: "rename"}, {Key: "n", Label: "new"}}, "r")
@@ -180,24 +183,19 @@ func NewVersion(ctx context.Context, env *Env, suggestion, newVersion string) (b
 		return true, nil
 	}
 	target := changelog.Path(p, newVersion, "")
-	if changelog.Exists(target) {
+	if files.Exists(target) {
 		return false, fail.Errorf("%s already exists; remove it or choose another version.", filepath.Base(target))
 	}
 	oldRecord := changelog.RecordPath(p, "", "")
-	if err := os.Rename(oldChangelog, target); err != nil {
+	if err := files.Rename(oldChangelog, target); err != nil {
 		return false, err
 	}
 	if err := SetVersion(ctx, env, newVersion); err != nil {
 		return false, err
 	}
-	if data, err := os.ReadFile(oldRecord); err == nil {
-		value, err := pycompat.Loads(data)
+	if record, err := pack.ReadJSONObject(oldRecord); !errors.Is(err, fs.ErrNotExist) {
 		if err != nil {
-			return false, fail.Wrapf(err, "%s isn't valid JSON: %v", oldRecord, err)
-		}
-		record, ok := value.(pycompat.Object)
-		if !ok {
-			return false, fail.Errorf("%s should contain a JSON object.", oldRecord)
+			return false, err
 		}
 		record.Set("version", newVersion)
 		if _, err := changelog.WriteRecord(p, record); err != nil {
@@ -250,6 +248,12 @@ func Draft(ctx context.Context, env *Env, since string, onlyEmpty bool) (bool, e
 		return false, nil
 	}
 	step.Done(fmt.Sprintf("Comparing against %s: %s", base, changes.Summary()))
+	return applyDraft(ctx, env, changes, onlyEmpty)
+}
+
+// applyDraft writes the drafted sections into the changelog.
+func applyDraft(ctx context.Context, env *Env, changes *diff.PackDiff, onlyEmpty bool) (bool, error) {
+	p := env.Project
 	path, err := changelog.Create(p, "")
 	if err != nil {
 		return false, err
@@ -268,7 +272,7 @@ func Draft(ctx context.Context, env *Env, since string, onlyEmpty bool) (bool, e
 		lines []string
 	}{{"Update overview", overview}, {"Config Changes", config}} {
 		existing := data.Lines(section.key)
-		if equal(existing, section.lines) {
+		if slices.Equal(existing, section.lines) {
 			continue
 		}
 		if len(existing) > 0 {
@@ -294,7 +298,7 @@ func Draft(ctx context.Context, env *Env, since string, onlyEmpty bool) (bool, e
 			return false, err
 		}
 		changed = true
-		env.UI.Info(fmt.Sprintf("Drafted '%s' (%d line%s).", section.key, len(section.lines), plural(len(section.lines))))
+		env.UI.Info(fmt.Sprintf("Drafted '%s' (%d line%s).", section.key, len(section.lines), ui.Plural(len(section.lines))))
 	}
 	if changed {
 		if err := data.Save(); err != nil {
@@ -303,18 +307,6 @@ func Draft(ctx context.Context, env *Env, since string, onlyEmpty bool) (bool, e
 	}
 	env.UI.Info("Changelog: " + p.Rel(path))
 	return changed, nil
-}
-
-func equal(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 ////////////////////////////////////////////////////////////
@@ -374,19 +366,16 @@ func UpdateGeneratedFiles(ctx context.Context, env *Env) ([]string, error) {
 			written = append(written, path)
 		}
 	}
-	mods, warnings, err := pack.LoadMods(p.PackDir(), pack.Categories)
+	mods, _, err := loadMods(env)
 	if err != nil {
 		return nil, err
 	}
-	for _, warning := range warnings {
-		env.UI.Warn(warning)
-	}
 	type output struct{ path, text string }
 	var outputs []output
-	if info, err := os.Stat(filepath.Join(p.PackDir(), "config", "crash_assistant")); err == nil && info.IsDir() {
+	if files.IsDir(filepath.Join(p.PackDir(), "config", "crash_assistant")) {
 		outputs = append(outputs, output{filepath.Join(p.PackDir(), "config", "crash_assistant", "modlist.json"), pack.CrashAssistantModlist(mods)})
 	}
-	if info, err := os.Stat(filepath.Join(p.Root, "modlist.md")); err == nil && info.Mode().IsRegular() {
+	if files.IsFile(filepath.Join(p.Root, "modlist.md")) {
 		outputs = append(outputs, output{filepath.Join(p.Root, "modlist.md"), pack.ModlistMarkdown(mods, p.Settings.SideTags)})
 	}
 	for _, o := range outputs {
@@ -438,15 +427,6 @@ func ReadLastBuild(ctx context.Context, env *Env) *LastBuild {
 	return &last
 }
 
-func fileHash(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
-}
-
 // BuildIsCurrent reports whether the last build matches the pack and the
 // changelog as they are now; the reason says why not.
 func BuildIsCurrent(env *Env, last *LastBuild) (bool, string) {
@@ -457,7 +437,7 @@ func BuildIsCurrent(env *Env, last *LastBuild) (bool, string) {
 	if hash, _ := pack.IndexHash(p.PackDir()); hash != last.IndexHash {
 		return false, "The pack changed since the last build. Build release again so the uploaded files match it."
 	}
-	if fileHash(changelog.Path(p, "", "")) != last.ChangelogHash {
+	if export.FileDigest(changelog.Path(p, "", ""), "sha256") != last.ChangelogHash {
 		return false, "The changelog changed since the last build. Build release again so the release notes match it."
 	}
 	return true, ""
@@ -514,16 +494,13 @@ func Build(ctx context.Context, env *Env, since string, skipServer, review bool)
 		}
 	}
 	if changes != nil && len(empty) > 0 {
-		sections := "section"
-		if len(empty) > 1 {
-			sections = "sections"
-		}
-		ok, err := env.UI.Confirm(ctx, fmt.Sprintf("Draft the empty %s (%s) from the changes?", sections, strings.Join(empty, ", ")), true)
+		ok, err := env.UI.Confirm(ctx, fmt.Sprintf("Draft the empty section%s (%s) from the changes?",
+			ui.Plural(len(empty)), strings.Join(empty, ", ")), true)
 		if err != nil {
 			return nil, err
 		}
 		if ok {
-			if _, err := Draft(ctx, env, since, true); err != nil {
+			if _, err := applyDraft(ctx, env, changes, true); err != nil {
 				return nil, err
 			}
 		}
@@ -551,10 +528,11 @@ func Build(ctx context.Context, env *Env, since string, skipServer, review bool)
 	}
 
 	step = env.UI.Step("Writing the release record, release notes and pack files")
-	written, err := UpdateGeneratedFiles(ctx, env)
-	if err == nil {
-		err = env.Packwiz.Refresh(ctx)
-	}
+	var written []string
+	err = editing(ctx, env, func() (err error) {
+		written, err = UpdateGeneratedFiles(ctx, env)
+		return err
+	})
 	var recordPath string
 	if err == nil {
 		recordPath, err = changelog.WriteRecord(p, changelog.BuildRecord(p, data, changes, env.Now().Format("2006-01-02")))
@@ -588,7 +566,7 @@ func Build(ctx context.Context, env *Env, since string, skipServer, review bool)
 	if err != nil {
 		return nil, err
 	}
-	last := LastBuild{Version: p.Version, IndexHash: indexHash, ChangelogHash: fileHash(path), Files: []string{}}
+	last := LastBuild{Version: p.Version, IndexHash: indexHash, ChangelogHash: export.FileDigest(path, "sha256"), Files: []string{}}
 	for _, file := range built {
 		last.Files = append(last.Files, filepath.Base(file))
 	}
@@ -631,11 +609,11 @@ func Publish(ctx context.Context, env *Env, dryRun bool) error {
 	if current, reason := BuildIsCurrent(env, last); !current {
 		return fail.Errorf("%s", reason)
 	}
-	var files, missing []string
+	var built, missing []string
 	for _, name := range last.Files {
 		path := filepath.Join(p.ExportDir(), name)
-		files = append(files, path)
-		if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
+		built = append(built, path)
+		if !files.IsFile(path) {
 			missing = append(missing, name)
 		}
 	}
@@ -655,10 +633,10 @@ func Publish(ctx context.Context, env *Env, dryRun bool) error {
 
 	message := "Release " + p.Version
 	args := []string{"release", "create", p.Version}
-	for _, file := range files {
+	for _, file := range built {
 		args = append(args, p.Rel(file))
 	}
-	args = append(args, "--title", p.Version, "--notes-file", "Modrinth-Release.md", "--target", branch)
+	args = append(args, "--title", p.Version, "--notes-file", changelog.NotesFile("modrinth"), "--target", branch)
 	if version.IsPrerelease(p.Version) {
 		args = append(args, "--prerelease")
 	}
@@ -686,7 +664,7 @@ func Publish(ctx context.Context, env *Env, dryRun bool) error {
 				paths = append(paths, line[3:])
 			}
 		}
-		env.UI.Info(fmt.Sprintf("%d changed path%s:", len(changes), plural(len(changes))), ui.Limit(paths, 15)...)
+		env.UI.Info(fmt.Sprintf("%d changed path%s:", len(changes), ui.Plural(len(changes))), ui.Limit(paths, 15)...)
 		ok, err := env.UI.Confirm(ctx, fmt.Sprintf("Commit all of them as '%s'?", message), true)
 		if err != nil || !ok {
 			return err
@@ -712,11 +690,7 @@ func Publish(ctx context.Context, env *Env, dryRun bool) error {
 	if version.IsPrerelease(p.Version) {
 		kind = "pre-release"
 	}
-	var names []string
-	for _, file := range files {
-		names = append(names, filepath.Base(file))
-	}
-	env.UI.Info(fmt.Sprintf("This creates the %s %s with %s.", kind, p.Version, strings.Join(names, ", ")),
+	env.UI.Info(fmt.Sprintf("This creates the %s %s with %s.", kind, p.Version, strings.Join(last.Files, ", ")),
 		"GitHub Actions (publish.yml) then uploads it to CurseForge/Modrinth.")
 	if ok, err := env.UI.Confirm(ctx, "Create the GitHub release now?", true); err != nil || !ok {
 		return err

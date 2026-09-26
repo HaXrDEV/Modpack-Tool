@@ -5,15 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 
 	"go.yaml.in/yaml/v3"
 
 	"github.com/HaXrDEV/Modpack-Tool/internal/fail"
+	"github.com/HaXrDEV/Modpack-Tool/internal/files"
 	"github.com/HaXrDEV/Modpack-Tool/internal/pack"
 	"github.com/HaXrDEV/Modpack-Tool/internal/pycompat"
 )
@@ -83,7 +84,7 @@ func parseTemplate() ([]templateEntry, []string) {
 	if err := yaml.Unmarshal([]byte(text), &doc); err != nil {
 		panic(err) // The embedded template is part of the program.
 	}
-	values := mappingValues(&doc)
+	_, values := mapping(&doc)
 	for _, line := range strings.Split(strings.TrimSuffix(text, "\n"), "\n") {
 		if m := templateKey.FindStringSubmatch(line); m != nil {
 			entries = append(entries, templateEntry{before: pending, key: m[1], line: line, value: values[m[1]]})
@@ -95,28 +96,18 @@ func parseTemplate() ([]templateEntry, []string) {
 	return entries, pending
 }
 
-// mappingValues returns the top-level keys of a YAML document, in order
-// through keys.
-func mappingValues(doc *yaml.Node) map[string]*yaml.Node {
-	values := map[string]*yaml.Node{}
-	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
-		return values
-	}
-	mapping := doc.Content[0]
-	for i := 0; i+1 < len(mapping.Content); i += 2 {
-		values[mapping.Content[i].Value] = mapping.Content[i+1]
-	}
-	return values
-}
-
-func mappingKeys(doc *yaml.Node) []string {
+// mapping returns the top-level keys of a YAML document in order, and their values.
+func mapping(doc *yaml.Node) ([]string, map[string]*yaml.Node) {
 	var keys []string
+	values := map[string]*yaml.Node{}
 	if doc.Kind == yaml.DocumentNode && len(doc.Content) > 0 && doc.Content[0].Kind == yaml.MappingNode {
-		for i := 0; i < len(doc.Content[0].Content); i += 2 {
-			keys = append(keys, doc.Content[0].Content[i].Value)
+		content := doc.Content[0].Content
+		for i := 0; i+1 < len(content); i += 2 {
+			keys = append(keys, content[i].Value)
+			values[content[i].Value] = content[i+1]
 		}
 	}
-	return keys
+	return keys, values
 }
 
 // LoadSettings loads modpack-tool.yml, creating it on first use (from the old
@@ -127,13 +118,11 @@ func mappingKeys(doc *yaml.Node) []string {
 func LoadSettings(root, packName string, ask AskFunc) (Settings, []string, error) {
 	path := filepath.Join(root, SettingsFile)
 	var notes []string
-	current := ""
 	values := map[string]*yaml.Node{}
 	var keys []string
-	content, err := os.ReadFile(path)
+	current, err := pycompat.ReadText(path)
 	switch {
 	case err == nil:
-		current = pycompat.UniversalNewlines(string(content))
 		var doc yaml.Node
 		if err := yaml.Unmarshal([]byte(current), &doc); err != nil {
 			return Settings{}, nil, fail.Wrapf(err, "%s isn't valid YAML: %v\n"+
@@ -143,10 +132,10 @@ func LoadSettings(root, packName string, ask AskFunc) (Settings, []string, error
 			!(doc.Content[0].Kind == yaml.ScalarNode && doc.Content[0].Tag == "!!null") {
 			return Settings{}, nil, fail.Errorf("%s should contain settings such as 'exports: [curseforge]'.", path)
 		}
-		values, keys = mappingValues(&doc), mappingKeys(&doc)
+		keys, values = mapping(&doc)
 	case errors.Is(err, fs.ErrNotExist):
 		legacy := filepath.Join(root, LegacySettingsFile)
-		if _, err := os.Stat(legacy); err == nil {
+		if files.Exists(legacy) {
 			values, err = importLegacySettings(legacy, root, packName, ask, &notes)
 			if err != nil {
 				return Settings{}, nil, err
@@ -154,9 +143,6 @@ func LoadSettings(root, packName string, ask AskFunc) (Settings, []string, error
 		} else {
 			values = map[string]*yaml.Node{"changelog_url": stringNode(DefaultChangelogURL(packName), 0)}
 			notes = append(notes, fmt.Sprintf("Created %s; review it to configure this pack.", SettingsFile))
-		}
-		for key := range values {
-			keys = append(keys, key)
 		}
 	default:
 		return Settings{}, nil, err
@@ -322,7 +308,7 @@ func coerceSettings(values map[string]*yaml.Node, notes *[]string) Settings {
 
 	var bad, good []string
 	for _, kind := range s.Exports {
-		if contains(ExportKinds, kind) {
+		if slices.Contains(ExportKinds, kind) {
 			good = append(good, kind)
 		} else {
 			bad = append(bad, kind)
@@ -335,7 +321,7 @@ func coerceSettings(values map[string]*yaml.Node, notes *[]string) Settings {
 		}
 		s.Exports = good
 	}
-	if !contains(AlphaPolicies, s.AlphaUpdates) {
+	if !slices.Contains(AlphaPolicies, s.AlphaUpdates) {
 		*notes = append(*notes, fmt.Sprintf("alpha_updates '%s' is not one of %s; using prompt.", s.AlphaUpdates, strings.Join(AlphaPolicies, ", ")))
 		s.AlphaUpdates = "prompt"
 	}
@@ -393,15 +379,6 @@ func coerceString(name string, value any, def string, notes *[]string) string {
 	return pycompat.Str(value)
 }
 
-func contains(values []string, value string) bool {
-	for _, v := range values {
-		if v == value {
-			return true
-		}
-	}
-	return false
-}
-
 func stringNode(value string, style yaml.Style) *yaml.Node {
 	return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value, Style: style}
 }
@@ -426,10 +403,10 @@ func listNode(values []string) *yaml.Node {
 // keys (and asks to confirm the wiki link).
 func importLegacySettings(path, root, packName string, ask AskFunc, notes *[]string) (map[string]*yaml.Node, error) {
 	old := map[string]any{}
-	content, err := os.ReadFile(path)
+	content, err := pycompat.ReadText(path)
 	if err == nil {
 		var decoded any
-		if err := yaml.Unmarshal([]byte(pycompat.UniversalNewlines(string(content))), &decoded); err != nil {
+		if err := yaml.Unmarshal([]byte(content), &decoded); err != nil {
 			*notes = append(*notes, fmt.Sprintf("Couldn't read the old %s (%v); starting from the defaults.", LegacySettingsFile, err))
 		} else if m, ok := decoded.(map[string]any); ok {
 			old = m

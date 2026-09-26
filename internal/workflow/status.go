@@ -8,6 +8,8 @@ import (
 
 	"github.com/HaXrDEV/Modpack-Tool/internal/changelog"
 	"github.com/HaXrDEV/Modpack-Tool/internal/diff"
+	"github.com/HaXrDEV/Modpack-Tool/internal/files"
+	"github.com/HaXrDEV/Modpack-Tool/internal/ui"
 )
 
 // Status is where the pack stands: the dashboard card and `status`.
@@ -50,7 +52,7 @@ func ComputeStatus(ctx context.Context, env *Env) Status {
 	path := changelog.Path(p, "", "")
 	s.ChangelogName = filepath.Base(path)
 	var data *changelog.Changelog
-	if s.ChangelogExists = changelog.Exists(path); s.ChangelogExists {
+	if s.ChangelogExists = files.Exists(path); s.ChangelogExists {
 		if data, err = changelog.Load(path); err != nil {
 			s.ChangelogError = err.Error()
 		} else {
@@ -81,11 +83,12 @@ func NextStep(ctx context.Context, env *Env, tag string, data *changelog.Changel
 	return "Build release (4) when the pack is ready.", "4"
 }
 
-func lines(count int) string {
+// LineCount is "empty", "1 line" or "N lines", for a changelog section.
+func LineCount(count int) string {
 	if count == 0 {
 		return "empty"
 	}
-	return fmt.Sprintf("%d line%s", count, plural(count))
+	return fmt.Sprintf("%d line%s", count, ui.Plural(count))
 }
 
 // Lines renders the status as text, the way `status` prints it.
@@ -109,7 +112,7 @@ func (s Status) Lines() []string {
 	case !s.ChangelogExists:
 		out = append(out, fmt.Sprintf("Changelog: %s doesn't exist yet", s.ChangelogName))
 	default:
-		out = append(out, fmt.Sprintf("Changelog: %s · overview %s · config changes %s", s.ChangelogName, lines(s.OverviewLines), lines(s.ConfigLines)))
+		out = append(out, fmt.Sprintf("Changelog: %s · overview %s · config changes %s", s.ChangelogName, LineCount(s.OverviewLines), LineCount(s.ConfigLines)))
 	}
 	return append(out, "Next: "+s.Next)
 }

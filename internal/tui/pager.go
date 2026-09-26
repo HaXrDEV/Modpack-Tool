@@ -7,6 +7,8 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/HaXrDEV/Modpack-Tool/internal/workflow"
 )
 
 // pagedMsg delivers text loaded in the background (the changes report).
@@ -22,11 +24,10 @@ type pagerScreen struct {
 	vp      viewport.Model
 	loading bool
 	spinner spinner.Model
-	lines   []string
 }
 
 func newPager(theme *Theme, title string, lines []string) *pagerScreen {
-	p := &pagerScreen{theme: theme, title: title, vp: viewport.New(), lines: lines,
+	p := &pagerScreen{theme: theme, title: title, vp: viewport.New(),
 		spinner: spinner.New(spinner.WithSpinner(theme.G.Spinner))}
 	p.spinner.Style = theme.AccentText
 	p.vp.SoftWrap = true
@@ -38,12 +39,11 @@ func (p *pagerScreen) update(msg tea.Msg) (screen, tea.Cmd) {
 	switch msg := msg.(type) {
 	case pagedMsg:
 		p.loading = false
+		lines := msg.lines
 		if msg.err != nil {
-			p.lines = []string{p.theme.ErrorText.Render(p.theme.G.Fail+" ") + errorText(msg.err)}
-		} else {
-			p.lines = msg.lines
+			lines = []string{p.theme.ErrorText.Render(p.theme.G.Fail+" ") + errorText(msg.err)}
 		}
-		p.vp.SetContentLines(p.lines)
+		p.vp.SetContentLines(lines)
 		p.vp.GotoTop()
 	case spinner.TickMsg:
 		if p.loading {
@@ -83,7 +83,7 @@ func (p *pagerScreen) keys() []key.Binding {
 func helpLines(overview string) []string {
 	keys := []string{
 		"KEYS",
-		"  ↑↓ or 1-8   select an action          enter   run it",
+		"  ↑↓ or 1-" + workflow.Actions[len(workflow.Actions)-1].Key + "   select an action          enter   run it",
 		"  p           switch, add or remove projects",
 		"  l           while an action runs: the full log",
 		"  esc         cancel the running action (packwiz and git finish their step first)",

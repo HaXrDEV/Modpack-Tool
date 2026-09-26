@@ -162,22 +162,32 @@ func IndexHash(packDir string) (string, error) {
 	return pycompat.Or(Table(packTOML["index"])["hash"], ""), nil
 }
 
+// ReadJSONObject reads a file that holds a JSON object. A missing file gives
+// an error that matches fs.ErrNotExist.
+func ReadJSONObject(path string) (pycompat.Object, error) {
+	text, err := pycompat.ReadText(path)
+	if err != nil {
+		return nil, err
+	}
+	value, err := pycompat.Loads([]byte(text))
+	if err != nil {
+		return nil, fail.Wrapf(err, "%s isn't valid JSON: %v", path, err)
+	}
+	data, ok := value.(pycompat.Object)
+	if !ok {
+		return nil, fail.Errorf("%s should contain a JSON object.", path)
+	}
+	return data, nil
+}
+
 // WriteBCCVersion sets modpackVersion in a BetterCompatibilityChecker config.
 // It returns false when the file is missing or already up to date.
 func WriteBCCVersion(path, version string) (bool, error) {
-	text, err := pycompat.ReadText(path)
+	data, err := ReadJSONObject(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
 	} else if err != nil {
 		return false, err
-	}
-	value, err := pycompat.Loads([]byte(text))
-	if err != nil {
-		return false, fail.Wrapf(err, "%s isn't valid JSON: %v", path, err)
-	}
-	data, ok := value.(pycompat.Object)
-	if !ok {
-		return false, fail.Errorf("%s should contain a JSON object.", path)
 	}
 	if current, _ := data.Get("modpackVersion"); current == version {
 		return false, nil

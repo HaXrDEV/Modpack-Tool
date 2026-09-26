@@ -3,11 +3,14 @@
 package testutil
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/HaXrDEV/Modpack-Tool/internal/proc"
 )
 
 // Write creates a file (and its folders) with text, using newline for line breaks.
@@ -158,20 +161,41 @@ func NewTree() map[string][]byte {
 	})
 }
 
-// RequireGit skips the test when git isn't installed.
+// ReadJSON decodes a JSON file (a golden file, a written record) into into.
+func ReadJSON(t testing.TB, path string, into any) {
+	t.Helper()
+	if err := json.Unmarshal([]byte(Read(t, path)), into); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// RequireGit skips the test when git isn't installed. It looks git up the way
+// the tool does, so a stray quote in PATH doesn't skip the test.
 func RequireGit(t testing.TB) {
 	t.Helper()
-	if _, err := exec.LookPath("git"); err != nil {
+	if _, err := proc.LookPath("git"); err != nil {
 		t.Skip("git is not installed")
 	}
+}
+
+// InitRepo makes dir a git repository with a test identity.
+func InitRepo(t testing.TB, dir string) {
+	t.Helper()
+	Git(t, dir, "init", "-q", "-b", "main")
+	Git(t, dir, "config", "user.email", "t@example.com")
+	Git(t, dir, "config", "user.name", "Test")
 }
 
 // Git runs a git command in dir and fails the test when it fails.
 func Git(t testing.TB, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	git, err := proc.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(git, args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmd.Env = append(os.Environ(), proc.Env...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)

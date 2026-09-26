@@ -7,6 +7,7 @@ package pycompat
 import (
 	"os"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"unicode"
@@ -104,14 +105,22 @@ func Capitalize(s string) string {
 // SortLower sorts in place by lowercase text, keeping the order of equal
 // keys, like Python's sorted(values, key=str.lower).
 func SortLower(values []string) {
-	sort.SliceStable(values, func(i, j int) bool {
-		return strings.ToLower(values[i]) < strings.ToLower(values[j])
+	SortLowerBy(values, func(v string) string { return v })
+}
+
+// SortLowerBy is SortLower for items sorted by a text key.
+func SortLowerBy[T any](items []T, key func(T) string) {
+	sort.SliceStable(items, func(i, j int) bool {
+		return strings.ToLower(key(items[i])) < strings.ToLower(key(items[j]))
 	})
 }
 
-// SortedLower returns a sorted copy (see SortLower).
+// SortedLower returns a copy sorted by lowercase text with ties in plain text
+// order, like Python's sorted(sorted(values), key=str.lower): the result
+// doesn't depend on the order of values.
 func SortedLower(values []string) []string {
-	sorted := append([]string(nil), values...)
+	sorted := slices.Clone(values)
+	slices.Sort(sorted)
 	SortLower(sorted)
 	return sorted
 }

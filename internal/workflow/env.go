@@ -31,6 +31,8 @@ type Env struct {
 	LookPath func(name string) (string, error)
 	// RunGH runs the GitHub CLI and returns its output.
 	RunGH func(ctx context.Context, dir string, args ...string) (stdout, stderr string, code int, err error)
+
+	warned map[string]bool // Unreadable metafiles already warned about (see loadMods).
 }
 
 // runGH is the real RunGH.
@@ -54,13 +56,6 @@ func NewEnv(session ui.Session, p *project.Project, packwizExe string, api platf
 		LookPath: proc.LookPath,
 		RunGH:    runGH,
 	}
-}
-
-func plural(n int) string {
-	if n == 1 {
-		return ""
-	}
-	return "s"
 }
 
 // quoteArg quotes a command-line argument with spaces, for showing commands.
