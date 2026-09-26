@@ -51,11 +51,11 @@ The first run asks for a modpack folder: the folder that contains `Packwiz/pack.
 | Key | Action | What it does |
 |---|---|---|
 | 1 | Update mods | `packwiz update --all`, then an alpha guard (keep, move to the newest beta/release, or revert) and an offer to re-enable disabled mods that received an update. Pinned mods can be unpinned for one run. |
-| 2 | New version | Bumps the version in `pack.toml` and the BetterCompatibilityChecker configs and creates the changelog file. If the current version was never released, it can be renamed instead. |
+| 2 | New version | Bumps the version in `pack.toml` and the BetterCompatibilityChecker configs and creates the changelog file. If the current version was never released, it can be renamed instead. With `prereleases: previews`, a full release starts with what you wrote for its pre-releases. |
 | 3 | Draft changelog | Fills `Update overview` and `Config Changes` from the changes since the last release. Text you wrote is only replaced after you confirm; the rest of the file stays exactly as it is. |
 | 4 | Build release | Updates `bcc.json`, the Crash Assistant modlist and `modlist.md`, writes the release record and release notes, and builds the packs listed in `exports`. Refuses an empty changelog. |
 | 5 | Publish | Commits, pushes and runs `gh release create` with the built files, asking before each step. Refuses if the pack changed since the last build. |
-| 6 | Migrate Minecraft | `packwiz migrate minecraft`, the same alpha guard and re-enable offer, then disables mods with no build for the new version and starts a new version. |
+| 6 | Migrate Minecraft | `packwiz migrate minecraft`, the same alpha guard and re-enable offer, then disables mods with no build for the new version and starts a new version (it suggests a beta when mods had to be disabled). |
 | 7 | Check pack | Invalid sides, leftover disabled folders, disabled and pinned mods, and library mods nothing depends on (removal via `packwiz remove`). |
 | 8 | View changes | Everything that changed since the last release: mods, packs and config lines. |
 
@@ -77,7 +77,10 @@ packwiz refresh                      rebuild index.toml after editing files by h
 
 ## How it works
 
-- **Releases are git tags.** A release is a tag named after the pack version (`4.11.1` or `v4.11.1`). The previous release is the nearest earlier tag, and its files are read straight from git to compute what changed. A tagged version is frozen: Draft and Build point you to New version instead.
+- **Releases are git tags.** A release is a tag named after the pack version (`4.11.1` or `v4.11.1`). The previous release is the nearest earlier tag (skipping pre-releases for a full release with `prereleases: previews`), and its files are read straight from git to compute what changed. A tagged version is frozen: Draft and Build point you to New version instead.
+- **Pre-releases** are versions such as `26.2-1.0-beta.1` or `2.2.0-beta.1` (`alpha` and `rc` work too). Their release notes start by saying they may be less stable or feature complete than a full release, Publish creates a GitHub pre-release, and `publish.yml` marks them beta (or alpha) on CurseForge and Modrinth. The `prereleases` setting decides how they relate to their full release (`26.2-1.0`):
+  - `standalone` (the default): they're releases like any other. Every release lists what changed since the one before it, and the wiki shows them among the other releases, labeled as alpha or beta.
+  - `previews`: they lead up to their full release, which covers them all. It's compared with the previous full release, New version starts its changelog with the Changes/Improvements, Bug Fixes and Script/Datapack changes of its pre-releases, and the wiki folds them under it.
 - **Changelogs.** You write `Changelogs/<version>+<minecraft>.yml` (just `<version>.yml` for versions like `26.2-1.0`). Build turns it into `Changelogs/data/<same name>.json`, the release record that the [wiki](https://github.com/CrismPack/Wiki) renders, plus `CurseForge-Release.md` and `Modrinth-Release.md` for `publish.yml`.
 - **Disabled mods** have `side = "both(disabled)"` (or `client`/`server`). They stay in the pack and packwiz keeps updating them; the tool leaves them out of exports, changelogs and the modlists.
 - **Exports** follow packwiz's own index, so `.packwizignore` applies. Mods, resource packs and shader packs are all included. For the CurseForge zip, files from other platforms are matched on CurseForge by fingerprint and bundled only when CurseForge doesn't have them; the `.mrpack` gets proper hashes and sizes. `Export/bundled_links.md` lists every bundled file with its source, for license checks.
@@ -93,6 +96,7 @@ Each pack has a `modpack-tool.yml` next to its `Packwiz` folder, created on firs
 | `server_template` | The folder copied into the server pack (default `Server Pack`). |
 | `server_exclude` | Mods left out of the server pack, by slug, name or jar filename. |
 | `mc_prefixed_versions` | Suggest `<minecraft>-<release>` versions such as `26.2-1.0`. |
+| `prereleases` | `standalone`: pre-releases are releases like any other, marked as less stable. `previews`: they lead up to a full release that covers them. |
 | `alpha_updates` | When an update lands on an alpha: `prompt`, `never` or `always`. |
 | `side_tags` | Show `Client`/`Server` after mod names in changelogs and `modlist.md`. |
 | `changelog_url` | The "Full changelog" link in release notes (`{mc_group}`, `{mc}`, `{version}`, `{anchor}`). |

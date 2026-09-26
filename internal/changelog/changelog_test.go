@@ -122,6 +122,8 @@ func TestRecordsMatchPython(t *testing.T) {
 	}
 }
 
+// Pre-releases now say what they are and what that means before "Here be
+// dragons!", where Python only said "This is a pre-release.".
 func TestReleaseNotesMatchPython(t *testing.T) {
 	p := testProject(t)
 	for _, c := range loadGolden(t).Notes {
@@ -129,8 +131,9 @@ func TestReleaseNotesMatchPython(t *testing.T) {
 		p.Settings.ChangelogURL, p.Settings.CurseForgeNotesFooter, p.Settings.ModrinthNotesFooter = c.URL, c.CFFooter, c.MRFooter
 		var warnings []string
 		got := ReleaseNotes(p, loadText(t, c.Changelog), c.Platform, func(w string) { warnings = append(warnings, w) })
-		if got != c.Notes {
-			t.Errorf("%s %s %q:\n got %q\nwant %q", c.Version, c.Platform, c.URL, got, c.Notes)
+		want := strings.Replace(c.Notes, "This is a pre-release. Here be dragons!", PrereleaseNotice(c.Version), 1)
+		if got != want {
+			t.Errorf("%s %s %q:\n got %q\nwant %q", c.Version, c.Platform, c.URL, got, want)
 		}
 		if strings.Contains(c.URL, "unknown") && len(warnings) == 0 {
 			t.Error("no warning for a broken link template")
@@ -225,6 +228,49 @@ func TestTemplateAndSections(t *testing.T) {
 	}
 }
 
+// A full release's pre-releases are found by their changelogs, in both schemes.
+func TestPrereleases(t *testing.T) {
+	p := testProject(t)
+	for _, name := range []string{"1.2.0-beta.2+1.21.11.yml", "1.2.0-beta.1+1.21.11.yml", "1.2.0-rc.1.yml", "1.2.0+1.21.11.yml",
+		"1.1.0-beta.1+1.21.11.yml", "changelog_mods_1.2.0-beta.1.md", "data/1.2.0-beta.1+1.21.11.json"} {
+		testutil.Write(t, filepath.Join(p.ChangelogDir(), name), "")
+	}
+	paths, err := Prereleases(p, "1.2.0")
+	var names []string
+	for _, path := range paths {
+		names = append(names, filepath.Base(path))
+	}
+	if err != nil || !slices.Equal(names, []string{"1.2.0-beta.1+1.21.11.yml", "1.2.0-beta.2+1.21.11.yml", "1.2.0-rc.1.yml"}) {
+		t.Error(names, err)
+	}
+}
+
+// A full release takes over what was written for its pre-releases, oldest
+// first and once, but not the drafted sections.
+func TestIncludeAddsThePrereleasesNotes(t *testing.T) {
+	c := loadText(t, "Update overview:\n  - Drafted.\nBug Fixes:\n  - Own fix.\n")
+	earlier := []*Changelog{
+		loadText(t, "Update overview:\n  - Beta overview.\nChanges/Improvements:\n  - New menu.\nBug Fixes:\n  - Fixed a crash.\n"),
+		loadText(t, "Bug Fixes:\n  - fixed a crash.\n  - Own fix.\n  - 'Sodium: fixed flicker'\nConfig Changes: |-\n  - Changed x: [Mod]\n"),
+	}
+	if changed, err := c.Include(earlier); !changed || err != nil {
+		t.Fatal(changed, err)
+	}
+	for key, want := range map[string][]string{
+		"Update overview":      {"Drafted."},
+		"Changes/Improvements": {"New menu."},
+		"Bug Fixes":            {"Fixed a crash.", "Sodium: fixed flicker", "Own fix."},
+		"Config Changes":       nil,
+	} {
+		if got := c.Lines(key); !slices.Equal(got, want) {
+			t.Errorf("%s: %q", key, got)
+		}
+	}
+	if changed, err := c.Include(earlier); changed || err != nil {
+		t.Error("included twice", err)
+	}
+}
+
 // py: test_changelog.py::test_record_matches_the_wiki_contract
 func TestRecordMatchesTheWikiContract(t *testing.T) {
 	p := testProject(t)
@@ -278,7 +324,8 @@ func TestReleaseNotesForPrereleaseWithoutOverview(t *testing.T) {
 	p := testProject(t)
 	p.Version = "1.3.0-beta.1"
 	cl := loadText(t, "Changes/Improvements:\n  - New menu\nBug Fixes:\n  - Fixed crash\n")
-	want := "**This is a pre-release. Here be dragons!**\n\n### Changes/Improvements ⭐\n\n- New menu\n\n### Bug Fixes 🪲\n\n- Fixed crash\n"
+	want := "**This is a beta, so it may be less stable or feature complete than a full release. Here be dragons!**\n\n" +
+		"### Changes/Improvements ⭐\n\n- New menu\n\n### Bug Fixes 🪲\n\n- Fixed crash\n"
 	if got := ReleaseNotes(p, cl, "modrinth", nil); got != want {
 		t.Errorf("%q", got)
 	}

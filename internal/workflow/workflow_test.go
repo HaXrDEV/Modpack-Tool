@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -168,6 +169,100 @@ func TestNewVersionRefusesAReleasedVersion(t *testing.T) {
 	mustNewVersion(t, f, "1.1.0")
 	if _, err := NewVersion(ctx, f.Env, "", "1.0.0"); err == nil || !strings.Contains(err.Error(), "already released") {
 		t.Errorf("got %v", err)
+	}
+}
+
+// release commits the pack as it is and tags its version, as Publish does.
+func release(t *testing.T, f *fixture) {
+	t.Helper()
+	root := f.Project.Root
+	testutil.Git(t, root, "add", "-A")
+	testutil.Git(t, root, "commit", "-q", "-m", f.Project.Version)
+	testutil.Git(t, root, "tag", f.Project.Version)
+	f.Git = git.New(root) // Forgets the tags it read before.
+}
+
+// betasThenFull releases 1.1.0-beta.1 (which adds Beta Mod) and 1.1.0-beta.2,
+// then starts 1.1.0. A pre-release is always compared with the release just
+// before it.
+func betasThenFull(t *testing.T, f *fixture) {
+	t.Helper()
+	mustNewVersion(t, f, "1.1.0-beta.1")
+	testutil.Write(t, filepath.Join(f.Project.PackDir(), "mods", "b.pw.toml"), testutil.Metafile("Beta Mod", "b-1.jar"))
+	writeChangelog(t, f, "Update overview:\n  - Added 'Beta Mod' mod.\nBug Fixes:\n  - Fixed a crash.\n")
+	release(t, f)
+	mustNewVersion(t, f, "1.1.0-beta.2")
+	if _, base, err := ChangesSinceRelease(ctx, f.Env, "", false); base != "1.1.0-beta.1" || err != nil {
+		t.Error("beta 2 is compared with", base, err)
+	}
+	writeChangelog(t, f, "Changes/Improvements:\n  - New menu.\nBug Fixes:\n  - Fixed a crash.\n  - Fixed the menu.\n")
+	release(t, f)
+	f.answers("") // Accept the suggested 1.1.0.
+	if changed, err := NewVersion(ctx, f.Env, "", ""); !changed || err != nil || f.Project.Version != "1.1.0" {
+		t.Fatal(changed, err, f.Project.Version)
+	}
+}
+
+// By default a pre-release is a release like any other, so the full release
+// after it is compared with it and starts with an empty changelog.
+func TestStandalonePrereleases(t *testing.T) {
+	f := repoProject(t)
+	betasThenFull(t, f)
+	if data, err := changelog.Load(changelog.Path(f.Project, "", "")); err != nil || !data.IsEmpty() {
+		t.Error("the changelog isn't empty", err)
+	}
+	if _, base, err := ChangesSinceRelease(ctx, f.Env, "", false); base != "1.1.0-beta.2" || err != nil {
+		t.Error(base, err)
+	}
+}
+
+// With prereleases: previews, the full release is compared with the previous
+// full release and starts with what was written for its pre-releases, so it
+// covers them.
+func TestPreviewPrereleases(t *testing.T) {
+	f := repoProject(t)
+	f.Project.Settings.Prereleases = "previews"
+	betasThenFull(t, f)
+	data, err := changelog.Load(changelog.Path(f.Project, "", ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string][]string{
+		"Update overview":      nil, // Drafted from the comparison below.
+		"Changes/Improvements": {"New menu."},
+		"Bug Fixes":            {"Fixed a crash.", "Fixed the menu."},
+	} {
+		if got := data.Lines(key); !slices.Equal(got, want) {
+			t.Errorf("%s: %q", key, got)
+		}
+	}
+	changes, base, err := ChangesSinceRelease(ctx, f.Env, "", false)
+	if err != nil || base != "1.0.0" || len(changes.Mods.Added) != 1 || changes.Mods.Added[0].Name != "Beta Mod" {
+		t.Error(changes, base, err)
+	}
+}
+
+// Renaming an unreleased pre-release to its full release keeps its changelog.
+// With previews, it adds the notes of the pre-releases before it and asks for
+// a new draft.
+func TestRenamingAPrereleaseToItsFullRelease(t *testing.T) {
+	for mode, want := range map[string][]string{"standalone": {"Fixed the menu."}, "previews": {"Fixed a crash.", "Fixed the menu."}} {
+		f := repoProject(t)
+		f.Project.Settings.Prereleases = mode
+		mustNewVersion(t, f, "1.1.0-beta.1")
+		writeChangelog(t, f, "Bug Fixes:\n  - Fixed a crash.\n")
+		release(t, f)
+		mustNewVersion(t, f, "1.1.0-beta.2")
+		writeChangelog(t, f, "Update overview:\n  - Updated mods.\nBug Fixes:\n  - Fixed the menu.\n")
+		f.answers("r")
+		mustNewVersion(t, f, "1.1.0")
+		data, err := changelog.Load(changelog.Path(f.Project, "", ""))
+		if err != nil || !slices.Equal(data.Lines("Bug Fixes"), want) || !slices.Equal(data.Lines("Update overview"), []string{"Updated mods."}) {
+			t.Error(mode, data.Lines("Bug Fixes"), data.Lines("Update overview"), err)
+		}
+		if strings.Contains(f.session.Text(), "Draft changelog (3) again") != (mode == "previews") {
+			t.Error(mode, f.session.Text())
+		}
 	}
 }
 
@@ -407,6 +502,41 @@ func TestIncompatibleMods(t *testing.T) {
 	f.Project.AcceptableVersions = []string{"1.21.10"}
 	if incompatible, _, _ := IncompatibleMods(ctx, f.Env); len(incompatible) != 0 {
 		t.Error(slugs(incompatible))
+	}
+}
+
+// migratingPackwiz changes the Minecraft version in pack.toml, as packwiz does.
+type migratingPackwiz struct {
+	fakePackwiz
+	packDir string
+}
+
+func (m *migratingPackwiz) MigrateMinecraft(_ context.Context, v string) error {
+	path := filepath.Join(m.packDir, "pack.toml")
+	text, err := os.ReadFile(path)
+	if err == nil {
+		err = os.WriteFile(path, regexp.MustCompile(`minecraft = "[^"]*"`).ReplaceAll(text, []byte(`minecraft = "`+v+`"`)), 0o644)
+	}
+	return err
+}
+
+// Migrate suggests a beta when it had to disable mods that aren't updated yet.
+func TestMigrateSuggestsABetaWhenModsAreMissing(t *testing.T) {
+	for sodium, want := range map[string]string{"26.1": "1.3.0", "1.21.11": "1.3.0-beta.1"} {
+		f := newFixture(t, filepath.Dir(testutil.PackDir(t)))
+		f.Packwiz = &migratingPackwiz{packDir: f.Project.PackDir()}
+		f.api.Versions = map[string]platform.Version{"Lithv1": {GameVersions: []string{"26.1"}},
+			"Sodiv1": {GameVersions: []string{sodium}}, "Pinnv1": {GameVersions: []string{"26.1"}}}
+		f.answers("", "", "", "") // The latest loader, no unpinning, disable Sodium if asked, the suggested version.
+		if err := Migrate(ctx, f.Env, "26.1"); err != nil {
+			t.Fatal(err, f.session.Text())
+		}
+		if f.Project.Minecraft != "26.1" || f.Project.Version != want {
+			t.Errorf("Sodium for %s: Minecraft %s, version %s", sodium, f.Project.Minecraft, f.Project.Version)
+		}
+		if strings.Contains(f.session.Text(), "Suggesting a beta, since the pack is missing 1 mod until") != (sodium != "26.1") {
+			t.Error(f.session.Text())
+		}
 	}
 }
 

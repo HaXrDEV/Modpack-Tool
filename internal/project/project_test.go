@@ -24,10 +24,32 @@ type goldenSettings struct {
 	ModrinthNotesFooter   string   `json:"modrinth_notes_footer"`
 }
 
+// settings adds the settings the Python tool didn't have, at their defaults.
 func (g goldenSettings) settings() Settings {
 	return Settings{Exports: g.Exports, ServerTemplate: g.ServerTemplate, ServerExclude: g.ServerExclude,
-		MCPrefixedVersions: g.MCPrefixedVersions, AlphaUpdates: g.AlphaUpdates, SideTags: g.SideTags,
+		MCPrefixedVersions: g.MCPrefixedVersions, Prereleases: "standalone", AlphaUpdates: g.AlphaUpdates, SideTags: g.SideTags,
 		ChangelogURL: g.ChangelogURL, CurseForgeNotesFooter: g.CurseForgeNotesFooter, ModrinthNotesFooter: g.ModrinthNotesFooter}
+}
+
+// withNewSettings adds the settings the Python tool didn't have to a file it
+// wrote, the way the template has them.
+func withNewSettings(text string) string {
+	newline := "\n"
+	if strings.Contains(text, "\r\n") {
+		newline = "\r\n"
+	}
+	entries, _ := parseTemplate()
+	for i, entry := range entries {
+		if entry.key != "prereleases" {
+			continue
+		}
+		// After the line of the setting before it.
+		start := strings.Index(text, newline+entries[i-1].key+":") + len(newline)
+		end := start + strings.Index(text[start:], newline)
+		block := append(slices.Clone(entry.before), entry.line)
+		text = text[:end] + newline + strings.Join(block, newline) + text[end:]
+	}
+	return text
 }
 
 // Python wrote new files with CRLF on Windows, where the goldens were made.
@@ -83,8 +105,8 @@ func TestSettingsMatchPython(t *testing.T) {
 			t.Errorf("%s: %v", label, err)
 			continue
 		}
-		if got := testutil.Read(t, filepath.Join(root, SettingsFile)); c.Output != nil && got != *c.Output {
-			t.Errorf("%s: file\n got %q\nwant %q", label, got, *c.Output)
+		if got := testutil.Read(t, filepath.Join(root, SettingsFile)); c.Output != nil && got != withNewSettings(*c.Output) {
+			t.Errorf("%s: file\n got %q\nwant %q", label, got, withNewSettings(*c.Output))
 		}
 		if want := c.Settings.settings(); !reflect.DeepEqual(settings, want) {
 			t.Errorf("%s: settings\n got %+v\nwant %+v", label, settings, want)
@@ -198,6 +220,21 @@ func TestBadValuesFallBack(t *testing.T) {
 	settings, notes, err := LoadSettings(root, "Odd", nil)
 	if err != nil || !slices.Equal(settings.Exports, []string{"curseforge"}) || settings.AlphaUpdates != "prompt" || len(notes) != 2 {
 		t.Error(err, settings, notes)
+	}
+}
+
+// prereleases is standalone or previews, and falls back to standalone.
+func TestPrereleasesSetting(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "Pack")
+	for value, want := range map[string]string{"": "standalone", "previews": "previews", "cumulative": "standalone"} {
+		testutil.Write(t, filepath.Join(root, SettingsFile), "prereleases: \""+value+"\"\n")
+		settings, notes, err := LoadSettings(root, "Pack", nil)
+		if err != nil || settings.Prereleases != want || (value == "cumulative") != anyContains(notes, "prereleases 'cumulative'") {
+			t.Error(value, settings.Prereleases, notes, err)
+		}
+		if !strings.Contains(testutil.Read(t, filepath.Join(root, SettingsFile)), "\nprereleases: \""+value+"\"\n") {
+			t.Error("the file doesn't keep", value)
+		}
 	}
 }
 

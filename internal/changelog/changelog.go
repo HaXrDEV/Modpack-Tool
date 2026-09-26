@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -92,6 +93,32 @@ func RecordPath(p *project.Project, v, minecraft string) string {
 		minecraft = p.Minecraft
 	}
 	return filepath.Join(p.DataDir(), Stem(v, minecraft)+".json")
+}
+
+// Prereleases are the changelogs of a full release's pre-releases (for
+// "26.2-1.0": "26.2-1.0-beta.1.yml", ...), oldest first.
+func Prereleases(p *project.Project, full string) ([]string, error) {
+	entries, err := os.ReadDir(p.ChangelogDir())
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	versions := map[string]string{}
+	var paths []string
+	for _, entry := range entries {
+		stem := strings.TrimSuffix(strings.TrimSuffix(entry.Name(), ".yml"), ".yaml")
+		v, _, _ := strings.Cut(stem, "+")
+		if !entry.IsDir() && stem != entry.Name() && version.IsPrereleaseOf(v, full) {
+			path := filepath.Join(p.ChangelogDir(), entry.Name())
+			versions[path] = v
+			paths = append(paths, path)
+		}
+	}
+	slices.SortFunc(paths, func(a, b string) int {
+		return version.Compare(version.ParseKey(versions[a]), version.ParseKey(versions[b]))
+	})
+	return paths, nil
 }
 
 // Create writes the changelog template for a version unless the file exists,
@@ -349,6 +376,43 @@ func isKeyLine(line, key string) bool {
 	return false
 }
 
+// handWritten are the sections that only you write. A full release takes
+// them over from its pre-releases, while Update overview and Config Changes
+// are drafted again from the changes since the previous full release, which
+// cover the pre-releases' changes.
+var handWritten = []string{"Changes/Improvements", "Bug Fixes", "Script/Datapack changes"}
+
+// Include adds the hand-written sections of earlier changelogs (a full
+// release's pre-releases, oldest first) in front of c's own lines, leaving
+// out lines c has already. It reports whether c changed; Save writes it.
+func (c *Changelog) Include(earlier []*Changelog) (bool, error) {
+	changed := false
+	for _, key := range handWritten {
+		own := c.Lines(key)
+		seen := map[string]bool{}
+		for _, line := range own {
+			seen[strings.ToLower(line)] = true
+		}
+		var added []string
+		for _, e := range earlier {
+			for _, line := range e.Lines(key) {
+				if !seen[strings.ToLower(line)] {
+					seen[strings.ToLower(line)] = true
+					added = append(added, line)
+				}
+			}
+		}
+		if len(added) == 0 {
+			continue
+		}
+		if err := c.SetSection(key, append(added, own...)); err != nil {
+			return false, err
+		}
+		changed = true
+	}
+	return changed, nil
+}
+
 // Save writes the changelog, keeping the file's line endings.
 func (c *Changelog) Save() error { return pycompat.WriteText(c.Path, c.text) }
 
@@ -487,11 +551,22 @@ func URL(p *project.Project, warn func(string)) string {
 	return url
 }
 
+// PrereleaseNotice says what a pre-release means for players, at the top of
+// its release notes; "" for a full release. The wiki shows the same notice.
+func PrereleaseNotice(v string) string {
+	kind := map[string]string{"dev": "a development build", "alpha": "an alpha", "beta": "a beta",
+		"rc": "a release candidate", "pre": "a pre-release"}[version.PrereleaseKind(v)]
+	if kind == "" {
+		return ""
+	}
+	return "This is " + kind + ", so it may be less stable or feature complete than a full release. Here be dragons!"
+}
+
 // ReleaseNotes is the Markdown release notes for "curseforge" or "modrinth".
 func ReleaseNotes(p *project.Project, c *Changelog, platform string, warn func(string)) string {
 	var blocks []string
-	if version.IsPrerelease(p.Version) {
-		blocks = append(blocks, "**This is a pre-release. Here be dragons!**")
+	if notice := PrereleaseNotice(p.Version); notice != "" {
+		blocks = append(blocks, "**"+notice+"**")
 	}
 	bullets := func(lines []string) string {
 		items := make([]string, len(lines))

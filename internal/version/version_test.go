@@ -105,6 +105,38 @@ func TestPrereleaseDetection(t *testing.T) {
 	}
 }
 
+func TestPrereleaseKind(t *testing.T) {
+	for v, want := range map[string]string{"26.2-1.0-alpha.1": "alpha", "26.2-1.0-beta.1": "beta", "26.2-1.0-rc.1": "rc",
+		"2.2.0b1": "beta", "2.0.0.pre6": "pre", "2.0.0rc1": "rc", "2.2.0.dev1": "dev", "26.2-1.0": "", "4.1.1a": ""} {
+		if got := PrereleaseKind(v); got != want {
+			t.Errorf("PrereleaseKind(%q) = %q", v, got)
+		}
+	}
+}
+
+// A pre-release belongs to the full release it leads up to, in both schemes.
+func TestIsPrereleaseOf(t *testing.T) {
+	for _, c := range []struct {
+		pre, full string
+		want      bool
+	}{
+		{"26.2-1.0-beta.1", "26.2-1.0", true},
+		{"26.2-1.0-rc.2", "26.2-1.0", true},
+		{"2.2.0b1", "2.2.0", true},
+		{"v3.6.0.pre1", "3.6.0", true},
+		{"26.2-1.0-beta.1", "26.2-1.1", false},
+		{"26.1-1.0-beta.1", "26.2-1.0", false},
+		{"26.2-1.0", "26.2-1.0", false},
+		{"26.2-1.0-beta.1", "26.2-1.0-beta.2", false},
+		{"4.1.1a", "4.1.1", false}, // A post-release.
+		{"junk-beta.1", "junk", false},
+	} {
+		if got := IsPrereleaseOf(c.pre, c.full); got != c.want {
+			t.Errorf("IsPrereleaseOf(%q, %q) = %v", c.pre, c.full, got)
+		}
+	}
+}
+
 // py: test_version.py::test_scheme_detection_and_anchor
 func TestSchemeAndAnchor(t *testing.T) {
 	if !IsMCPrefixed("26.1.1-1.2") || IsMCPrefixed("4.11.1") {

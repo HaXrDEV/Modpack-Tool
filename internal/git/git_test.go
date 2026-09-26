@@ -49,8 +49,24 @@ func TestPreviousReleaseAndTags(t *testing.T) {
 	checks := [][3]string{{"1.2.0", "HEAD", "v1.1.0"}, {"1.1.0", "v1.1.0", "1.0.0"}, {"1.0.0", "1.0.0", ""}}
 	for _, c := range checks {
 		// A version's own tag is skipped, with or without the "v" prefix.
-		if got, err := repo.PreviousRelease(ctx, c[0], c[1]); err != nil || got != c[2] {
+		if got, err := repo.PreviousRelease(ctx, c[0], c[1], false); err != nil || got != c[2] {
 			t.Errorf("PreviousRelease(%s, %s) = %q, %v", c[0], c[1], got, err)
+		}
+	}
+}
+
+// fullOnly skips pre-release tags, however they are spelled.
+func TestPreviousReleaseCanSkipPrereleases(t *testing.T) {
+	ctx := context.Background()
+	root := makeRepo(t)
+	testutil.Git(t, root, "tag", "1.2.0-beta.1")
+	testutil.Git(t, root, "commit", "-q", "--allow-empty", "-m", "beta 2")
+	testutil.Git(t, root, "tag", "v1.2.0b2")
+	testutil.Git(t, root, "commit", "-q", "--allow-empty", "-m", "1.2.0")
+	repo := New(root)
+	for fullOnly, want := range map[bool]string{false: "v1.2.0b2", true: "v1.1.0"} {
+		if got, err := repo.PreviousRelease(ctx, "1.2.0", "HEAD", fullOnly); err != nil || got != want {
+			t.Errorf("PreviousRelease(fullOnly %v) = %q, %v", fullOnly, got, err)
 		}
 	}
 }

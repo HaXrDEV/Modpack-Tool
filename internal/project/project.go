@@ -48,6 +48,13 @@ func (p *Project) MCPrefixed() bool {
 	return p.Settings.MCPrefixedVersions || version.IsMCPrefixed(p.Version)
 }
 
+// CoversPrereleases reports whether the version is a full release that covers
+// its pre-releases (prereleases: previews): it's compared with the previous
+// full release and its changelog starts with their notes.
+func (p *Project) CoversPrereleases() bool {
+	return p.Settings.Prereleases == "previews" && !version.IsPrerelease(p.Version)
+}
+
 // Rel returns path relative to the project root, with forward slashes.
 func (p *Project) Rel(path string) string {
 	if rel, err := filepath.Rel(p.Root, path); err == nil {

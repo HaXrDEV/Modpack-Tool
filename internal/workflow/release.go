@@ -44,9 +44,10 @@ func ReleaseTag(ctx context.Context, env *Env, v string) (string, error) {
 }
 
 // ChangesSinceRelease compares the working copy with the previous release
-// (or since); nil when there is nothing to compare against. A released
-// version is compared against its own tag: what isn't in any release yet.
-// details=false skips config line diffs, enough for the status.
+// (or since); nil when there is nothing to compare against. That's the
+// previous full release for a full release that covers its pre-releases. A
+// released version is compared against its own tag: what isn't in any
+// release yet. details=false skips config line diffs, enough for the status.
 func ChangesSinceRelease(ctx context.Context, env *Env, since string, details bool) (*diff.PackDiff, string, error) {
 	if !env.Git.IsRepo() {
 		return nil, "", nil
@@ -61,7 +62,7 @@ func ChangesSinceRelease(ctx context.Context, env *Env, since string, details bo
 		base = tag
 	}
 	if base == "" {
-		previous, err := env.Git.PreviousRelease(ctx, p.Version, "HEAD")
+		previous, err := env.Git.PreviousRelease(ctx, p.Version, "HEAD", p.CoversPrereleases())
 		if err != nil {
 			return nil, "", err
 		}
@@ -178,6 +179,9 @@ func NewVersion(ctx context.Context, env *Env, suggestion, newVersion string) (b
 		if err != nil {
 			return false, err
 		}
+		if err := includePrereleases(env); err != nil {
+			env.UI.Warn("The notes of its pre-releases weren't added to the changelog: " + err.Error())
+		}
 		env.UI.Result(fmt.Sprintf("Version is now %s. Changelog: %s", newVersion, p.Rel(path)),
 			"work on the pack, then Draft changelog (3) and Build release (4).")
 		return true, nil
@@ -205,9 +209,48 @@ func NewVersion(ctx context.Context, env *Env, suggestion, newVersion string) (b
 			return false, err
 		}
 	}
-	env.UI.Result(fmt.Sprintf("Renamed %s to %s (%s).", oldVersion, newVersion, filepath.Base(target)),
-		"work on the pack, then Draft changelog (3) and Build release (4).")
+	if err := includePrereleases(env); err != nil {
+		env.UI.Warn("The notes of its pre-releases weren't added to the changelog: " + err.Error())
+	}
+	next := "work on the pack, then Draft changelog (3) and Build release (4)."
+	if version.IsPrerelease(oldVersion) && p.CoversPrereleases() {
+		next = "Draft changelog (3) again, so it covers everything since the previous full release, then Build release (4)."
+	}
+	env.UI.Result(fmt.Sprintf("Renamed %s to %s (%s).", oldVersion, newVersion, filepath.Base(target)), next)
 	return true, nil
+}
+
+// includePrereleases adds what you wrote for a full release's pre-releases to
+// its changelog, when the release covers theirs (prereleases: previews).
+func includePrereleases(env *Env) error {
+	p := env.Project
+	if !p.CoversPrereleases() {
+		return nil
+	}
+	paths, err := changelog.Prereleases(p, p.Version)
+	if err != nil || len(paths) == 0 {
+		return err
+	}
+	earlier := make([]*changelog.Changelog, len(paths))
+	names := make([]string, len(paths))
+	for i, path := range paths {
+		if earlier[i], err = changelog.Load(path); err != nil {
+			return err
+		}
+		names[i] = filepath.Base(path)
+	}
+	data, err := changelog.Load(changelog.Path(p, "", ""))
+	if err != nil {
+		return err
+	}
+	if changed, err := data.Include(earlier); err != nil || !changed {
+		return err
+	}
+	if err := data.Save(); err != nil {
+		return err
+	}
+	env.UI.Info("Added the Changes/Improvements, Bug Fixes and Script/Datapack changes of its pre-releases:", names...)
+	return nil
 }
 
 ////////////////////////////////////////////////////////////

@@ -12,6 +12,7 @@ import (
 	"errors"
 	"io"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/HaXrDEV/Modpack-Tool/internal/files"
 	"github.com/HaXrDEV/Modpack-Tool/internal/pack"
 	"github.com/HaXrDEV/Modpack-Tool/internal/proc"
+	"github.com/HaXrDEV/Modpack-Tool/internal/version"
 )
 
 // Only version-like tags count as releases.
@@ -117,12 +119,12 @@ func (r *Repo) Tags(ctx context.Context) (map[string]bool, error) {
 }
 
 // TagFor returns the tag of a released version ("4.11.1" or "v4.11.1"), or "".
-func (r *Repo) TagFor(ctx context.Context, version string) (string, error) {
+func (r *Repo) TagFor(ctx context.Context, v string) (string, error) {
 	tags, err := r.Tags(ctx)
 	if err != nil {
 		return "", err
 	}
-	for _, candidate := range []string{version, "v" + version} {
+	for _, candidate := range []string{v, "v" + v} {
 		if tags[candidate] {
 			return candidate, nil
 		}
@@ -130,9 +132,10 @@ func (r *Repo) TagFor(ctx context.Context, version string) (string, error) {
 	return "", nil
 }
 
-// PreviousRelease is the newest release tag reachable from ref, ignoring the
-// current version's own tag; "" when there is none.
-func (r *Repo) PreviousRelease(ctx context.Context, currentVersion, ref string) (string, error) {
+// PreviousRelease is the release a version is compared with: the newest
+// release tag reachable from ref, ignoring the version's own tag, and
+// pre-release tags too with fullOnly. "" when there is none.
+func (r *Repo) PreviousRelease(ctx context.Context, currentVersion, ref string, fullOnly bool) (string, error) {
 	args := []string{"describe", "--tags", "--abbrev=0"}
 	for _, pattern := range releaseTagPatterns {
 		args = append(args, "--match", pattern)
@@ -140,11 +143,17 @@ func (r *Repo) PreviousRelease(ctx context.Context, currentVersion, ref string) 
 	for _, tag := range []string{currentVersion, "v" + currentVersion} {
 		args = append(args, "--exclude", tag)
 	}
-	result, err := r.run(ctx, options{}, append(args, ref)...)
-	if err != nil || result.Code != 0 {
-		return "", err
+	for {
+		result, err := r.run(ctx, options{}, append(slices.Clone(args), ref)...)
+		if err != nil || result.Code != 0 {
+			return "", err
+		}
+		tag := strings.TrimSpace(string(result.Stdout))
+		if !fullOnly || !version.IsPrerelease(tag) {
+			return tag, nil
+		}
+		args = append(args, "--exclude", tag)
 	}
-	return strings.TrimSpace(string(result.Stdout)), nil
 }
 
 // RefExists reports whether ref names a commit.
