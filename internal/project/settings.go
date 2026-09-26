@@ -31,6 +31,9 @@ var ExportKinds = []string{"curseforge", "modrinth", "server"}
 // AlphaPolicies are the values of alpha_updates.
 var AlphaPolicies = []string{"prompt", "never", "always"}
 
+// PrereleaseModes are the values of prereleases.
+var PrereleaseModes = []string{"standalone", "previews"}
+
 //go:embed settings_template.yml
 var templateText string
 
@@ -40,6 +43,7 @@ type Settings struct {
 	ServerTemplate        string
 	ServerExclude         []string
 	MCPrefixedVersions    bool
+	Prereleases           string
 	AlphaUpdates          string
 	SideTags              bool
 	ChangelogURL          string
@@ -50,7 +54,7 @@ type Settings struct {
 // DefaultSettings are the values used for anything the file leaves out.
 func DefaultSettings() Settings {
 	return Settings{Exports: []string{"curseforge", "modrinth"}, ServerTemplate: "Server Pack",
-		ServerExclude: []string{}, AlphaUpdates: "prompt"}
+		ServerExclude: []string{}, Prereleases: "standalone", AlphaUpdates: "prompt"}
 }
 
 // DefaultChangelogURL is the CrismPack wiki link for a pack.
@@ -300,6 +304,7 @@ func coerceSettings(values map[string]*yaml.Node, notes *[]string) Settings {
 	s.ServerTemplate = coerceString("server_template", nodeValue(values["server_template"]), s.ServerTemplate, notes)
 	s.ServerExclude = coerceList(nodeValue(values["server_exclude"]), s.ServerExclude)
 	s.MCPrefixedVersions = coerceBool("mc_prefixed_versions", nodeValue(values["mc_prefixed_versions"]), s.MCPrefixedVersions, notes)
+	s.Prereleases = coerceString("prereleases", nodeValue(values["prereleases"]), s.Prereleases, notes)
 	s.AlphaUpdates = coerceString("alpha_updates", nodeValue(values["alpha_updates"]), s.AlphaUpdates, notes)
 	s.SideTags = coerceBool("side_tags", nodeValue(values["side_tags"]), s.SideTags, notes)
 	s.ChangelogURL = coerceString("changelog_url", nodeValue(values["changelog_url"]), s.ChangelogURL, notes)
@@ -320,6 +325,10 @@ func coerceSettings(values map[string]*yaml.Node, notes *[]string) Settings {
 			good = []string{}
 		}
 		s.Exports = good
+	}
+	if !slices.Contains(PrereleaseModes, s.Prereleases) {
+		*notes = append(*notes, fmt.Sprintf("prereleases '%s' is not one of %s; using standalone.", s.Prereleases, strings.Join(PrereleaseModes, ", ")))
+		s.Prereleases = "standalone"
 	}
 	if !slices.Contains(AlphaPolicies, s.AlphaUpdates) {
 		*notes = append(*notes, fmt.Sprintf("alpha_updates '%s' is not one of %s; using prompt.", s.AlphaUpdates, strings.Join(AlphaPolicies, ", ")))

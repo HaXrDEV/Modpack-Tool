@@ -209,6 +209,14 @@ func IsPrerelease(v string) bool {
 	return ParseKey(v).Pre != finalPre
 }
 
+// IsPrereleaseOf reports whether pre is a pre-release of the full release
+// full: "26.2-1.0-beta.1" of "26.2-1.0", "2.2.0b1" of "2.2.0".
+func IsPrereleaseOf(pre, full string) bool {
+	p, f := ParseKey(pre), ParseKey(full)
+	return p.Kind == 1 && f.Kind == 1 && p.Pre != finalPre && f.Pre == finalPre &&
+		slices.Equal(p.Main, f.Main) && slices.Equal(p.Release, f.Release) && p.Post == f.Post
+}
+
 // Anchor is the changelog heading/anchor text for a version: MC-scheme
 // versions as they are, legacy ones with a "v" in front unless they contain one.
 func Anchor(v string) string {
