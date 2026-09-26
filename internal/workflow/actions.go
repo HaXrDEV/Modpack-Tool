@@ -66,7 +66,7 @@ var Actions = []Action{
 			return err
 		}},
 	{Key: "5", Name: "publish", Label: "Publish", Summary: "commit, push, GitHub release",
-		Help:  "commit, push and create the GitHub release (asks before each step)",
+		Help:  "commit with the release record, push and create the GitHub release (asks before each step)",
 		flags: func(fs *flag.FlagSet, a *Args) { fs.BoolVar(&a.DryRun, "dry-run", false, "only show what would run") },
 		Run:   func(ctx context.Context, env *Env, a Args) error { return Publish(ctx, env, a.DryRun) }},
 	{Key: "6", Name: "migrate", Label: "Migrate Minecraft", Summary: "move to another Minecraft version",

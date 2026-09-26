@@ -648,6 +648,11 @@ func Build(ctx context.Context, env *Env, since string, skipServer, review bool)
 		names = append(names, p.Rel(path))
 	}
 	step.Done("Wrote " + strings.Join(names, ", "))
+	if rule, added, err := ensureRecordsIgnored(env); err != nil {
+		env.UI.Warn("Couldn't add the release records to .gitignore: " + err.Error())
+	} else if added {
+		env.UI.Info(fmt.Sprintf("Added %s to .gitignore, so an unreleased record stays out of commits; Publish commits each one with its release.", rule))
+	}
 
 	var kinds []string
 	for _, kind := range p.Settings.Exports {
@@ -681,8 +686,36 @@ func Build(ctx context.Context, env *Env, since string, skipServer, review bool)
 	if review {
 		offerExportFolder(ctx, env, built)
 	}
-	env.UI.Result(fmt.Sprintf("Release %s is built.", p.Version), "Publish (5): commit, push and create the GitHub release.")
+	env.UI.Result(fmt.Sprintf("Release %s is built.", p.Version),
+		"Publish (5): commit with the release record, push and create the GitHub release.")
 	return built, nil
+}
+
+// ensureRecordsIgnored makes git ignore new release records, so an unreleased
+// one never gets committed along with other work; Publish adds each one with
+// its release, and committed records stay tracked. It returns the rule and
+// whether it had to add it.
+func ensureRecordsIgnored(env *Env) (string, bool, error) {
+	p := env.Project
+	rule := p.Rel(p.DataDir()) + "/*.json"
+	if !env.Git.IsRepo() {
+		return rule, false, nil
+	}
+	path := filepath.Join(p.Root, ".gitignore")
+	text, err := pycompat.ReadText(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return rule, false, err
+	}
+	for _, line := range strings.Split(text, "\n") {
+		if line = strings.TrimSpace(line); line == rule || line == "/"+rule {
+			return rule, false, nil
+		}
+	}
+	if text != "" {
+		text = strings.TrimRight(text, "\n") + "\n\n"
+	}
+	text += "# Unreleased release records; Publish commits each one with its release.\n" + rule + "\n"
+	return rule, true, pycompat.WriteText(path, text)
 }
 
 // offerExportFolder offers to open the Export folder when packs were built.
@@ -702,8 +735,8 @@ func offerExportFolder(ctx context.Context, env *Env, built []string) {
 ////////////////////////////////////////////////////////////
 // Publish
 
-// Publish commits, pushes and creates the GitHub release; the pack's
-// publish.yml then uploads it to CurseForge and Modrinth.
+// Publish commits, with the release record, pushes and creates the GitHub
+// release; the pack's publish.yml then uploads it to CurseForge and Modrinth.
 func Publish(ctx context.Context, env *Env, dryRun bool) error {
 	p := env.Project
 	if !env.Git.IsRepo() {
@@ -734,6 +767,10 @@ func Publish(ctx context.Context, env *Env, dryRun bool) error {
 	if len(missing) > 0 {
 		return fail.Errorf("Missing build output: %s. Build release again.", strings.Join(missing, ", "))
 	}
+	recordPath := changelog.RecordPath(p, "", "")
+	if !files.IsFile(recordPath) {
+		return fail.Errorf("The release record %s is missing. Build release again.", p.Rel(recordPath))
+	}
 	branch, err := env.Git.Branch(ctx)
 	if err != nil {
 		return err
@@ -754,23 +791,38 @@ func Publish(ctx context.Context, env *Env, dryRun bool) error {
 	if version.IsPrerelease(p.Version) {
 		args = append(args, "--prerelease")
 	}
-	changes, err := env.Git.Status(ctx)
-	if err != nil {
-		return err
-	}
 	if dryRun {
-		var commands []string
-		if len(changes) > 0 {
-			commands = append(commands, fmt.Sprintf(`git add --all && git commit -m "%s"   (%d changed paths)`, message, len(changes)))
+		changes, err := env.Git.Status(ctx)
+		if err != nil {
+			return err
 		}
 		quoted := []string{"gh"}
 		for _, arg := range args {
 			quoted = append(quoted, quoteArg(arg))
 		}
-		env.UI.Info("Dry run; these commands would run:", append(commands, "git push", strings.Join(quoted, " "))...)
+		env.UI.Info("Dry run; these commands would run:", "git add --force "+quoteArg(p.Rel(recordPath))+"   (the release record, dated today)",
+			fmt.Sprintf(`git add --all && git commit -m "%s"   (%d other changed paths)`, message, len(changes)),
+			"git push", strings.Join(quoted, " "))
 		return nil
 	}
 
+	// The record comes with the release: git ignores it until now, so an
+	// unreleased version never reaches the wiki. It's dated the day of the release.
+	record, err := pack.ReadJSONObject(recordPath)
+	if err != nil {
+		return err
+	}
+	record.Set("released", env.Now().Format("2006-01-02"))
+	if _, err := changelog.WriteRecord(p, record); err != nil {
+		return err
+	}
+	if err := env.Git.AddIgnored(ctx, p.Rel(recordPath)); err != nil {
+		return err
+	}
+	changes, err := env.Git.Status(ctx)
+	if err != nil {
+		return err
+	}
 	if len(changes) > 0 {
 		var paths []string
 		for _, line := range changes {
@@ -781,6 +833,10 @@ func Publish(ctx context.Context, env *Env, dryRun bool) error {
 		env.UI.Info(fmt.Sprintf("%d changed path%s:", len(changes), ui.Plural(len(changes))), ui.Limit(paths, 15)...)
 		ok, err := env.UI.Confirm(ctx, fmt.Sprintf("Commit all of them as '%s'?", message), true)
 		if err != nil || !ok {
+			// Not released after all, so git ignores the record again.
+			if unstageErr := env.Git.Unstage(context.WithoutCancel(ctx), p.Rel(recordPath)); unstageErr != nil && err == nil {
+				err = unstageErr
+			}
 			return err
 		}
 		step := env.UI.Step("Committing")
