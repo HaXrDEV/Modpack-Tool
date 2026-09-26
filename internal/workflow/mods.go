@@ -16,12 +16,14 @@ import (
 	"github.com/HaXrDEV/Modpack-Tool/internal/version"
 )
 
-// packwiz does the updating. On top of it the tool adds what packwiz lacks: a
-// guard against updates that land on alpha versions, an offer to re-enable
-// disabled mods that received an update, and (for migrations) disabling mods
-// that have no build for the new Minecraft version.
+// packwiz does the updating. On top of it the tool adds what packwiz lacks:
+// shader packs that follow their newest version whatever Minecraft version it
+// names, a guard against updates that land on alpha versions, an offer to
+// re-enable disabled mods that received an update, and (for migrations)
+// disabling mods that have no build for the new Minecraft version.
 
-// UpdateMods runs packwiz update --all with the alpha guard and re-enable offers.
+// UpdateMods runs packwiz update --all, then brings shader packs to their
+// newest versions, with the alpha guard and re-enable offers.
 func UpdateMods(ctx context.Context, env *Env) error {
 	if err := env.Packwiz.Refresh(ctx); err != nil {
 		return err
@@ -41,7 +43,7 @@ func UpdateMods(ctx context.Context, env *Env) error {
 			return err
 		}
 		step.Done("")
-		return nil
+		return updateShaders(ctx, env)
 	})
 	if err != nil {
 		return err
@@ -53,6 +55,77 @@ func UpdateMods(ctx context.Context, env *Env) error {
 		return err
 	}
 	env.UI.Result("Mods are up to date.", "Build release (4) when you're ready, or keep editing the pack.")
+	return nil
+}
+
+// updateShaders brings every unpinned Modrinth shader pack to its newest
+// version on an allowed channel, whichever Minecraft versions that lists:
+// shader packs rarely depend on the Minecraft version, and new versions often
+// don't name the newest one, so packwiz update leaves them behind. Versions
+// must share a shader loader (iris, optifine, ...) with the installed one.
+func updateShaders(ctx context.Context, env *Env) error {
+	mods, _, err := loadMods(env)
+	if err != nil {
+		return err
+	}
+	var shaders []pack.Mod
+	for _, mod := range mods {
+		if mod.Category() == "shaderpacks" && mod.Modrinth() != nil && !mod.Pinned() {
+			shaders = append(shaders, mod)
+		}
+	}
+	if len(shaders) == 0 {
+		return nil
+	}
+	step := env.UI.Step("Updating shader packs, for any Minecraft version")
+	found, err := lookUpInstalled(ctx, env, shaders)
+	if err != nil {
+		step.Fail(err)
+		return err
+	}
+	var updated []string
+	err = editing(ctx, env, func() error {
+		for _, mod := range shaders {
+			installed, ok := found.versions[mod.ModrinthVersion()]
+			if !ok || len(installed.Loaders) == 0 {
+				continue // Without its loaders, a newer version might not load.
+			}
+			versions, err := env.API.ModrinthProjectVersions(ctx, mod.ModrinthProject(), nil, installed.Loaders)
+			if err != nil {
+				return err
+			}
+			channel := installed.VersionType
+			if channel == "" {
+				channel = "release"
+			}
+			allowed := platform.AllowedChannels(channel)
+			i := slices.IndexFunc(versions, func(v platform.Version) bool { return allowed[v.VersionType] })
+			if i < 0 || versions[i].ID == installed.ID {
+				continue
+			}
+			target := versions[i]
+			var files []pack.ModrinthFile
+			for _, f := range target.Files {
+				files = append(files, pack.ModrinthFile{URL: f.URL, Filename: f.Filename, Primary: f.Primary, Hashes: f.Hashes})
+			}
+			applied, err := pack.ApplyModrinthVersion(env.Project.PackDir(), mod, target.ID, files)
+			if err != nil {
+				return err
+			}
+			if applied {
+				updated = append(updated, fmt.Sprintf("%s: %s -> %s", mod.Name(), installed.VersionNumber, target.VersionNumber))
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		step.Fail(err)
+		return err
+	}
+	step.Done(fmt.Sprintf("%d updated", len(updated)))
+	if len(updated) > 0 {
+		env.UI.Info("Shader packs on their newest versions:", updated...)
+	}
 	return nil
 }
 

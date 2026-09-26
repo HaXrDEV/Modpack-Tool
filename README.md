@@ -37,7 +37,7 @@ The first run asks for a modpack folder: the folder that contains `Packwiz/pack.
 
 | Key | Action | What it does |
 |---|---|---|
-| 1 | Update mods | `packwiz update --all`, then an alpha guard (keep, move to the newest beta/release, or revert) and an offer to re-enable disabled mods that received an update. Pinned mods can be unpinned for one run. |
+| 1 | Update mods | `packwiz update --all`, then an alpha guard (keep, move to the newest beta/release, or revert) and an offer to re-enable disabled mods that received an update. Shader packs from Modrinth go to their newest version even when it doesn't name the pack's Minecraft version, since that rarely matters for shaders. Pinned mods can be unpinned for one run. |
 | 2 | New version | Bumps the version in `pack.toml` and the BetterCompatibilityChecker configs and creates the changelog file. The released version's changelog goes, since its record has the same notes. If the current version was never released, it can be renamed instead. With `prereleases: previews`, a full release starts with what you wrote for its pre-releases. |
 | 3 | Draft changelog | Fills `Update overview` and `Config Changes` from the changes since the last release. Text you wrote is only replaced after you confirm; the rest of the file stays exactly as it is. |
 | 4 | Build release | Updates `bcc.json`, the Crash Assistant modlist and `modlist.md`, writes the release record and release notes, and builds the packs listed in `exports`, then offers to open the `Export` folder. Refuses an empty changelog. |

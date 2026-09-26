@@ -704,6 +704,44 @@ func TestUpdateModsRepinsAfterACancel(t *testing.T) {
 	}
 }
 
+// Update mods brings shader packs to their newest version on an allowed
+// channel, also one that doesn't name the pack's Minecraft version. A pinned
+// one stays as it is.
+func TestUpdateModsTakesTheNewestShaderVersions(t *testing.T) {
+	pw := testutil.PackDir(t)
+	bsl := testutil.Write(t, filepath.Join(pw, "shaderpacks", "bsl.pw.toml"),
+		testutil.Metafile("BSL Shaders", "BSL_v10.1.zip", testutil.MetaOptions{Side: "client"}))
+	pinned := testutil.Write(t, filepath.Join(pw, "shaderpacks", "old.pw.toml"),
+		testutil.Metafile("Old Shader", "old-1.zip", testutil.MetaOptions{Side: "client", Pin: true}))
+	f := newFixture(t, filepath.Dir(pw))
+	installed := platform.Version{ID: "BSL v1", VersionNumber: "10.1", VersionType: "release", Loaders: []string{"iris", "optifine"}}
+	f.api.Versions = map[string]platform.Version{"BSL v1": installed, "Old v1": {ID: "Old v1", VersionType: "release"}}
+	file := func(name string) []platform.File {
+		return []platform.File{{Primary: true, URL: "https://x/" + name, Filename: name, Hashes: map[string]string{"sha512": name}}}
+	}
+	f.api.ProjectVersions = map[string][]platform.Version{
+		"BSL Shad": {
+			{ID: "BSL v3", VersionNumber: "10.3-alpha", VersionType: "alpha", Files: file("BSL_v10.3.zip")},
+			{ID: "BSL v2", VersionNumber: "10.2", VersionType: "release", GameVersions: []string{"1.21.4"}, Files: file("BSL_v10.2.zip")},
+			installed,
+		},
+		"Old Shad": {{ID: "Old v2", VersionNumber: "2", VersionType: "release", Files: file("old-2.zip")}},
+	}
+	f.answers("") // Keep the pins.
+	if err := UpdateMods(ctx, f.Env); err != nil {
+		t.Fatal(err, f.session.Text())
+	}
+	if text := testutil.Read(t, bsl); !strings.Contains(text, `version = "BSL v2"`) || !strings.Contains(text, `filename = "BSL_v10.2.zip"`) {
+		t.Error("BSL Shaders isn't on 10.2:\n" + text)
+	}
+	if !strings.Contains(testutil.Read(t, pinned), `version = "Old v1"`) {
+		t.Error("the pinned shader pack was updated")
+	}
+	if !strings.Contains(f.session.Text(), "BSL Shaders: 10.1 -> 10.2") {
+		t.Error(f.session.Text())
+	}
+}
+
 // cancelingPackwiz cancels the run while packwiz update is running.
 type cancelingPackwiz struct {
 	*fakePackwiz
