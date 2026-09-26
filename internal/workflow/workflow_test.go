@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -501,6 +502,41 @@ func TestIncompatibleMods(t *testing.T) {
 	f.Project.AcceptableVersions = []string{"1.21.10"}
 	if incompatible, _, _ := IncompatibleMods(ctx, f.Env); len(incompatible) != 0 {
 		t.Error(slugs(incompatible))
+	}
+}
+
+// migratingPackwiz changes the Minecraft version in pack.toml, as packwiz does.
+type migratingPackwiz struct {
+	fakePackwiz
+	packDir string
+}
+
+func (m *migratingPackwiz) MigrateMinecraft(_ context.Context, v string) error {
+	path := filepath.Join(m.packDir, "pack.toml")
+	text, err := os.ReadFile(path)
+	if err == nil {
+		err = os.WriteFile(path, regexp.MustCompile(`minecraft = "[^"]*"`).ReplaceAll(text, []byte(`minecraft = "`+v+`"`)), 0o644)
+	}
+	return err
+}
+
+// Migrate suggests a beta when it had to disable mods that aren't updated yet.
+func TestMigrateSuggestsABetaWhenModsAreMissing(t *testing.T) {
+	for sodium, want := range map[string]string{"26.1": "1.3.0", "1.21.11": "1.3.0-beta.1"} {
+		f := newFixture(t, filepath.Dir(testutil.PackDir(t)))
+		f.Packwiz = &migratingPackwiz{packDir: f.Project.PackDir()}
+		f.api.Versions = map[string]platform.Version{"Lithv1": {GameVersions: []string{"26.1"}},
+			"Sodiv1": {GameVersions: []string{sodium}}, "Pinnv1": {GameVersions: []string{"26.1"}}}
+		f.answers("", "", "", "") // The latest loader, no unpinning, disable Sodium if asked, the suggested version.
+		if err := Migrate(ctx, f.Env, "26.1"); err != nil {
+			t.Fatal(err, f.session.Text())
+		}
+		if f.Project.Minecraft != "26.1" || f.Project.Version != want {
+			t.Errorf("Sodium for %s: Minecraft %s, version %s", sodium, f.Project.Minecraft, f.Project.Version)
+		}
+		if strings.Contains(f.session.Text(), "Suggesting a beta, since the pack is missing 1 mod until") != (sodium != "26.1") {
+			t.Error(f.session.Text())
+		}
 	}
 }
 

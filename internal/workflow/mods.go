@@ -492,6 +492,7 @@ func Migrate(ctx context.Context, env *Env, target string) error {
 	if len(unknown) > 0 {
 		env.UI.Warn("Couldn't check these (no Modrinth/CurseForge data); test them yourself:", pack.Names(unknown)...)
 	}
+	disabled := 0
 	if len(incompatible) > 0 {
 		var names []string
 		for _, mod := range incompatible {
@@ -503,6 +504,7 @@ func Migrate(ctx context.Context, env *Env, target string) error {
 			return err
 		}
 		if disable {
+			disabled = len(incompatible)
 			if err := editing(ctx, env, func() error {
 				for _, mod := range incompatible {
 					if err := pack.SetDisabled(p.PackDir(), mod, true); err != nil {
@@ -529,6 +531,11 @@ func Migrate(ctx context.Context, env *Env, target string) error {
 		if suggestion = version.MinorVersion(oldVersion); suggestion == "" {
 			suggestion = version.NextVersion(oldVersion)
 		}
+	}
+	// Missing mods make the pack less feature complete than a full release.
+	if disabled > 0 && suggestion != "" {
+		suggestion += "-beta.1"
+		env.UI.Info(fmt.Sprintf("Suggesting a beta, since the pack is missing %d mod%s until they're updated.", disabled, ui.Plural(disabled)))
 	}
 	_, err = NewVersion(ctx, env, suggestion, "")
 	return err
