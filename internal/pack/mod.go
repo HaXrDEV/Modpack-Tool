@@ -204,6 +204,20 @@ func (m Mod) CurseForgeFile() int64 { return Int(m.CurseForge()["file-id"]) }
 // CurseForgeProject is the CurseForge project id (0 without one).
 func (m Mod) CurseForgeProject() int64 { return Int(m.CurseForge()["project-id"]) }
 
+// ProjectURL is the file's project page, found by its project id; "" for a
+// file from a plain URL.
+func (m Mod) ProjectURL() string {
+	switch {
+	case m.Modrinth() != nil:
+		return "https://modrinth.com/project/" + pycompat.Str(m.Modrinth()["mod-id"])
+	case m.CurseForge() != nil:
+		return "https://www.curseforge.com/projects/" + pycompat.Str(m.CurseForge()["project-id"])
+	case m.GitHub() != nil:
+		return "https://github.com/" + pycompat.Str(m.GitHub()["slug"])
+	}
+	return ""
+}
+
 // Table returns value as a TOML table, or an empty one.
 func Table(value any) map[string]any {
 	if table, ok := value.(map[string]any); ok {

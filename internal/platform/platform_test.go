@@ -106,6 +106,21 @@ func TestFingerprintMatches(t *testing.T) {
 	}
 }
 
+// Teams come back as one member list per team, keyed by the team id.
+func TestModrinthTeams(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/teams" || r.URL.Query().Get("ids") != `["t1","t2"]` {
+			t.Error(r.URL)
+		}
+		io.WriteString(w, `[[{"team_id": "t1", "user": {"username": "alice"}, "role": "Owner", "ordering": 0}], []]`)
+	}))
+	defer server.Close()
+	teams, err := testClient(server).ModrinthTeams(context.Background(), []string{"t2", "t1", "t1", ""})
+	if err != nil || len(teams) != 1 || teams["t1"][0].User.Username != "alice" || teams["t1"][0].Role != "Owner" {
+		t.Error(teams, err)
+	}
+}
+
 func TestDownloadRestartsAfterAFailure(t *testing.T) {
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

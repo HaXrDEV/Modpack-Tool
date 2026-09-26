@@ -2,6 +2,7 @@ package export
 
 import (
 	"archive/zip"
+	"cmp"
 	"context"
 	"crypto/sha1"
 	"crypto/sha512"
@@ -581,15 +582,8 @@ func BuildServer(ctx context.Context, p *project.Project, contents *Contents, st
 // All of it
 
 func sourceLink(mod pack.Mod) string {
-	switch {
-	case mod.Modrinth() != nil:
-		return "https://modrinth.com/project/" + pycompat.Str(mod.Modrinth()["mod-id"])
-	case mod.CurseForge() != nil:
-		return "https://www.curseforge.com/projects/" + pycompat.Str(mod.CurseForge()["project-id"])
-	case mod.GitHub() != nil:
-		return "https://github.com/" + pycompat.Str(mod.GitHub()["slug"])
-	case mod.DownloadURL() != "":
-		return mod.DownloadURL()
+	if link := cmp.Or(mod.ProjectURL(), mod.DownloadURL()); link != "" {
+		return link
 	}
 	return "(link unknown)"
 }

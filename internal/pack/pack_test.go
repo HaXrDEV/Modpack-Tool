@@ -275,6 +275,17 @@ func TestTidyName(t *testing.T) {
 	}
 }
 
+// Bundled files are the jars in mods/ and the zips and folders in the other
+// category folders that the index lists, one entry each.
+func TestBundled(t *testing.T) {
+	entries := []IndexEntry{{File: "mods/extra.jar"}, {File: "mods/sub/other.jar"}, {File: "mods/sodium.pw.toml", Metafile: true},
+		{File: "shaderpacks/Comp [Edit]/shaders/a.glsl"}, {File: "shaderpacks/Comp [Edit]/License.txt"}, {File: "shaderpacks/Comp [Edit].txt"},
+		{File: "resourcepacks/Pack.zip"}, {File: "config/x.json"}, {File: "mods/notes.txt"}}
+	if got := Bundled(entries); !slices.Equal(got, []string{"mods/extra.jar", "shaderpacks/Comp [Edit]", "resourcepacks/Pack.zip"}) {
+		t.Error(got)
+	}
+}
+
 // py: test_pack.py::test_strip_brackets
 func TestStripBrackets(t *testing.T) {
 	if got := StripBrackets("Entity Texture Features [Fabric] (beta)"); got != "Entity Texture Features" {

@@ -303,6 +303,18 @@ func TestRecordMatchesTheWikiContract(t *testing.T) {
 	}
 }
 
+// A release's contents come last in its record, without a file's empty fields.
+func TestRecordContents(t *testing.T) {
+	record := BuildRecord(testProject(t), loadText(t, "Bug Fixes:\n  - Fixed it.\n"), nil, "2026-09-26")
+	record.Contents = &Contents{Mods: []Item{{Name: "Sodium", File: "sodium.jar"}}, ResourcePacks: []Item{}, ShaderPacks: []Item{}}
+	encoded, _ := pycompat.Dumps(record, 2, false)
+	want := "\n  \"contents\": {\n    \"mods\": [\n      {\n        \"name\": \"Sodium\",\n        \"file\": \"sodium.jar\"\n      }\n    ],\n" +
+		"    \"resourcepacks\": [],\n    \"shaderpacks\": []\n  }\n}"
+	if !strings.HasSuffix(strings.TrimSpace(string(encoded)), want) {
+		t.Errorf("%s", encoded)
+	}
+}
+
 // py: test_changelog.py::test_release_notes
 func TestReleaseNotes(t *testing.T) {
 	p := testProject(t)
