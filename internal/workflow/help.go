@@ -28,7 +28,7 @@ DISABLED MODS
 
 FILES
   <pack>/modpack-tool.yml             this pack's settings
-  <pack>/Changelogs/<version>.yml     the changelog you write (data/<version>.json is for the wiki)
+  <pack>/Changelogs/<version>.yml     the changelog you're writing (data/ has every release's record)
   <pack>/CurseForge-Release.md, Modrinth-Release.md   release notes publish.yml uploads
   <pack>/Export/                      built packs, plus bundled_links.md
   %s

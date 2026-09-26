@@ -228,20 +228,21 @@ func TestTemplateAndSections(t *testing.T) {
 	}
 }
 
-// A full release's pre-releases are found by their changelogs, in both schemes.
-func TestPrereleases(t *testing.T) {
+// The records are read oldest first, and their sections by changelog key.
+func TestRecords(t *testing.T) {
 	p := testProject(t)
-	for _, name := range []string{"1.2.0-beta.2+1.21.11.yml", "1.2.0-beta.1+1.21.11.yml", "1.2.0-rc.1.yml", "1.2.0+1.21.11.yml",
-		"1.1.0-beta.1+1.21.11.yml", "changelog_mods_1.2.0-beta.1.md", "data/1.2.0-beta.1+1.21.11.json"} {
-		testutil.Write(t, filepath.Join(p.ChangelogDir(), name), "")
+	for name, text := range map[string]string{
+		"1.2.0-beta.2+1.21.11.json": `{"version": "1.2.0-beta.2", "bugfixes": ["Fixed the menu."]}`,
+		"1.2.0-beta.1+1.21.11.json": `{"version": "1.2.0-beta.1", "changes": ["New menu."]}`,
+		"notes.txt":                 "not a record",
+	} {
+		testutil.Write(t, filepath.Join(p.DataDir(), name), text)
 	}
-	paths, err := Prereleases(p, "1.2.0")
-	var names []string
-	for _, path := range paths {
-		names = append(names, filepath.Base(path))
-	}
-	if err != nil || !slices.Equal(names, []string{"1.2.0-beta.1+1.21.11.yml", "1.2.0-beta.2+1.21.11.yml", "1.2.0-rc.1.yml"}) {
-		t.Error(names, err)
+	records, err := Records(p)
+	if err != nil || len(records) != 2 || records[0].Version != "1.2.0-beta.1" ||
+		!slices.Equal(records[0].Lines("Changes/Improvements"), []string{"New menu."}) ||
+		!slices.Equal(records[1].Lines("Bug Fixes"), []string{"Fixed the menu."}) {
+		t.Error(records, err)
 	}
 }
 
@@ -249,7 +250,7 @@ func TestPrereleases(t *testing.T) {
 // first and once, but not the drafted sections.
 func TestIncludeAddsThePrereleasesNotes(t *testing.T) {
 	c := loadText(t, "Update overview:\n  - Drafted.\nBug Fixes:\n  - Own fix.\n")
-	earlier := []*Changelog{
+	earlier := []Notes{
 		loadText(t, "Update overview:\n  - Beta overview.\nChanges/Improvements:\n  - New menu.\nBug Fixes:\n  - Fixed a crash.\n"),
 		loadText(t, "Bug Fixes:\n  - fixed a crash.\n  - Own fix.\n  - 'Sodium: fixed flicker'\nConfig Changes: |-\n  - Changed x: [Mod]\n"),
 	}

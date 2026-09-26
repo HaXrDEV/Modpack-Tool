@@ -4,10 +4,14 @@
 // Each release has Changelogs/<stem>.yml (written by you, optionally drafted
 // by the tool) and Changelogs/data/<stem>.json, a presentation-free record
 // that the wiki (CrismPack/Wiki docs/.vitepress/changelog.mjs) renders. Keep
-// the record's keys in sync with that renderer.
+// the record's keys in sync with that renderer. The records are the source
+// of truth: they stay, every wiki sync copies all of them, and the tool reads
+// a released version's notes from its record. So a released version's YAML
+// goes when the next version starts, once its record has the same notes.
 package changelog
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -93,32 +97,6 @@ func RecordPath(p *project.Project, v, minecraft string) string {
 		minecraft = p.Minecraft
 	}
 	return filepath.Join(p.DataDir(), Stem(v, minecraft)+".json")
-}
-
-// Prereleases are the changelogs of a full release's pre-releases (for
-// "26.2-1.0": "26.2-1.0-beta.1.yml", ...), oldest first.
-func Prereleases(p *project.Project, full string) ([]string, error) {
-	entries, err := os.ReadDir(p.ChangelogDir())
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	} else if err != nil {
-		return nil, err
-	}
-	versions := map[string]string{}
-	var paths []string
-	for _, entry := range entries {
-		stem := strings.TrimSuffix(strings.TrimSuffix(entry.Name(), ".yml"), ".yaml")
-		v, _, _ := strings.Cut(stem, "+")
-		if !entry.IsDir() && stem != entry.Name() && version.IsPrereleaseOf(v, full) {
-			path := filepath.Join(p.ChangelogDir(), entry.Name())
-			versions[path] = v
-			paths = append(paths, path)
-		}
-	}
-	slices.SortFunc(paths, func(a, b string) int {
-		return version.Compare(version.ParseKey(versions[a]), version.ParseKey(versions[b]))
-	})
-	return paths, nil
 }
 
 // Create writes the changelog template for a version unless the file exists,
@@ -382,10 +360,16 @@ func isKeyLine(line, key string) bool {
 // cover the pre-releases' changes.
 var handWritten = []string{"Changes/Improvements", "Bug Fixes", "Script/Datapack changes"}
 
-// Include adds the hand-written sections of earlier changelogs (a full
-// release's pre-releases, oldest first) in front of c's own lines, leaving
-// out lines c has already. It reports whether c changed; Save writes it.
-func (c *Changelog) Include(earlier []*Changelog) (bool, error) {
+// Notes are a release's notes by section, as its changelog or its record has
+// them.
+type Notes interface {
+	Lines(key string) []string
+}
+
+// Include adds the hand-written sections of earlier notes (a full release's
+// pre-releases, oldest first) in front of c's own lines, leaving out lines c
+// has already. It reports whether c changed; Save writes it.
+func (c *Changelog) Include(earlier []Notes) (bool, error) {
 	changed := false
 	for _, key := range handWritten {
 		own := c.Lines(key)
@@ -437,6 +421,53 @@ type Record struct {
 	ResourcePacks RecordDiff  `json:"resourcepacks"`
 	ShaderPacks   RecordDiff  `json:"shaderpacks"`
 	Contents      *Contents   `json:"contents,omitempty"`
+}
+
+// Lines returns one of the record's sections by its changelog key ("Bug
+// Fixes"), the way BuildRecord took it from the changelog.
+func (r Record) Lines(key string) []string {
+	switch key {
+	case "Update overview":
+		return r.Overview
+	case "Changes/Improvements":
+		return r.Changes
+	case "Bug Fixes":
+		return r.BugFixes
+	case "Script/Datapack changes":
+		return r.ScriptChanges
+	case "Config Changes":
+		return r.ConfigChanges
+	}
+	return nil
+}
+
+// Records reads the release records in Changelogs/data, oldest first.
+func Records(p *project.Project) ([]Record, error) {
+	entries, err := os.ReadDir(p.DataDir())
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	var records []Record
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		var r Record
+		data, err := os.ReadFile(filepath.Join(p.DataDir(), entry.Name()))
+		if err == nil {
+			err = json.Unmarshal(data, &r)
+		}
+		if err != nil {
+			return nil, fail.Wrapf(err, "The record %s can't be read: %v", entry.Name(), err)
+		}
+		records = append(records, r)
+	}
+	slices.SortFunc(records, func(a, b Record) int {
+		return version.Compare(version.ParseKey(a.Version), version.ParseKey(b.Version))
+	})
+	return records, nil
 }
 
 // Contents is everything a release contains, for the wiki's modlists.
