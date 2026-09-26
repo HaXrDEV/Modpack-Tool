@@ -551,11 +551,22 @@ func URL(p *project.Project, warn func(string)) string {
 	return url
 }
 
+// PrereleaseNotice says what a pre-release means for players, at the top of
+// its release notes; "" for a full release. The wiki shows the same notice.
+func PrereleaseNotice(v string) string {
+	kind := map[string]string{"dev": "a development build", "alpha": "an alpha", "beta": "a beta",
+		"rc": "a release candidate", "pre": "a pre-release"}[version.PrereleaseKind(v)]
+	if kind == "" {
+		return ""
+	}
+	return "This is " + kind + ", so it may be less stable or feature complete than a full release. Here be dragons!"
+}
+
 // ReleaseNotes is the Markdown release notes for "curseforge" or "modrinth".
 func ReleaseNotes(p *project.Project, c *Changelog, platform string, warn func(string)) string {
 	var blocks []string
-	if version.IsPrerelease(p.Version) {
-		blocks = append(blocks, "**This is a pre-release. Here be dragons!**")
+	if notice := PrereleaseNotice(p.Version); notice != "" {
+		blocks = append(blocks, "**"+notice+"**")
 	}
 	bullets := func(lines []string) string {
 		items := make([]string, len(lines))

@@ -209,6 +209,22 @@ func IsPrerelease(v string) bool {
 	return ParseKey(v).Pre != finalPre
 }
 
+// A plain "pre" or "preview" tag ("2.0.0.pre1"), which PEP 440 sorts like rc.
+var plainPreTag = regexp.MustCompile(`(?i)[._-]?(pre|preview)[._-]?\d*$`)
+
+// PrereleaseKind is a pre-release's kind: "dev", "alpha", "beta", "rc", or
+// "pre" for a plain "2.0.0.pre1"; "" for a full release.
+func PrereleaseKind(v string) string {
+	pre := ParseKey(v).Pre
+	if pre == finalPre {
+		return ""
+	}
+	if pre[0] == 3 && plainPreTag.MatchString(pycompat.Strip(v)) {
+		return "pre"
+	}
+	return []string{"dev", "alpha", "beta", "rc"}[pre[0]]
+}
+
 // IsPrereleaseOf reports whether pre is a pre-release of the full release
 // full: "26.2-1.0-beta.1" of "26.2-1.0", "2.2.0b1" of "2.2.0".
 func IsPrereleaseOf(pre, full string) bool {

@@ -105,6 +105,15 @@ func TestPrereleaseDetection(t *testing.T) {
 	}
 }
 
+func TestPrereleaseKind(t *testing.T) {
+	for v, want := range map[string]string{"26.2-1.0-alpha.1": "alpha", "26.2-1.0-beta.1": "beta", "26.2-1.0-rc.1": "rc",
+		"2.2.0b1": "beta", "2.0.0.pre6": "pre", "2.0.0rc1": "rc", "2.2.0.dev1": "dev", "26.2-1.0": "", "4.1.1a": ""} {
+		if got := PrereleaseKind(v); got != want {
+			t.Errorf("PrereleaseKind(%q) = %q", v, got)
+		}
+	}
+}
+
 // A pre-release belongs to the full release it leads up to, in both schemes.
 func TestIsPrereleaseOf(t *testing.T) {
 	for _, c := range []struct {

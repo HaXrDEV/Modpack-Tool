@@ -122,6 +122,8 @@ func TestRecordsMatchPython(t *testing.T) {
 	}
 }
 
+// Pre-releases now say what they are and what that means before "Here be
+// dragons!", where Python only said "This is a pre-release.".
 func TestReleaseNotesMatchPython(t *testing.T) {
 	p := testProject(t)
 	for _, c := range loadGolden(t).Notes {
@@ -129,8 +131,9 @@ func TestReleaseNotesMatchPython(t *testing.T) {
 		p.Settings.ChangelogURL, p.Settings.CurseForgeNotesFooter, p.Settings.ModrinthNotesFooter = c.URL, c.CFFooter, c.MRFooter
 		var warnings []string
 		got := ReleaseNotes(p, loadText(t, c.Changelog), c.Platform, func(w string) { warnings = append(warnings, w) })
-		if got != c.Notes {
-			t.Errorf("%s %s %q:\n got %q\nwant %q", c.Version, c.Platform, c.URL, got, c.Notes)
+		want := strings.Replace(c.Notes, "This is a pre-release. Here be dragons!", PrereleaseNotice(c.Version), 1)
+		if got != want {
+			t.Errorf("%s %s %q:\n got %q\nwant %q", c.Version, c.Platform, c.URL, got, want)
 		}
 		if strings.Contains(c.URL, "unknown") && len(warnings) == 0 {
 			t.Error("no warning for a broken link template")
@@ -321,7 +324,8 @@ func TestReleaseNotesForPrereleaseWithoutOverview(t *testing.T) {
 	p := testProject(t)
 	p.Version = "1.3.0-beta.1"
 	cl := loadText(t, "Changes/Improvements:\n  - New menu\nBug Fixes:\n  - Fixed crash\n")
-	want := "**This is a pre-release. Here be dragons!**\n\n### Changes/Improvements ⭐\n\n- New menu\n\n### Bug Fixes 🪲\n\n- Fixed crash\n"
+	want := "**This is a beta, so it may be less stable or feature complete than a full release. Here be dragons!**\n\n" +
+		"### Changes/Improvements ⭐\n\n- New menu\n\n### Bug Fixes 🪲\n\n- Fixed crash\n"
 	if got := ReleaseNotes(p, cl, "modrinth", nil); got != want {
 		t.Errorf("%q", got)
 	}
