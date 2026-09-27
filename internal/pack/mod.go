@@ -116,6 +116,18 @@ func (m Mod) PlainName() string {
 // Filename is the file packwiz installs.
 func (m Mod) Filename() string { return pycompat.Or(m.Data["filename"], "") }
 
+// Matches reports whether an exclude entry names the file: its slug, name or
+// filename, ignoring case.
+func (m Mod) Matches(entry string) bool {
+	entry = strings.ToLower(pycompat.Strip(entry))
+	for _, name := range []string{m.Slug(), m.Name(), m.DisplayName(), m.PlainName(), m.Filename()} {
+		if strings.ToLower(name) == entry {
+			return true
+		}
+	}
+	return false
+}
+
 // SideRaw is the side as written in the metafile.
 func (m Mod) SideRaw() string { return pycompat.Strip(pycompat.Or(m.Data["side"], "")) }
 

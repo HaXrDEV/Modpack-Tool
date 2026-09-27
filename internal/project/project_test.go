@@ -26,7 +26,8 @@ type goldenSettings struct {
 
 // settings adds the settings the Python tool didn't have, at their defaults.
 func (g goldenSettings) settings() Settings {
-	return Settings{Exports: g.Exports, ServerTemplate: g.ServerTemplate, ServerExclude: g.ServerExclude,
+	return Settings{Exports: g.Exports, CurseForgeExclude: []string{}, ModrinthExclude: []string{},
+		ServerTemplate: g.ServerTemplate, ServerExclude: g.ServerExclude,
 		MCPrefixedVersions: g.MCPrefixedVersions, Prereleases: "standalone", AlphaUpdates: g.AlphaUpdates, SideTags: g.SideTags,
 		ChangelogURL: g.ChangelogURL, CurseForgeNotesFooter: g.CurseForgeNotesFooter, ModrinthNotesFooter: g.ModrinthNotesFooter}
 }
@@ -40,7 +41,7 @@ func withNewSettings(text string) string {
 	}
 	entries, _ := parseTemplate()
 	for i, entry := range entries {
-		if entry.key != "prereleases" {
+		if !slices.Contains([]string{"curseforge_exclude", "modrinth_exclude", "prereleases"}, entry.key) {
 			continue
 		}
 		// After the line of the setting before it.
@@ -277,6 +278,54 @@ func TestSettingsValuesAreCoerced(t *testing.T) {
 	testutil.Write(t, filepath.Join(root, SettingsFile), "exports: curseforge\n")
 	if settings, _, _ := LoadSettings(root, "Pack", nil); !slices.Equal(settings.Exports, []string{"curseforge"}) {
 		t.Error(settings.Exports)
+	}
+}
+
+// curseforge_exclude and modrinth_exclude are lists like server_exclude, which
+// the file keeps in the template's layout.
+func TestPlatformExcludeSettings(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "Pack")
+	testutil.Write(t, filepath.Join(root, SettingsFile), "modrinth_exclude:\n- a\n- b\ncurseforge_exclude: voxy-worldgen\n")
+	settings, _, err := LoadSettings(root, "Pack", nil)
+	if err != nil || !slices.Equal(settings.CurseForgeExclude, []string{"voxy-worldgen"}) || !slices.Equal(settings.ModrinthExclude, []string{"a", "b"}) {
+		t.Error(settings, err)
+	}
+	text := testutil.Read(t, filepath.Join(root, SettingsFile))
+	if !strings.Contains(text, "only the Modrinth pack (slug, name or filename)") ||
+		!strings.Contains(text, "\ncurseforge_exclude: voxy-worldgen\nmodrinth_exclude:\n- a\n- b\n") {
+		t.Error(text)
+	}
+}
+
+// Opening a project notes the exclude entries that name none of its files,
+// like a jar's filename after an update. Disabled mods and resource packs count.
+func TestStaleExcludesAreNoted(t *testing.T) {
+	pw := testutil.PackDir(t)
+	testutil.Write(t, filepath.Join(filepath.Dir(pw), SettingsFile), "curseforge_exclude: [sodium, lithium-0.20.jar]\n"+
+		"modrinth_exclude: [Boss Checklist, Fresh Animations]\nserver_exclude: [pinned mod, gone]\n")
+	_, notes, err := Open(filepath.Dir(pw), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"curseforge_exclude: 'lithium-0.20.jar' matches no current mod; check it.",
+		"server_exclude: 'gone' matches no current mod; check it."}
+	if !slices.Equal(notes, want) {
+		t.Errorf("notes %q", notes)
+	}
+}
+
+// The import of old settings already notes an exclusion it can't place, so
+// opening the project doesn't say it twice.
+func TestImportedStaleExcludeIsNotedOnce(t *testing.T) {
+	root := legacyProject(t, "insomnia.yml")
+	testutil.Write(t, filepath.Join(root, LegacySettingsFile), "export_server: True\nserver_mods_remove_list: [\"Gone-1.0.jar\"]\n")
+	_, notes, err := Open(root, answer(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := slices.DeleteFunc(slices.Clone(notes), func(note string) bool { return !strings.Contains(note, "'Gone-1.0.jar' matches no current mod") })
+	if len(stale) != 1 {
+		t.Errorf("notes %q", notes)
 	}
 }
 

@@ -310,6 +310,103 @@ func TestServerPack(t *testing.T) {
 	}
 }
 
+// withCrashAssistantModlist adds the Crash Assistant modlist to the pack's
+// overrides; its "shared" entry tells the pack's copy apart from one a build
+// writes.
+func (f *fixture) withCrashAssistantModlist(t *testing.T) {
+	t.Helper()
+	pw := f.project.PackDir()
+	testutil.Write(t, filepath.Join(pw, "config", "crash_assistant", "modlist.json"), `["shared"]`)
+	index := testutil.Read(t, filepath.Join(pw, "index.toml"))
+	testutil.Write(t, filepath.Join(pw, "index.toml"), index+"\n[[files]]\nfile = \"config/crash_assistant/modlist.json\"\nhash = \"x\"\n")
+}
+
+// A mod in curseforge_exclude is neither listed nor bundled in the CurseForge
+// pack, or even looked up there, and the pack's Crash Assistant modlist
+// leaves it out too.
+func TestCurseForgePackLeavesOutItsExcludes(t *testing.T) {
+	f := exportProject(t)
+	f.withCrashAssistantModlist(t)
+	f.project.Settings.CurseForgeExclude = []string{"Odd Host", "sodium.jar"}
+	output := filepath.Join(t.TempDir(), "cf.zip")
+	bundled, summary, err := BuildCurseForge(context.Background(), f.project, f.contents(t), f.store, output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest cfManifest
+	readJSON(t, output, "manifest.json", &manifest)
+	var projects []int64
+	for _, file := range manifest.Files {
+		projects = append(projects, file.ProjectID)
+	}
+	slices.Sort(projects)
+	if !slices.Equal(projects, []int64{22, 200}) {
+		t.Error(projects)
+	}
+	want := sorted("manifest.json", "overrides/resourcepacks/Bundled.zip", "overrides/config/a.json",
+		"overrides/config/crash_assistant/modlist.json", "overrides/mods/ghmod.jar")
+	if got := entries(t, output); !slices.Equal(got, want) {
+		t.Error(got)
+	}
+	var modlist []string
+	readJSON(t, output, "overrides/config/crash_assistant/modlist.json", &modlist)
+	if !slices.Equal(modlist, []string{"cfmod.jar", "ghmod.jar"}) {
+		t.Error(modlist)
+	}
+	if !slices.Equal(slugs(bundled), []string{"ghmod"}) || summary != "2 from CurseForge, 1 bundled, left out: Sodium, Odd Host" {
+		t.Error(slugs(bundled), summary)
+	}
+	for _, url := range f.api.Downloads {
+		if strings.HasSuffix(url, "/sodium.jar") || strings.HasSuffix(url, "/odd.jar") {
+			t.Error("downloaded an excluded mod:", url)
+		}
+	}
+}
+
+// A mod in modrinth_exclude is neither listed nor bundled in the .mrpack. A
+// pack that leaves nothing out ships the pack's own Crash Assistant modlist.
+func TestModrinthPackLeavesOutItsExcludes(t *testing.T) {
+	f := exportProject(t)
+	f.withCrashAssistantModlist(t)
+	dir := t.TempDir()
+	if _, _, err := BuildModrinth(context.Background(), f.project, f.contents(t), f.store, filepath.Join(dir, "all.mrpack")); err != nil {
+		t.Fatal(err)
+	}
+	var modlist []string
+	readJSON(t, filepath.Join(dir, "all.mrpack"), "overrides/config/crash_assistant/modlist.json", &modlist)
+	if !slices.Equal(modlist, []string{"shared"}) {
+		t.Error("with nothing left out:", modlist)
+	}
+
+	f.project.Settings.ModrinthExclude = []string{"ghmod", "CF Mod"}
+	output := filepath.Join(dir, "pack.mrpack")
+	bundled, summary, err := BuildModrinth(context.Background(), f.project, f.contents(t), f.store, output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var index struct {
+		Files []mrFile `json:"files"`
+	}
+	readJSON(t, output, "modrinth.index.json", &index)
+	var paths []string
+	for _, file := range index.Files {
+		paths = append(paths, file.Path)
+	}
+	if !slices.Equal(sorted(paths...), sorted("mods/sodium.jar", "mods/server.jar", "resourcepacks/fa.zip")) {
+		t.Error(paths)
+	}
+	if got := entries(t, output); slices.Contains(got, "overrides/mods/cfmod.jar") || !slices.Contains(got, "overrides/mods/odd.jar") {
+		t.Error(got)
+	}
+	readJSON(t, output, "overrides/config/crash_assistant/modlist.json", &modlist)
+	if !slices.Equal(modlist, []string{"odd.jar", "sodium.jar"}) {
+		t.Error(modlist)
+	}
+	if !slices.Equal(slugs(bundled), []string{"odd"}) || summary != "3 from Modrinth, 1 bundled, left out: CF Mod, GH Mod" {
+		t.Error(slugs(bundled), summary)
+	}
+}
+
 // py: test_exporter.py::test_bad_download_stops_the_export
 func TestBadDownloadStopsTheExport(t *testing.T) {
 	f := exportProject(t)
@@ -475,6 +572,20 @@ func TestExportWritesNamedFilesAndReport(t *testing.T) {
 	}
 	report := testutil.Read(t, filepath.Join(f.project.ExportDir(), "bundled_links.md"))
 	if !strings.Contains(report, "[GH Mod](https://github.com/me/gh): `ghmod.jar`") || !strings.Contains(report, "## Modrinth pack") {
+		t.Error(report)
+	}
+}
+
+// bundled_links.md lists what each pack bundles, so a pack that leaves its
+// bundled mods out has no section, while another pack's section still lists them.
+func TestBundledReportSkipsLeftOutMods(t *testing.T) {
+	f := exportProject(t)
+	f.project.Settings.CurseForgeExclude = []string{"ghmod", "odd"}
+	if _, err := Export(context.Background(), f.project, []string{"curseforge", "modrinth"}, f.store); err != nil {
+		t.Fatal(err)
+	}
+	report := testutil.Read(t, filepath.Join(f.project.ExportDir(), "bundled_links.md"))
+	if strings.Contains(report, "## CurseForge pack") || !strings.Contains(report, "## Modrinth pack") || !strings.Contains(report, "[Odd Host]") {
 		t.Error(report)
 	}
 }
