@@ -516,6 +516,54 @@ func TestPublishUnstagesTheRecordWhenTheCommitFails(t *testing.T) {
 	}
 }
 
+// A build is current only while what it was built from is: pack.toml (the
+// loader version, which the index doesn't cover) and the settings too.
+func TestBuildIsCurrentCoversPackTOMLAndTheSettings(t *testing.T) {
+	f := repoProject(t)
+	mustNewVersion(t, f, "1.1.0")
+	writeChangelog(t, f, "Bug Fixes:\n  - Fixed it.\n")
+	replace := func(path, old, new string) func() {
+		return func() { testutil.Write(t, path, strings.Replace(testutil.Read(t, path), old, new, 1)) }
+	}
+	for name, edit := range map[string]func(){
+		"loader":   replace(filepath.Join(f.Project.PackDir(), "pack.toml"), `fabric = "0.18.4"`, `fabric = "0.19.0"`),
+		"settings": replace(filepath.Join(f.Project.Root, project.SettingsFile), "side_tags: False", "side_tags: True"),
+	} {
+		f.answers("n") // Don't draft the empty sections.
+		if _, err := Build(ctx, f.Env, "", false, false); err != nil {
+			t.Fatal(err)
+		}
+		if current, reason := BuildIsCurrent(f.Env, ReadLastBuild(ctx, f.Env)); !current {
+			t.Fatal(name, reason)
+		}
+		edit()
+		if current, reason := BuildIsCurrent(f.Env, ReadLastBuild(ctx, f.Env)); current || !strings.Contains(reason, "changed since the last build") {
+			t.Error(name, current, reason)
+		}
+	}
+}
+
+// Build notes the changelog as the release notes were written from it, so an
+// edit made while the packs are built needs another build.
+func TestAChangelogEditedDuringTheBuildIsNotBuilt(t *testing.T) {
+	f := repoProject(t)
+	mustNewVersion(t, f, "1.1.0")
+	path := writeChangelog(t, f, "Bug Fixes:\n  - Fixed it.\n")
+	refreshes := 0
+	f.Packwiz = &hookedPackwiz{fakePackwiz: f.packwiz, refresh: func() {
+		if refreshes++; refreshes == 2 { // After the notes' text was read.
+			testutil.Write(t, path, "Bug Fixes:\n  - Fixed it, typo corrected.\n")
+		}
+	}}
+	f.answers("n") // Don't draft the empty sections.
+	if _, err := Build(ctx, f.Env, "", false, false); err != nil {
+		t.Fatal(err)
+	}
+	if current, reason := BuildIsCurrent(f.Env, ReadLastBuild(ctx, f.Env)); current || !strings.Contains(reason, "changelog changed") {
+		t.Error(current, reason)
+	}
+}
+
 // py: test_robustness.py::test_publish_refuses_after_changelog_edits
 func TestPublishRefusesAfterChangelogEdits(t *testing.T) {
 	f := repoProject(t)
@@ -832,6 +880,20 @@ func TestUpdateModsTakesTheNewestShaderVersions(t *testing.T) {
 	if !strings.Contains(f.session.Text(), "BSL Shaders: 10.1 -> 10.2") {
 		t.Error(f.session.Text())
 	}
+}
+
+// hookedPackwiz runs a function when packwiz refresh runs, as if packwiz or
+// the user changed files then.
+type hookedPackwiz struct {
+	*fakePackwiz
+	refresh func()
+}
+
+func (h *hookedPackwiz) Refresh(ctx context.Context) error {
+	if h.refresh != nil {
+		h.refresh()
+	}
+	return h.fakePackwiz.Refresh(ctx)
 }
 
 // cancelingPackwiz cancels the run while packwiz update is running.
