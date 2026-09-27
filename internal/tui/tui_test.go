@@ -321,8 +321,9 @@ func TestEditsWhileOpenCount(t *testing.T) {
 	if got := <-seen; got != "true 1.3.0" {
 		t.Errorf("the action saw side tags and version %s", got)
 	}
+	r.waitText("Done.") // The run is over, its project reloaded.
 	testutil.Write(t, toml, strings.Replace(testutil.Read(t, toml), `version = "1.3.0"`, `version = "1.4.0"`, 1))
-	r.send(goHome{})
+	r.key("enter") // Back to the dashboard, which loads the status.
 	r.waitText("MyPack 1.4.0")
 }
 
