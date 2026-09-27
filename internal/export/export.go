@@ -121,13 +121,42 @@ func (z zipWriter) addBytes(name string, data []byte) error {
 	return err
 }
 
-func (c *Contents) writeOverrides(z zipWriter) error {
+// crashAssistantModlist is the override that lists the jars a client install
+// contains, for Crash Assistant to point out mods the player added or removed.
+const crashAssistantModlist = "config/crash_assistant/modlist.json"
+
+// writeOverrides adds the overrides. A pack that leaves mods out gets its own
+// Crash Assistant modlist without them, since the pack's copy is shared.
+func (c *Contents) writeOverrides(z zipWriter, left []pack.Mod) error {
 	for _, rel := range c.Overrides {
+		if rel == crashAssistantModlist && len(left) > 0 {
+			kept := slices.DeleteFunc(slices.Clone(c.Mods), func(mod pack.Mod) bool {
+				return slices.ContainsFunc(left, func(l pack.Mod) bool { return l.Rel == mod.Rel })
+			})
+			if err := z.addBytes("overrides/"+rel, []byte(pack.CrashAssistantModlist(kept))); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := z.addFile("overrides/"+rel, filepath.Join(c.PackDir, filepath.FromSlash(rel))); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// excluded reports whether a pack's exclude setting (curseforge_exclude,
+// modrinth_exclude or server_exclude) names the mod.
+func excluded(mod pack.Mod, exclude []string) bool {
+	return slices.ContainsFunc(exclude, mod.Matches)
+}
+
+// leftOut ends a pack's summary with the mods its exclude setting left out.
+func leftOut(mods []pack.Mod) string {
+	if len(mods) == 0 {
+		return ""
+	}
+	return ", left out: " + strings.Join(pack.Names(mods), ", ")
 }
 
 // installPath is where packwiz installs a file, relative to the instance.
@@ -372,11 +401,14 @@ func BuildCurseForge(ctx context.Context, p *project.Project, contents *Contents
 		match platform.Match
 	}
 	var listed []listedMod
-	var others []pack.Mod
+	var others, left []pack.Mod
 	for _, mod := range contents.ForSide("client") {
-		if mod.CurseForge() != nil {
+		switch {
+		case excluded(mod, p.Settings.CurseForgeExclude):
+			left = append(left, mod)
+		case mod.CurseForge() != nil:
 			listed = append(listed, listedMod{mod, platform.Match{ProjectID: mod.CurseForgeProject(), FileID: mod.CurseForgeFile()}})
-		} else {
+		default:
 			others = append(others, mod)
 		}
 	}
@@ -421,7 +453,7 @@ func BuildCurseForge(ctx context.Context, p *project.Project, contents *Contents
 		if err := z.addBytes("manifest.json", dumps(manifest)); err != nil {
 			return err
 		}
-		if err := contents.writeOverrides(z); err != nil {
+		if err := contents.writeOverrides(z, left); err != nil {
 			return err
 		}
 		for _, mod := range bundled {
@@ -431,7 +463,7 @@ func BuildCurseForge(ctx context.Context, p *project.Project, contents *Contents
 		}
 		return nil
 	})
-	return bundled, fmt.Sprintf("%d from CurseForge, %d bundled", len(listed), len(bundled)), err
+	return bundled, fmt.Sprintf("%d from CurseForge, %d bundled", len(listed), len(bundled)) + leftOut(left), err
 }
 
 ////////////////////////////////////////////////////////////
@@ -493,14 +525,19 @@ func hashFile(path string) (string, string, int64, error) {
 // BuildModrinth writes the Modrinth .mrpack; it returns the bundled files and
 // a summary.
 func BuildModrinth(ctx context.Context, p *project.Project, contents *Contents, store *Store, output string) ([]pack.Mod, string, error) {
-	var mods []pack.Mod
+	var mods, left []pack.Mod
 	var versionIDs []string
 	for _, mod := range contents.Mods {
-		if mod.InstallsOn("client") || mod.InstallsOn("server") {
-			mods = append(mods, mod)
-			if mod.Modrinth() != nil {
-				versionIDs = append(versionIDs, mod.ModrinthVersion())
-			}
+		if !mod.InstallsOn("client") && !mod.InstallsOn("server") {
+			continue
+		}
+		if excluded(mod, p.Settings.ModrinthExclude) {
+			left = append(left, mod)
+			continue
+		}
+		mods = append(mods, mod)
+		if mod.Modrinth() != nil {
+			versionIDs = append(versionIDs, mod.ModrinthVersion())
 		}
 	}
 	versions := map[string]platform.Version{}
@@ -573,7 +610,7 @@ func BuildModrinth(ctx context.Context, p *project.Project, contents *Contents, 
 		if err := z.addBytes("modrinth.index.json", dumps(index)); err != nil {
 			return err
 		}
-		if err := contents.writeOverrides(z); err != nil {
+		if err := contents.writeOverrides(z, left); err != nil {
 			return err
 		}
 		for _, mod := range bundled {
@@ -587,22 +624,11 @@ func BuildModrinth(ctx context.Context, p *project.Project, contents *Contents, 
 		}
 		return nil
 	})
-	return bundled, fmt.Sprintf("%d from Modrinth, %d bundled", len(entries), len(bundled)), err
+	return bundled, fmt.Sprintf("%d from Modrinth, %d bundled", len(entries), len(bundled)) + leftOut(left), err
 }
 
 ////////////////////////////////////////////////////////////
 // Server pack
-
-func excluded(mod pack.Mod, exclude []string) bool {
-	names := map[string]bool{strings.ToLower(mod.Slug()): true, strings.ToLower(mod.Name()): true,
-		strings.ToLower(mod.DisplayName()): true, strings.ToLower(mod.PlainName()): true, strings.ToLower(mod.Filename()): true}
-	for _, entry := range exclude {
-		if names[strings.ToLower(pycompat.Strip(entry))] {
-			return true
-		}
-	}
-	return false
-}
 
 // BuildServer writes the server pack: the template folder plus every
 // server-side mod jar.
@@ -662,10 +688,7 @@ func BuildServer(ctx context.Context, p *project.Project, contents *Contents, st
 	if templateJars > 0 {
 		summary += fmt.Sprintf(" + %d from %s", templateJars, filepath.Base(template))
 	}
-	if len(skipped) > 0 {
-		summary += ", left out: " + strings.Join(pack.Names(skipped), ", ")
-	}
-	return nil, summary, err
+	return nil, summary + leftOut(skipped), err
 }
 
 ////////////////////////////////////////////////////////////

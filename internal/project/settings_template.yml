@@ -4,6 +4,11 @@
 # Packs that "Build release" creates: any of curseforge, modrinth, server.
 exports: [curseforge, modrinth]
 
+# Mods to leave out of only the CurseForge or only the Modrinth pack (slug, name or filename).
+# For a mod that platform doesn't host, the pack bundles the file, which some licenses forbid.
+curseforge_exclude: []
+modrinth_exclude: []
+
 # Server pack: the folder copied into it (start scripts, server configs, extra jars in mods/)
 # and the mods to leave out (slug, name or jar filename).
 server_template: "Server Pack"

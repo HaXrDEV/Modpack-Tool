@@ -4,6 +4,7 @@ package project
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/HaXrDEV/Modpack-Tool/internal/fail"
@@ -118,6 +119,17 @@ func Open(root string, ask AskFunc) (*Project, []string, error) {
 	p := &Project{Root: abs, Settings: settings}
 	if err := p.Reload(); err != nil {
 		return nil, nil, err
+	}
+	if len(settings.CurseForgeExclude)+len(settings.ModrinthExclude)+len(settings.ServerExclude) > 0 {
+		mods, _, err := pack.LoadMods(p.PackDir(), pack.Categories)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, note := range settings.ExcludeNotes(mods) {
+			if !slices.Contains(notes, note) { // The import of old settings may have said so already.
+				notes = append(notes, note)
+			}
+		}
 	}
 	return p, notes, nil
 }

@@ -70,7 +70,7 @@ packwiz refresh                      rebuild index.toml after editing files by h
   - `previews`: they lead up to their full release, which covers them all. It's compared with the previous full release, New version starts its changelog with the Changes/Improvements, Bug Fixes and Script/Datapack changes of its pre-releases, and the wiki folds them under it.
 - **Changelogs.** You write `Changelogs/<version>+<minecraft>.yml` (just `<version>.yml` for versions like `26.2-1.0`). Build turns it into `Changelogs/data/<same name>.json`, the release record that the [wiki](https://github.com/CrismPack/Wiki) renders, plus `CurseForge-Release.md` and `Modrinth-Release.md` for `publish.yml`. The record also lists everything in the release, with each project's page and authors from Modrinth and CurseForge, for the wiki's modlists. The records are the source of truth: they stay, every wiki sync copies all of them, and the tool reads released notes from them. So a changelog goes when the next version starts, unless you edited it after the release. Git ignores new records (the tool adds `Changelogs/data/*.json` to `.gitignore`), so an unreleased one never gets committed along with other work; Publish commits each one with its release. To fix something on the wiki, edit its record here and push: the sync updates the wiki's copy. Removing a record here doesn't remove it from the wiki, though.
 - **Disabled mods** have `side = "both(disabled)"` (or `client`/`server`). They stay in the pack and packwiz keeps updating them; the tool leaves them out of exports, changelogs and the modlists.
-- **Exports** follow packwiz's own index, so `.packwizignore` applies. Mods, resource packs and shader packs are all included. For the CurseForge zip, files from other platforms are matched on CurseForge by fingerprint, or by file name in the project with the same slug when the author uploaded a separate build there, and bundled only when CurseForge doesn't have them; the `.mrpack` gets proper hashes and sizes. `Export/bundled_links.md` lists every bundled file with its source, for license checks.
+- **Exports** follow packwiz's own index, so `.packwizignore` applies. Mods, resource packs and shader packs are all included. For the CurseForge zip, files from other platforms are matched on CurseForge by fingerprint, or by file name in the project with the same slug when the author uploaded a separate build there, and bundled only when CurseForge doesn't have them; the `.mrpack` gets proper hashes and sizes. `Export/bundled_links.md` lists every bundled file with its source, for license checks. `curseforge_exclude` and `modrinth_exclude` leave a mod out of just that pack, such as one the platform doesn't host whose license forbids bundling it; that pack's Crash Assistant modlist leaves it out too.
 - **Server pack**: the `Server Pack` folder (start scripts, server configs, extra jars in `mods/`) plus every server-side mod jar, minus `server_exclude`. Jars are downloaded and cached. For the few files whose authors block third-party downloads, the tool opens their CurseForge download pages in your browser and picks the files up from your Downloads folder as they arrive (recognized by hash, even if the browser renamed them). You can also point it at a folder that has them. Either way it's needed once per file version.
 
 ## Settings
@@ -80,6 +80,7 @@ Each pack has a `modpack-tool.yml` next to its `Packwiz` folder, created on firs
 | Setting | Meaning |
 |---|---|
 | `exports` | Which packs Build creates: `curseforge`, `modrinth`, `server`. |
+| `curseforge_exclude`, `modrinth_exclude` | Mods left out of only the CurseForge or only the Modrinth pack, by slug, name or filename. |
 | `server_template` | The folder copied into the server pack (default `Server Pack`). |
 | `server_exclude` | Mods left out of the server pack, by slug, name or jar filename. |
 | `mc_prefixed_versions` | Suggest `<minecraft>-<release>` versions such as `26.2-1.0`. |
@@ -88,6 +89,8 @@ Each pack has a `modpack-tool.yml` next to its `Packwiz` folder, created on firs
 | `side_tags` | Show `Client`/`Server` after mod names in changelogs and `modlist.md`. |
 | `changelog_url` | The "Full changelog" link in release notes (`{mc_group}`, `{mc}`, `{version}`, `{anchor}`). |
 | `curseforge_notes_footer`, `modrinth_notes_footer` | Markdown appended to the release notes (e.g. a sponsor banner). |
+
+Opening a pack points out exclude entries that no longer match any of its files, such as a jar filename after the mod updated. A slug keeps matching.
 
 ## Where files live
 

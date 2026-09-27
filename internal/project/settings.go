@@ -40,6 +40,8 @@ var templateText string
 // Settings are one pack's settings.
 type Settings struct {
 	Exports               []string
+	CurseForgeExclude     []string
+	ModrinthExclude       []string
 	ServerTemplate        string
 	ServerExclude         []string
 	MCPrefixedVersions    bool
@@ -53,8 +55,27 @@ type Settings struct {
 
 // DefaultSettings are the values used for anything the file leaves out.
 func DefaultSettings() Settings {
-	return Settings{Exports: []string{"curseforge", "modrinth"}, ServerTemplate: "Server Pack",
-		ServerExclude: []string{}, Prereleases: "standalone", AlphaUpdates: "prompt"}
+	return Settings{Exports: []string{"curseforge", "modrinth"}, CurseForgeExclude: []string{}, ModrinthExclude: []string{},
+		ServerTemplate: "Server Pack", ServerExclude: []string{}, Prereleases: "standalone", AlphaUpdates: "prompt"}
+}
+
+// ExcludeNotes notes the exclude entries that match none of mods (all of the
+// pack's files, disabled ones too), like the import of old settings does. An
+// entry goes stale when its mod is renamed or updated to a new filename, and
+// the export includes the mod again.
+func (s Settings) ExcludeNotes(mods []pack.Mod) []string {
+	var notes []string
+	for _, list := range []struct {
+		key     string
+		entries []string
+	}{{"curseforge_exclude", s.CurseForgeExclude}, {"modrinth_exclude", s.ModrinthExclude}, {"server_exclude", s.ServerExclude}} {
+		for _, entry := range list.entries {
+			if !slices.ContainsFunc(mods, func(mod pack.Mod) bool { return mod.Matches(entry) }) {
+				notes = append(notes, fmt.Sprintf("%s: '%s' matches no current mod; check it.", list.key, entry))
+			}
+		}
+	}
+	return notes
 }
 
 // DefaultChangelogURL is the CrismPack wiki link for a pack.
@@ -301,6 +322,8 @@ func normalizeValue(value any) any {
 func coerceSettings(values map[string]*yaml.Node, notes *[]string) Settings {
 	s := DefaultSettings()
 	s.Exports = coerceList(nodeValue(values["exports"]), s.Exports)
+	s.CurseForgeExclude = coerceList(nodeValue(values["curseforge_exclude"]), s.CurseForgeExclude)
+	s.ModrinthExclude = coerceList(nodeValue(values["modrinth_exclude"]), s.ModrinthExclude)
 	s.ServerTemplate = coerceString("server_template", nodeValue(values["server_template"]), s.ServerTemplate, notes)
 	s.ServerExclude = coerceList(nodeValue(values["server_exclude"]), s.ServerExclude)
 	s.MCPrefixedVersions = coerceBool("mc_prefixed_versions", nodeValue(values["mc_prefixed_versions"]), s.MCPrefixedVersions, notes)
