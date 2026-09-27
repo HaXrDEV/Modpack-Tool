@@ -491,6 +491,31 @@ func TestPublishCommitsTheRecordWithTheRelease(t *testing.T) {
 	}
 }
 
+// A commit that fails leaves the record ignored, as a declined one does.
+func TestPublishUnstagesTheRecordWhenTheCommitFails(t *testing.T) {
+	f := repoProject(t)
+	mustNewVersion(t, f, "1.1.0")
+	writeChangelog(t, f, "Bug Fixes:\n  - Fixed it.\n")
+	f.answers("n") // Don't draft the empty sections.
+	if _, err := Build(ctx, f.Env, "", false, false); err != nil {
+		t.Fatal(err)
+	}
+	root, rel := f.Project.Root, "Changelogs/data/1.1.0+1.21.11.json"
+	hook := testutil.Write(t, filepath.Join(root, ".git", "hooks", "pre-commit"), "#!/bin/sh\necho 'hook says no' >&2\nexit 1\n")
+	if err := os.Chmod(hook, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	testutil.Git(t, root, "config", "core.hooksPath", ".git/hooks")
+	f.LookPath = func(string) (string, error) { return "gh", nil }
+	f.answers("y") // Commit.
+	if err := Publish(ctx, f.Env, false); err == nil || !strings.Contains(err.Error(), "hook says no") {
+		t.Fatalf("got %v", err)
+	}
+	if strings.Contains(testutil.Git(t, root, "diff", "--cached", "--name-only"), rel) {
+		t.Error("the commit failed, but the record is still staged")
+	}
+}
+
 // py: test_robustness.py::test_publish_refuses_after_changelog_edits
 func TestPublishRefusesAfterChangelogEdits(t *testing.T) {
 	f := repoProject(t)

@@ -762,7 +762,7 @@ func offerExportFolder(ctx context.Context, env *Env, built []string) {
 
 // Publish commits, with the release record, pushes and creates the GitHub
 // release; the pack's publish.yml then uploads it to CurseForge and Modrinth.
-func Publish(ctx context.Context, env *Env, dryRun bool) error {
+func Publish(ctx context.Context, env *Env, dryRun bool) (err error) {
 	p := env.Project
 	if !env.Git.IsRepo() {
 		return fail.Errorf("%s is not a git repository.", p.Root)
@@ -844,6 +844,17 @@ func Publish(ctx context.Context, env *Env, dryRun bool) error {
 	if err := env.Git.AddIgnored(ctx, p.Rel(recordPath)); err != nil {
 		return err
 	}
+	// Without the commit (declined, canceled or failed) it isn't released after
+	// all, so git ignores the record again.
+	committed := false
+	defer func() {
+		if committed {
+			return
+		}
+		if unstageErr := env.Git.Unstage(context.WithoutCancel(ctx), p.Rel(recordPath)); unstageErr != nil && err == nil {
+			err = unstageErr
+		}
+	}()
 	changes, err := env.Git.Status(ctx)
 	if err != nil {
 		return err
@@ -858,10 +869,6 @@ func Publish(ctx context.Context, env *Env, dryRun bool) error {
 		env.UI.Info(fmt.Sprintf("%d changed path%s:", len(changes), ui.Plural(len(changes))), ui.Limit(paths, 15)...)
 		ok, err := env.UI.Confirm(ctx, fmt.Sprintf("Commit all of them as '%s'?", message), true)
 		if err != nil || !ok {
-			// Not released after all, so git ignores the record again.
-			if unstageErr := env.Git.Unstage(context.WithoutCancel(ctx), p.Rel(recordPath)); unstageErr != nil && err == nil {
-				err = unstageErr
-			}
 			return err
 		}
 		step := env.UI.Step("Committing")
@@ -871,6 +878,7 @@ func Publish(ctx context.Context, env *Env, dryRun bool) error {
 		}
 		step.Done("Committed.")
 	}
+	committed = true
 	ok, err := env.UI.Confirm(ctx, fmt.Sprintf("Push %s to GitHub?", branch), true)
 	if err != nil || !ok {
 		return err
