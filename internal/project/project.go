@@ -38,8 +38,14 @@ func (p *Project) DataDir() string { return filepath.Join(p.ChangelogDir(), "dat
 // ExportDir receives the built packs.
 func (p *Project) ExportDir() string { return filepath.Join(p.Root, "Export") }
 
-// ServerTemplateDir is the folder copied into the server pack.
-func (p *Project) ServerTemplateDir() string { return filepath.Join(p.Root, p.Settings.ServerTemplate) }
+// ServerTemplateDir is the folder copied into the server pack: server_template,
+// relative to the project unless it's a full path such as 'D:\Servers\Pack'.
+func (p *Project) ServerTemplateDir() string {
+	if filepath.IsAbs(p.Settings.ServerTemplate) {
+		return filepath.Clean(p.Settings.ServerTemplate)
+	}
+	return filepath.Join(p.Root, p.Settings.ServerTemplate)
+}
 
 // LoaderLabel is the loader's display name, e.g. "Fabric".
 func (p *Project) LoaderLabel() string { return pack.LoaderLabel(p.Loader) }

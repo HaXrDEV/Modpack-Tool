@@ -81,7 +81,7 @@ Each pack has a `modpack-tool.yml` next to its `Packwiz` folder, created on firs
 |---|---|
 | `exports` | Which packs Build creates: `curseforge`, `modrinth`, `server`. |
 | `curseforge_exclude`, `modrinth_exclude` | Mods left out of only the CurseForge or only the Modrinth pack, by slug, name or filename. |
-| `server_template` | The folder copied into the server pack (default `Server Pack`). |
+| `server_template` | The folder copied into the server pack (default `Server Pack`), in the pack folder or given as a full path. |
 | `server_exclude` | Mods left out of the server pack, by slug, name or jar filename. |
 | `mc_prefixed_versions` | Suggest `<minecraft>-<release>` versions such as `26.2-1.0`. |
 | `prereleases` | `standalone`: pre-releases are releases like any other, marked as less stable. `previews`: they lead up to a full release that covers them. |

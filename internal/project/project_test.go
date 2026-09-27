@@ -257,6 +257,18 @@ func TestOpenProjectReadsPackInfo(t *testing.T) {
 	}
 }
 
+// server_template is a folder of the project, or a full path to one anywhere.
+func TestServerTemplateDir(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "Pack")
+	elsewhere := filepath.Join(t.TempDir(), "Servers", "Pack")
+	for template, want := range map[string]string{"Server Pack": filepath.Join(root, "Server Pack"), elsewhere: elsewhere} {
+		p := &Project{Root: root, Settings: Settings{ServerTemplate: template}}
+		if got := p.ServerTemplateDir(); got != want {
+			t.Errorf("%s: got %s", template, got)
+		}
+	}
+}
+
 // py: test_robustness.py::test_settings_values_are_coerced
 func TestSettingsValuesAreCoerced(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "Pack")
