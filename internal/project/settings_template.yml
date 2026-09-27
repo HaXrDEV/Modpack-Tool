@@ -5,7 +5,7 @@
 exports: [curseforge, modrinth]
 
 # Mods to leave out of only the CurseForge or only the Modrinth pack (slug, name or filename).
-# For a mod that platform doesn't host, the pack bundles the file, which some licenses forbid.
+# For example, a mod that isn't on that platform and whose license doesn't allow bundling it.
 curseforge_exclude: []
 modrinth_exclude: []
 
