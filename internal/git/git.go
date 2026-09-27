@@ -277,6 +277,16 @@ func (r *Repo) CommitAll(ctx context.Context, message string) error {
 	return r.change(ctx, 0, "commit", "--message", message)
 }
 
+// AddIgnored stages a file even when .gitignore lists it.
+func (r *Repo) AddIgnored(ctx context.Context, path string) error {
+	return r.change(ctx, 0, "add", "--force", "--", path)
+}
+
+// Unstage takes a file back out of the index and leaves it on disk.
+func (r *Repo) Unstage(ctx context.Context, path string) error {
+	return r.change(ctx, 0, "reset", "--quiet", "--", path)
+}
+
 // Push pushes the current branch, setting its upstream on the first push.
 func (r *Repo) Push(ctx context.Context) error {
 	result, err := r.run(ctx, options{}, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")

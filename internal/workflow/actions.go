@@ -39,7 +39,7 @@ func sinceFlag(fs *flag.FlagSet, a *Args) {
 // Actions are the tool's actions, in dashboard order.
 var Actions = []Action{
 	{Key: "1", Name: "update", Label: "Update mods", Summary: "packwiz update, then the alpha guard",
-		Help: "packwiz update --all, with an alpha guard and re-enable offers",
+		Help: "packwiz update --all, shader packs to their newest versions, an alpha guard and re-enable offers",
 		Run:  func(ctx context.Context, env *Env, _ Args) error { return UpdateMods(ctx, env) }},
 	{Key: "2", Name: "new-version", Label: "New version", Summary: "bump or rename the version",
 		Help: "bump the version (rename it if unreleased) and create its changelog", Arg: "VERSION",
@@ -66,7 +66,7 @@ var Actions = []Action{
 			return err
 		}},
 	{Key: "5", Name: "publish", Label: "Publish", Summary: "commit, push, GitHub release",
-		Help:  "commit, push and create the GitHub release (asks before each step)",
+		Help:  "commit with the release record, push and create the GitHub release (asks before each step)",
 		flags: func(fs *flag.FlagSet, a *Args) { fs.BoolVar(&a.DryRun, "dry-run", false, "only show what would run") },
 		Run:   func(ctx context.Context, env *Env, a Args) error { return Publish(ctx, env, a.DryRun) }},
 	{Key: "6", Name: "migrate", Label: "Migrate Minecraft", Summary: "move to another Minecraft version",

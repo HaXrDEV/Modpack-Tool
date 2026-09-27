@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -382,6 +383,10 @@ func TestBuildWritesRecordNotesAndPackFiles(t *testing.T) {
 	if record.Contents == nil || len(record.Contents.Mods) != 2 || record.Contents.Mods[1].File != "b-1.jar" {
 		t.Error("contents", record.Contents)
 	}
+	if !strings.Contains(testutil.Read(t, filepath.Join(f.Project.Root, ".gitignore")), "Changelogs/data/*.json") {
+		t.Error("the records aren't in .gitignore")
+	}
+	testutil.Git(t, f.Project.Root, "check-ignore", "--quiet", "Changelogs/data/1.1.0+1.21.11.json") // Fails unless ignored.
 	if notes := testutil.Read(t, filepath.Join(f.Project.Root, "CurseForge-Release.md")); !strings.HasPrefix(notes, "- Added 'Beta Mod' mod.") {
 		t.Error(notes)
 	}
@@ -440,7 +445,8 @@ func TestPublishGuards(t *testing.T) {
 	if err := Publish(ctx, f.Env, true); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`git commit -m "Release 1.1.0"`, "gh release create 1.1.0", "--notes-file Modrinth-Release.md --target main"} {
+	for _, want := range []string{"git add --force Changelogs/data/1.1.0+1.21.11.json", `git commit -m "Release 1.1.0"`,
+		"gh release create 1.1.0", "--notes-file Modrinth-Release.md --target main"} {
 		if !strings.Contains(session.Text(), want) {
 			t.Errorf("dry run lacks %q:\n%s", want, session.Text())
 		}
@@ -450,6 +456,38 @@ func TestPublishGuards(t *testing.T) {
 	testutil.Write(t, packTOML, strings.Replace(testutil.Read(t, packTOML), `hash = "h1"`, `hash = "h2"`, 1))
 	if err := Publish(ctx, f.Env, false); err == nil || !strings.Contains(err.Error(), "changed since the last build") {
 		t.Errorf("changed: %v", err)
+	}
+}
+
+// Build writes the release record, which git ignores until Publish commits it
+// with the release, dated that day. Declining the commit leaves it ignored.
+func TestPublishCommitsTheRecordWithTheRelease(t *testing.T) {
+	f := repoProject(t)
+	mustNewVersion(t, f, "1.1.0")
+	writeChangelog(t, f, "Bug Fixes:\n  - Fixed it.\n")
+	f.answers("n") // Don't draft the empty sections.
+	if _, err := Build(ctx, f.Env, "", false, false); err != nil {
+		t.Fatal(err)
+	}
+	root, rel := f.Project.Root, "Changelogs/data/1.1.0+1.21.11.json"
+	f.LookPath = func(string) (string, error) { return "gh", nil }
+	f.answers("n") // Don't commit yet.
+	if err := Publish(ctx, f.Env, false); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(testutil.Git(t, root, "diff", "--cached", "--name-only"), rel) {
+		t.Error("the commit was declined, but the record is still staged")
+	}
+	testutil.Git(t, root, "check-ignore", "--quiet", rel) // Fails unless ignored.
+	f.Now = func() time.Time { return time.Date(2026, 9, 27, 9, 0, 0, 0, time.UTC) }
+	f.answers("y", "n") // Commit, but don't push.
+	if err := Publish(ctx, f.Env, false); err != nil {
+		t.Fatal(err, f.session.Text())
+	}
+	var committed changelog.Record
+	err := json.Unmarshal([]byte(testutil.Git(t, root, "show", "HEAD:"+rel)), &committed)
+	if err != nil || committed.Released != "2026-09-27" || !slices.Equal(committed.BugFixes, []string{"Fixed it."}) {
+		t.Error(committed, err)
 	}
 }
 
@@ -710,6 +748,44 @@ func TestUpdateModsRepinsAfterACancel(t *testing.T) {
 	}
 	if !slices.Contains(f.packwiz.calls, "unpin pinned") || !slices.Contains(f.packwiz.calls, "pin pinned") {
 		t.Error(f.packwiz.calls)
+	}
+}
+
+// Update mods brings shader packs to their newest version on an allowed
+// channel, also one that doesn't name the pack's Minecraft version. A pinned
+// one stays as it is.
+func TestUpdateModsTakesTheNewestShaderVersions(t *testing.T) {
+	pw := testutil.PackDir(t)
+	bsl := testutil.Write(t, filepath.Join(pw, "shaderpacks", "bsl.pw.toml"),
+		testutil.Metafile("BSL Shaders", "BSL_v10.1.zip", testutil.MetaOptions{Side: "client"}))
+	pinned := testutil.Write(t, filepath.Join(pw, "shaderpacks", "old.pw.toml"),
+		testutil.Metafile("Old Shader", "old-1.zip", testutil.MetaOptions{Side: "client", Pin: true}))
+	f := newFixture(t, filepath.Dir(pw))
+	installed := platform.Version{ID: "BSL v1", VersionNumber: "10.1", VersionType: "release", Loaders: []string{"iris", "optifine"}}
+	f.api.Versions = map[string]platform.Version{"BSL v1": installed, "Old v1": {ID: "Old v1", VersionType: "release"}}
+	file := func(name string) []platform.File {
+		return []platform.File{{Primary: true, URL: "https://x/" + name, Filename: name, Hashes: map[string]string{"sha512": name}}}
+	}
+	f.api.ProjectVersions = map[string][]platform.Version{
+		"BSL Shad": {
+			{ID: "BSL v3", VersionNumber: "10.3-alpha", VersionType: "alpha", Files: file("BSL_v10.3.zip")},
+			{ID: "BSL v2", VersionNumber: "10.2", VersionType: "release", GameVersions: []string{"1.21.4"}, Files: file("BSL_v10.2.zip")},
+			installed,
+		},
+		"Old Shad": {{ID: "Old v2", VersionNumber: "2", VersionType: "release", Files: file("old-2.zip")}},
+	}
+	f.answers("") // Keep the pins.
+	if err := UpdateMods(ctx, f.Env); err != nil {
+		t.Fatal(err, f.session.Text())
+	}
+	if text := testutil.Read(t, bsl); !strings.Contains(text, `version = "BSL v2"`) || !strings.Contains(text, `filename = "BSL_v10.2.zip"`) {
+		t.Error("BSL Shaders isn't on 10.2:\n" + text)
+	}
+	if !strings.Contains(testutil.Read(t, pinned), `version = "Old v1"`) {
+		t.Error("the pinned shader pack was updated")
+	}
+	if !strings.Contains(f.session.Text(), "BSL Shaders: 10.1 -> 10.2") {
+		t.Error(f.session.Text())
 	}
 }
 
