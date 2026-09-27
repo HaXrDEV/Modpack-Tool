@@ -102,6 +102,17 @@ func (p *Project) Reload() error {
 	return nil
 }
 
+// ReloadSettings re-reads modpack-tool.yml, for the dashboard, which keeps a
+// project open while its settings are edited.
+func (p *Project) ReloadSettings() error {
+	settings, _, err := LoadSettings(p.Root, p.Name, nil)
+	if err != nil {
+		return err
+	}
+	p.Settings = settings
+	return nil
+}
+
 // Open loads a project folder; the notes are for the user (for example
 // "Created modpack-tool.yml"). ask answers the one question a first import of
 // old settings needs; nil takes the default.

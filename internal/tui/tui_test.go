@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"path/filepath"
 	"strings"
@@ -207,6 +208,28 @@ func TestCancelDuringAPromptReturnsHome(t *testing.T) {
 	}
 	r.waitText("Cancelled.")
 	r.waitFor("the dashboard", func(s string) bool { return strings.Contains(s, "1  Update mods") })
+}
+
+// Actions see edits made to the settings and pack.toml while the dashboard is
+// open, as a subcommand does, and so does the status.
+func TestEditsWhileOpenCount(t *testing.T) {
+	r := newRunner(t, 100, 30)
+	root := r.app.env.Project.Root
+	settings := filepath.Join(root, project.SettingsFile)
+	testutil.Write(t, settings, strings.Replace(testutil.Read(t, settings), "side_tags: False", "side_tags: True", 1))
+	toml := filepath.Join(root, "Packwiz", "pack.toml")
+	testutil.Write(t, toml, strings.Replace(testutil.Read(t, toml), `version = "1.2.0"`, `version = "1.3.0"`, 1))
+	seen := make(chan string, 1)
+	r.send(startAction{action(func(_ context.Context, env *workflow.Env) error {
+		seen <- fmt.Sprint(env.Project.Settings.SideTags, " ", env.Project.Version)
+		return nil
+	})})
+	if got := <-seen; got != "true 1.3.0" {
+		t.Errorf("the action saw side tags and version %s", got)
+	}
+	testutil.Write(t, toml, strings.Replace(testutil.Read(t, toml), `version = "1.3.0"`, `version = "1.4.0"`, 1))
+	r.send(goHome{})
+	r.waitText("MyPack 1.4.0")
 }
 
 func TestQuittingDuringAPromptStopsTheRun(t *testing.T) {
