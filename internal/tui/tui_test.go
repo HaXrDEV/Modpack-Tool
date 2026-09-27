@@ -208,6 +208,17 @@ func TestCancelDuringAPromptReturnsHome(t *testing.T) {
 	}
 	r.waitText("Cancelled.")
 	r.waitFor("the dashboard", func(s string) bool { return strings.Contains(s, "1  Update mods") })
+	// The run is over, so the next action starts.
+	ran := make(chan bool, 1)
+	r.send(startAction{action(func(context.Context, *workflow.Env) error {
+		ran <- true
+		return nil
+	})})
+	select {
+	case <-ran:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no action starts after a cancelled one")
+	}
 }
 
 // Actions see edits made to the settings and pack.toml while the dashboard is

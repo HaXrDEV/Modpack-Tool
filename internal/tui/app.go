@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -123,7 +124,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case runFinished:
 		a.running = false
 		a.screen = a.home
-		if msg.err == nil && msg.result != "" {
+		switch {
+		case errors.Is(msg.err, context.Canceled):
+			a.home.notice = "Cancelled."
+		case msg.err == nil && msg.result != "":
 			a.home.notice = ""
 		}
 		return a, a.home.reload()
@@ -187,7 +191,10 @@ func (a *App) open(root string) tea.Cmd {
 	var env *workflow.Env
 	var notes []string
 	r.onDone = func(err error) tea.Msg {
-		if err != nil {
+		switch {
+		case errors.Is(err, context.Canceled):
+			return goHome{notice: "Cancelled."}
+		case err != nil:
 			return showProjects{}
 		}
 		return projectReady{env, notes}

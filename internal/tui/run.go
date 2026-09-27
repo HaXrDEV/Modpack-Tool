@@ -105,7 +105,7 @@ func (r *runScreen) update(msg tea.Msg) (screen, tea.Cmd) {
 		} else if r.autoClose && r.err == nil && !r.warned {
 			cmds = append(cmds, r.leave())
 		} else if r.cancelling && errors.Is(r.err, context.Canceled) {
-			cmds = append(cmds, func() tea.Msg { return goHome{notice: "Cancelled."} })
+			cmds = append(cmds, r.leave()) // Through onDone, like any other end of a run.
 		}
 		return r, tea.Batch(cmds...)
 	case spinner.TickMsg:
