@@ -564,44 +564,53 @@ func TestOldStylePublishWorkflowIsKeptInStep(t *testing.T) {
 	}
 }
 
-// py: test_workflows.py::test_alpha_guard_redirects_and_reverts
+// py: test_workflows.py::test_alpha_guard_redirects_and_reverts. A migration
+// does the same with the builds for its new Minecraft version, and reverts
+// only a mod without a beta or release, which Migrate then disables.
 func TestAlphaGuardRedirectsAndReverts(t *testing.T) {
-	pw := testutil.PackDir(t)
-	f := newFixture(t, filepath.Dir(pw))
-	f.Project.Settings.AlphaUpdates = "never"
-	mods, before, err := loadMods(f.Env)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// "Update" two Modrinth mods to new versions.
-	for slug, newVersion := range map[string]string{"lithium": "LithNEW", "sodium": "SodiNEW"} {
-		path := filepath.Join(pw, "mods", slug+".pw.toml")
-		old := `version = "` + strings.ToUpper(slug[:1]) + slug[1:4] + `v1"`
-		testutil.Write(t, path, strings.Replace(testutil.Read(t, path), old, `version = "`+newVersion+`"`, 1))
-	}
-	types := map[string]string{"Lithv1": "release", "LithNEW": "alpha", "Sodiv1": "beta", "SodiNEW": "release"}
-	f.api.Versions = map[string]platform.Version{}
-	for id, kind := range types {
-		f.api.Versions[id] = platform.Version{ID: id, VersionType: kind}
-	}
-	f.api.ProjectVersions = map[string][]platform.Version{"Lithium": {
-		{ID: "LithALPHA2", VersionType: "alpha"},
-		{ID: "LithBETA", VersionType: "beta", VersionNumber: "0.22-beta", Files: []platform.File{
-			{Primary: true, URL: "https://x/l.jar", Filename: "lithium-0.22-beta.jar", Hashes: map[string]string{"sha512": "b"}}}},
-	}}
-	if err := afterUpdate(ctx, f.Env, mods, before, false); err != nil {
-		t.Fatal(err)
-	}
-	after, _, _ := pack.LoadMods(pw, pack.Categories)
-	for _, mod := range after {
-		switch mod.Slug() {
-		case "lithium":
-			if mod.Modrinth()["version"] != "LithBETA" || mod.Filename() != "lithium-0.22-beta.jar" {
-				t.Error("lithium", mod.Data)
-			}
-		case "sodium":
-			if mod.Modrinth()["version"] != "SodiNEW" { // beta -> release is fine.
-				t.Error("sodium", mod.Data)
+	for _, migration := range []bool{false, true} {
+		pw := testutil.PackDir(t)
+		f := newFixture(t, filepath.Dir(pw))
+		f.Project.Settings.AlphaUpdates = "never"
+		mods, before, err := loadMods(f.Env)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// "Update" three Modrinth mods to new versions.
+		for slug, newVersion := range map[string]string{"lithium": "LithNEW", "sodium": "SodiNEW", "pinned": "PinnNEW"} {
+			path := filepath.Join(pw, "mods", slug+".pw.toml")
+			old := `version = "` + strings.ToUpper(slug[:1]) + slug[1:4] + `v1"`
+			testutil.Write(t, path, strings.Replace(testutil.Read(t, path), old, `version = "`+newVersion+`"`, 1))
+		}
+		types := map[string]string{"Lithv1": "release", "LithNEW": "alpha", "Sodiv1": "beta", "SodiNEW": "release",
+			"Pinnv1": "release", "PinnNEW": "alpha"}
+		f.api.Versions = map[string]platform.Version{}
+		for id, kind := range types {
+			f.api.Versions[id] = platform.Version{ID: id, VersionType: kind}
+		}
+		f.api.ProjectVersions = map[string][]platform.Version{"Lithium": { // Nothing but alphas for Pinned Mod.
+			{ID: "LithALPHA2", VersionType: "alpha"},
+			{ID: "LithBETA", VersionType: "beta", VersionNumber: "0.22-beta", Files: []platform.File{
+				{Primary: true, URL: "https://x/l.jar", Filename: "lithium-0.22-beta.jar", Hashes: map[string]string{"sha512": "b"}}}},
+		}}
+		if err := afterUpdate(ctx, f.Env, mods, before, migration); err != nil {
+			t.Fatal(err)
+		}
+		after, _, _ := pack.LoadMods(pw, pack.Categories)
+		for _, mod := range after {
+			switch mod.Slug() {
+			case "lithium":
+				if mod.Modrinth()["version"] != "LithBETA" || mod.Filename() != "lithium-0.22-beta.jar" {
+					t.Error(migration, "lithium", mod.Data)
+				}
+			case "sodium":
+				if mod.Modrinth()["version"] != "SodiNEW" { // beta -> release is fine.
+					t.Error(migration, "sodium", mod.Data)
+				}
+			case "pinned":
+				if mod.Modrinth()["version"] != "Pinnv1" {
+					t.Error(migration, "pinned", mod.Data)
+				}
 			}
 		}
 	}

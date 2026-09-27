@@ -376,7 +376,8 @@ func alphaGuard(ctx context.Context, env *Env, before pack.Tree, pairs []modPair
 	default:
 		other := "moved to the newest beta/release, or reverted"
 		if migration {
-			other = "reverted, and then disabled as incompatible"
+			other = fmt.Sprintf("moved to the newest beta/release for Minecraft %s, or disabled as incompatible without one",
+				env.Project.Minecraft)
 		}
 		keep, err := ui.Pick(ctx, env.UI, "Keep which alpha versions? The others are "+other+".", alphas,
 			func(pair modPair) string { return pair.current.Name() })
@@ -390,7 +391,10 @@ func alphaGuard(ctx context.Context, env *Env, before pack.Tree, pairs []modPair
 	return editing(ctx, env, func() error {
 		for _, pair := range undo {
 			applied := false
-			if pair.current.Modrinth() != nil && pair.old.Modrinth() != nil && !migration {
+			// In a migration too: the pack is on its new Minecraft version by now, so
+			// this finds builds for it, and only a mod without one is reverted (and
+			// then disabled as incompatible).
+			if pair.current.Modrinth() != nil && pair.old.Modrinth() != nil {
 				target, err := newestAllowed(ctx, env, pair.old, found[pair.current.Rel][0])
 				if err != nil {
 					return err

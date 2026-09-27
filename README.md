@@ -42,7 +42,7 @@ The first run asks for a modpack folder: the folder that contains `Packwiz/pack.
 | 3 | Draft changelog | Fills `Update overview` and `Config Changes` from the changes since the last release. Text you wrote is only replaced after you confirm; the rest of the file stays exactly as it is. |
 | 4 | Build release | Updates `bcc.json`, the Crash Assistant modlist and `modlist.md`, writes the release record (which git ignores until Publish) and release notes, and builds the packs listed in `exports`, then offers to open the `Export` folder. Refuses an empty changelog. |
 | 5 | Publish | Commits, with the release record dated that day, pushes and runs `gh release create` with the built files, asking before each step. Refuses if the pack changed since the last build. |
-| 6 | Migrate Minecraft | `packwiz migrate minecraft`, the same alpha guard and re-enable offer, then disables mods with no build for the new version and starts a new version (it suggests a beta when mods had to be disabled). |
+| 6 | Migrate Minecraft | `packwiz migrate minecraft`, the same alpha guard and re-enable offer, then disables mods with no build for the new version and starts a new version (it suggests a beta when mods had to be disabled). A mod that landed on an alpha moves to its newest beta or release for the new version; only one without such a build is disabled. |
 | 7 | Check pack | Invalid sides, leftover disabled folders, disabled and pinned mods, and library mods nothing depends on (removal via `packwiz remove`). |
 | 8 | View changes | Everything that changed since the last release: mods, packs and config lines. |
 
