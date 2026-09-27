@@ -341,6 +341,20 @@ func TestImportedStaleExcludeIsNotedOnce(t *testing.T) {
 	}
 }
 
+// A setting written twice is an error, and the file stays as it is, instead
+// of one of the values quietly disappearing when the file is rewritten.
+func TestRepeatedSettingIsAClearError(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "Pack")
+	text := "server_exclude: [sodium, iris]\nexports: [curseforge]\nserver_exclude: []\n"
+	path := testutil.Write(t, filepath.Join(root, SettingsFile), text)
+	if _, _, err := LoadSettings(root, "Pack", nil); err == nil || !strings.Contains(err.Error(), `"server_exclude" already defined at line 1`) {
+		t.Errorf("got %v", err)
+	}
+	if testutil.Read(t, path) != text {
+		t.Error("the file was rewritten")
+	}
+}
+
 // py: test_robustness.py::test_broken_settings_yaml_is_a_clear_error
 func TestBrokenSettingsYAMLIsAClearError(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "Pack")

@@ -148,8 +148,8 @@ func LoadSettings(root, packName string, ask AskFunc) (Settings, []string, error
 	current, err := pycompat.ReadText(path)
 	switch {
 	case err == nil:
-		var doc yaml.Node
-		if err := yaml.Unmarshal([]byte(current), &doc); err != nil {
+		doc, err := pycompat.ParseYAML(current)
+		if err != nil {
 			return Settings{}, nil, fail.Wrapf(err, "%s isn't valid YAML: %v\n"+
 				"Tip: put Windows paths in single quotes, e.g. 'D:\\Servers\\Pack'.", path, err)
 		}

@@ -139,8 +139,8 @@ func Load(path string) (*Changelog, error) {
 
 func parse(path, text string) (*Changelog, error) {
 	c := &Changelog{Path: path, text: text, values: map[string]*yaml.Node{}}
-	var doc yaml.Node
-	if err := yaml.Unmarshal([]byte(text), &doc); err != nil {
+	doc, err := pycompat.ParseYAML(text)
+	if err != nil {
 		return nil, fail.Wrapf(err, "%s isn't valid YAML, so it can't be read:\n%v", filepath.Base(path), err)
 	}
 	if doc.Kind == 0 || len(doc.Content) == 0 {
