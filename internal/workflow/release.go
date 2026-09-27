@@ -225,6 +225,31 @@ func NewVersion(ctx context.Context, env *Env, suggestion, newVersion string) (b
 	return true, nil
 }
 
+// followMinecraft renames an unreleased version's changelog and record after
+// Migrate moved the pack to another Minecraft version, when their names
+// include it ("1.1.0+1.21.11.yml"), so the version keeps its notes there.
+func followMinecraft(ctx context.Context, env *Env, oldMinecraft string) error {
+	p := env.Project
+	if tag, err := ReleaseTag(ctx, env, ""); err != nil || tag != "" {
+		return err
+	}
+	for _, rename := range [][2]string{
+		{changelog.Path(p, "", oldMinecraft), changelog.Path(p, "", "")},
+		{changelog.RecordPath(p, "", oldMinecraft), changelog.RecordPath(p, "", "")},
+	} {
+		from, to := rename[0], rename[1]
+		if from == to || !files.Exists(from) || files.Exists(to) {
+			continue
+		}
+		if err := files.Rename(from, to); err != nil {
+			return err
+		}
+		env.UI.Info(fmt.Sprintf("%s is now for Minecraft %s: renamed %s to %s.",
+			p.Version, p.Minecraft, filepath.Base(from), filepath.Base(to)))
+	}
+	return nil
+}
+
 // includePrereleases adds what you wrote for a full release's pre-releases to
 // its changelog, when the release covers theirs (prereleases: previews). It
 // reads them from their records, as they were released.

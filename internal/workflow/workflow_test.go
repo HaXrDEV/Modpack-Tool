@@ -671,6 +671,26 @@ func TestMigrateSuggestsABetaWhenModsAreMissing(t *testing.T) {
 	}
 }
 
+// Migrate takes an unreleased version's changelog to the new Minecraft
+// version, so New version can rename it and its notes stay with it.
+func TestMigrateKeepsAnUnreleasedChangelog(t *testing.T) {
+	f := repoProject(t)
+	mustNewVersion(t, f, "1.1.0")
+	writeChangelog(t, f, "Bug Fixes:\n  - Fixed the menu.\n")
+	f.Packwiz = &migratingPackwiz{packDir: f.Project.PackDir()}
+	f.answers("", "", "r") // The latest loader, the suggested version, rename 1.1.0.
+	if err := Migrate(ctx, f.Env, "26.1"); err != nil {
+		t.Fatal(err, f.session.Text())
+	}
+	data, err := changelog.Load(changelog.Path(f.Project, "", ""))
+	if f.Project.Version != "1.2.0" || err != nil || !slices.Equal(data.Lines("Bug Fixes"), []string{"Fixed the menu."}) {
+		t.Error(f.Project.Version, err, f.session.Text())
+	}
+	if files.Exists(filepath.Join(f.Project.ChangelogDir(), "1.1.0+1.21.11.yml")) {
+		t.Error("the old changelog is still there")
+	}
+}
+
 // A release's contents list every enabled file with its project page and
 // authors, sorted by name, and sides when the pack shows side tags, plus the
 // files the pack bundles by name.

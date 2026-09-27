@@ -555,6 +555,9 @@ func Migrate(ctx context.Context, env *Env, target string) error {
 	if err := p.Reload(); err != nil {
 		return err
 	}
+	if err := followMinecraft(ctx, env, oldMinecraft); err != nil {
+		return err
+	}
 	if err := afterUpdate(ctx, env, mods, before, true); err != nil {
 		return err
 	}
