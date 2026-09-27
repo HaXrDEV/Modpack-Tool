@@ -286,7 +286,7 @@ func afterUpdate(ctx context.Context, env *Env, order []pack.Mod, before pack.Tr
 	env.UI.Info(fmt.Sprintf("%d disabled mod%s received an update, so packwiz found a build for Minecraft %s:",
 		len(updatedDisabled), ui.Plural(len(updatedDisabled)), env.Project.Minecraft))
 	picked, err := ui.Pick(ctx, env.UI, "Enable any of them?", updatedDisabled, pack.Mod.Name)
-	if err != nil {
+	if err != nil || len(picked) == 0 {
 		return err
 	}
 	if err := editing(ctx, env, func() error {
@@ -299,10 +299,16 @@ func afterUpdate(ctx context.Context, env *Env, order []pack.Mod, before pack.Tr
 	}); err != nil {
 		return err
 	}
-	if len(picked) > 0 {
-		env.UI.Info("Enabled " + strings.Join(pack.Names(picked), ", ") + ".")
+	env.UI.Info("Enabled " + strings.Join(pack.Names(picked), ", ") + ".")
+	// Enabled, they ship whatever build packwiz picked, so the alpha guard
+	// looks at them too (reverting one also disables it again).
+	if pairs, err = changed(env, order, before); err != nil {
+		return err
 	}
-	return nil
+	enabled := slices.DeleteFunc(pairs, func(pair modPair) bool {
+		return !slices.ContainsFunc(picked, func(mod pack.Mod) bool { return mod.Rel == pair.current.Rel })
+	})
+	return alphaGuard(ctx, env, before, enabled, migration)
 }
 
 // editing groups metafile edits; the index is refreshed once they are done.

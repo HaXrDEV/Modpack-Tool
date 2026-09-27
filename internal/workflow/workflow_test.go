@@ -916,6 +916,32 @@ func (o *offlineShaders) ModrinthProjectVersions(ctx context.Context, id string,
 	return o.Fake.ModrinthProjectVersions(ctx, id, gameVersions, loaders)
 }
 
+// Re-enabling a disabled mod that packwiz moved to an alpha goes through the
+// alpha guard too.
+func TestReenabledModsGetTheAlphaGuard(t *testing.T) {
+	pw := testutil.PackDir(t)
+	idle := testutil.Write(t, filepath.Join(pw, "mods", "idle.pw.toml"),
+		testutil.Metafile("Idle Mod", "idle-1.jar", testutil.MetaOptions{Side: "both(disabled)"}))
+	f := newFixture(t, filepath.Dir(pw))
+	f.Project.Settings.AlphaUpdates = "never"
+	mods, before, err := loadMods(f.Env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.Write(t, idle, strings.Replace(testutil.Read(t, idle), `version = "Idlev1"`, `version = "IdleNEW"`, 1))
+	f.api.Versions = map[string]platform.Version{"Idlev1": {ID: "Idlev1", VersionType: "release"}, "IdleNEW": {ID: "IdleNEW", VersionType: "alpha"}}
+	f.answers("all") // Enable it.
+	if err := afterUpdate(ctx, f.Env, mods, before, false); err != nil {
+		t.Fatal(err, f.session.Text())
+	}
+	if text := testutil.Read(t, idle); !strings.Contains(text, `version = "Idlev1"`) {
+		t.Error("the enabled mod is on its alpha:\n" + text)
+	}
+	if !strings.Contains(f.session.Text(), "landed on an alpha version") {
+		t.Error(f.session.Text())
+	}
+}
+
 // hookedPackwiz runs a function when packwiz refresh or update runs, as if
 // packwiz or the user changed files then.
 type hookedPackwiz struct {
