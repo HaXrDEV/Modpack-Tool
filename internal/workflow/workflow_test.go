@@ -491,6 +491,79 @@ func TestPublishCommitsTheRecordWithTheRelease(t *testing.T) {
 	}
 }
 
+// A commit that fails leaves the record ignored, as a declined one does.
+func TestPublishUnstagesTheRecordWhenTheCommitFails(t *testing.T) {
+	f := repoProject(t)
+	mustNewVersion(t, f, "1.1.0")
+	writeChangelog(t, f, "Bug Fixes:\n  - Fixed it.\n")
+	f.answers("n") // Don't draft the empty sections.
+	if _, err := Build(ctx, f.Env, "", false, false); err != nil {
+		t.Fatal(err)
+	}
+	root, rel := f.Project.Root, "Changelogs/data/1.1.0+1.21.11.json"
+	hook := testutil.Write(t, filepath.Join(root, ".git", "hooks", "pre-commit"), "#!/bin/sh\necho 'hook says no' >&2\nexit 1\n")
+	if err := os.Chmod(hook, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	testutil.Git(t, root, "config", "core.hooksPath", ".git/hooks")
+	f.LookPath = func(string) (string, error) { return "gh", nil }
+	f.answers("y") // Commit.
+	if err := Publish(ctx, f.Env, false); err == nil || !strings.Contains(err.Error(), "hook says no") {
+		t.Fatalf("got %v", err)
+	}
+	if strings.Contains(testutil.Git(t, root, "diff", "--cached", "--name-only"), rel) {
+		t.Error("the commit failed, but the record is still staged")
+	}
+}
+
+// A build is current only while what it was built from is: pack.toml (the
+// loader version, which the index doesn't cover) and the settings too.
+func TestBuildIsCurrentCoversPackTOMLAndTheSettings(t *testing.T) {
+	f := repoProject(t)
+	mustNewVersion(t, f, "1.1.0")
+	writeChangelog(t, f, "Bug Fixes:\n  - Fixed it.\n")
+	replace := func(path, old, new string) func() {
+		return func() { testutil.Write(t, path, strings.Replace(testutil.Read(t, path), old, new, 1)) }
+	}
+	for name, edit := range map[string]func(){
+		"loader":   replace(filepath.Join(f.Project.PackDir(), "pack.toml"), `fabric = "0.18.4"`, `fabric = "0.19.0"`),
+		"settings": replace(filepath.Join(f.Project.Root, project.SettingsFile), "side_tags: False", "side_tags: True"),
+	} {
+		f.answers("n") // Don't draft the empty sections.
+		if _, err := Build(ctx, f.Env, "", false, false); err != nil {
+			t.Fatal(err)
+		}
+		if current, reason := BuildIsCurrent(f.Env, ReadLastBuild(ctx, f.Env)); !current {
+			t.Fatal(name, reason)
+		}
+		edit()
+		if current, reason := BuildIsCurrent(f.Env, ReadLastBuild(ctx, f.Env)); current || !strings.Contains(reason, "changed since the last build") {
+			t.Error(name, current, reason)
+		}
+	}
+}
+
+// Build notes the changelog as the release notes were written from it, so an
+// edit made while the packs are built needs another build.
+func TestAChangelogEditedDuringTheBuildIsNotBuilt(t *testing.T) {
+	f := repoProject(t)
+	mustNewVersion(t, f, "1.1.0")
+	path := writeChangelog(t, f, "Bug Fixes:\n  - Fixed it.\n")
+	refreshes := 0
+	f.Packwiz = &hookedPackwiz{fakePackwiz: f.packwiz, refresh: func() {
+		if refreshes++; refreshes == 2 { // After the notes' text was read.
+			testutil.Write(t, path, "Bug Fixes:\n  - Fixed it, typo corrected.\n")
+		}
+	}}
+	f.answers("n") // Don't draft the empty sections.
+	if _, err := Build(ctx, f.Env, "", false, false); err != nil {
+		t.Fatal(err)
+	}
+	if current, reason := BuildIsCurrent(f.Env, ReadLastBuild(ctx, f.Env)); current || !strings.Contains(reason, "changelog changed") {
+		t.Error(current, reason)
+	}
+}
+
 // py: test_robustness.py::test_publish_refuses_after_changelog_edits
 func TestPublishRefusesAfterChangelogEdits(t *testing.T) {
 	f := repoProject(t)
@@ -671,6 +744,26 @@ func TestMigrateSuggestsABetaWhenModsAreMissing(t *testing.T) {
 	}
 }
 
+// Migrate takes an unreleased version's changelog to the new Minecraft
+// version, so New version can rename it and its notes stay with it.
+func TestMigrateKeepsAnUnreleasedChangelog(t *testing.T) {
+	f := repoProject(t)
+	mustNewVersion(t, f, "1.1.0")
+	writeChangelog(t, f, "Bug Fixes:\n  - Fixed the menu.\n")
+	f.Packwiz = &migratingPackwiz{packDir: f.Project.PackDir()}
+	f.answers("", "", "r") // The latest loader, the suggested version, rename 1.1.0.
+	if err := Migrate(ctx, f.Env, "26.1"); err != nil {
+		t.Fatal(err, f.session.Text())
+	}
+	data, err := changelog.Load(changelog.Path(f.Project, "", ""))
+	if f.Project.Version != "1.2.0" || err != nil || !slices.Equal(data.Lines("Bug Fixes"), []string{"Fixed the menu."}) {
+		t.Error(f.Project.Version, err, f.session.Text())
+	}
+	if files.Exists(filepath.Join(f.Project.ChangelogDir(), "1.1.0+1.21.11.yml")) {
+		t.Error("the old changelog is still there")
+	}
+}
+
 // A release's contents list every enabled file with its project page and
 // authors, sorted by name, and sides when the pack shows side tags, plus the
 // files the pack bundles by name.
@@ -787,6 +880,114 @@ func TestUpdateModsTakesTheNewestShaderVersions(t *testing.T) {
 	if !strings.Contains(f.session.Text(), "BSL Shaders: 10.1 -> 10.2") {
 		t.Error(f.session.Text())
 	}
+}
+
+// A failed shader step doesn't skip the alpha guard for what packwiz update
+// changed, which a later run couldn't tell.
+func TestUpdateModsGuardsAlphasWhenTheShaderStepFails(t *testing.T) {
+	pw := testutil.PackDir(t)
+	testutil.Write(t, filepath.Join(pw, "shaderpacks", "bsl.pw.toml"),
+		testutil.Metafile("BSL Shaders", "BSL_v10.1.zip", testutil.MetaOptions{Side: "client"}))
+	f := newFixture(t, filepath.Dir(pw))
+	f.Project.Settings.AlphaUpdates = "never"
+	lithium := filepath.Join(pw, "mods", "lithium.pw.toml")
+	f.Packwiz = &hookedPackwiz{fakePackwiz: f.packwiz, update: func() {
+		testutil.Write(t, lithium, strings.Replace(testutil.Read(t, lithium), `version = "Lithv1"`, `version = "LithNEW"`, 1))
+	}}
+	f.api.Versions = map[string]platform.Version{"Lithv1": {ID: "Lithv1", VersionType: "release"},
+		"LithNEW": {ID: "LithNEW", VersionType: "alpha"}, "BSL v1": {ID: "BSL v1", VersionType: "release", Loaders: []string{"iris"}}}
+	f.API = &offlineShaders{f.api}
+	f.answers("") // Keep the pins.
+	if err := UpdateMods(ctx, f.Env); err == nil || !strings.Contains(err.Error(), "Modrinth is down") {
+		t.Errorf("got %v", err)
+	}
+	if !strings.Contains(testutil.Read(t, lithium), `version = "Lithv1"`) {
+		t.Error("Lithium stayed on its alpha:\n" + f.session.Text())
+	}
+}
+
+// offlineShaders can't list the BSL shader pack's versions.
+type offlineShaders struct{ *platform.Fake }
+
+func (o *offlineShaders) ModrinthProjectVersions(ctx context.Context, id string, gameVersions, loaders []string) ([]platform.Version, error) {
+	if id == "BSL Shad" {
+		return nil, errors.New("Modrinth is down")
+	}
+	return o.Fake.ModrinthProjectVersions(ctx, id, gameVersions, loaders)
+}
+
+// Re-enabling a disabled mod that packwiz moved to an alpha goes through the
+// alpha guard too.
+func TestReenabledModsGetTheAlphaGuard(t *testing.T) {
+	pw := testutil.PackDir(t)
+	idle := testutil.Write(t, filepath.Join(pw, "mods", "idle.pw.toml"),
+		testutil.Metafile("Idle Mod", "idle-1.jar", testutil.MetaOptions{Side: "both(disabled)"}))
+	f := newFixture(t, filepath.Dir(pw))
+	f.Project.Settings.AlphaUpdates = "never"
+	mods, before, err := loadMods(f.Env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.Write(t, idle, strings.Replace(testutil.Read(t, idle), `version = "Idlev1"`, `version = "IdleNEW"`, 1))
+	f.api.Versions = map[string]platform.Version{"Idlev1": {ID: "Idlev1", VersionType: "release"}, "IdleNEW": {ID: "IdleNEW", VersionType: "alpha"}}
+	f.answers("all") // Enable it.
+	if err := afterUpdate(ctx, f.Env, mods, before, false); err != nil {
+		t.Fatal(err, f.session.Text())
+	}
+	if text := testutil.Read(t, idle); !strings.Contains(text, `version = "Idlev1"`) {
+		t.Error("the enabled mod is on its alpha:\n" + text)
+	}
+	if !strings.Contains(f.session.Text(), "landed on an alpha version") {
+		t.Error(f.session.Text())
+	}
+}
+
+// The alpha guard looks up a resource pack's beta/release by the installed
+// version's loader ("minecraft"), since it never has the pack's mod loader.
+func TestAlphaGuardRedirectsResourcePacks(t *testing.T) {
+	pw := testutil.PackDir(t)
+	f := newFixture(t, filepath.Dir(pw))
+	f.Project.Settings.AlphaUpdates = "never"
+	mods, before, err := loadMods(f.Env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh := filepath.Join(pw, "resourcepacks", "fresh.pw.toml")
+	testutil.Write(t, fresh, strings.Replace(testutil.Read(t, fresh), `version = "Fresv1"`, `version = "FresNEW"`, 1))
+	f.api.Versions = map[string]platform.Version{
+		"Fresv1":  {ID: "Fresv1", VersionType: "release", Loaders: []string{"minecraft"}},
+		"FresNEW": {ID: "FresNEW", VersionType: "alpha", Loaders: []string{"minecraft"}},
+	}
+	f.api.ProjectVersions = map[string][]platform.Version{"Fresh An": {{ID: "FresBETA", VersionType: "beta",
+		Loaders: []string{"minecraft"}, GameVersions: []string{"1.21.11"}, Files: []platform.File{
+			{Primary: true, URL: "https://x/fa-2.zip", Filename: "fa-2.zip", Hashes: map[string]string{"sha512": "f"}}}}}}
+	if err := afterUpdate(ctx, f.Env, mods, before, false); err != nil {
+		t.Fatal(err)
+	}
+	if text := testutil.Read(t, fresh); !strings.Contains(text, `version = "FresBETA"`) {
+		t.Error("the resource pack isn't on its beta:\n" + text)
+	}
+}
+
+// hookedPackwiz runs a function when packwiz refresh or update runs, as if
+// packwiz or the user changed files then.
+type hookedPackwiz struct {
+	*fakePackwiz
+	refresh, update func()
+}
+
+func (h *hookedPackwiz) Refresh(ctx context.Context) error {
+	if h.refresh != nil {
+		h.refresh()
+	}
+	return h.fakePackwiz.Refresh(ctx)
+}
+
+func (h *hookedPackwiz) UpdateAll(ctx context.Context) error {
+	if h.update != nil {
+		h.update()
+	}
+	return h.fakePackwiz.UpdateAll(ctx)
 }
 
 // cancelingPackwiz cancels the run while packwiz update is running.

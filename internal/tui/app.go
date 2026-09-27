@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/HaXrDEV/Modpack-Tool/internal/app"
 	"github.com/HaXrDEV/Modpack-Tool/internal/config"
+	"github.com/HaXrDEV/Modpack-Tool/internal/project"
 	"github.com/HaXrDEV/Modpack-Tool/internal/ui"
 	"github.com/HaXrDEV/Modpack-Tool/internal/workflow"
 )
@@ -114,7 +116,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case projectReady:
 		a.env = msg.env
 		a.projectName = msg.env.Project.Name
-		a.home.status, a.home.notice = nil, strings.Join(msg.notes, " ")
+		a.home.status, a.home.notice, a.home.moved = nil, strings.Join(msg.notes, " "), false
 		a.screen = a.home
 		return a, tea.Batch(a.home.reload(), a.fetchTags())
 	case startAction:
@@ -122,7 +124,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case runFinished:
 		a.running = false
 		a.screen = a.home
-		if msg.err == nil && msg.result != "" {
+		a.home.moved, a.home.back = false, a.home.now()
+		switch {
+		case errors.Is(msg.err, context.Canceled):
+			a.home.notice = "Cancelled."
+		case msg.err == nil && msg.result != "":
 			a.home.notice = ""
 		}
 		return a, a.home.reload()
@@ -186,7 +192,10 @@ func (a *App) open(root string) tea.Cmd {
 	var env *workflow.Env
 	var notes []string
 	r.onDone = func(err error) tea.Msg {
-		if err != nil {
+		switch {
+		case errors.Is(err, context.Canceled):
+			return goHome{notice: "Cancelled."}
+		case err != nil:
 			return showProjects{}
 		}
 		return projectReady{env, notes}
@@ -218,7 +227,19 @@ func (a *App) fetchTags() tea.Cmd {
 // races with a workflow.
 func (a *App) loadStatus(seq int) tea.Cmd {
 	env := a.statusEnv()
-	return func() tea.Msg { return statusMsg{workflow.ComputeStatus(a.ctx, env), seq} }
+	return func() tea.Msg {
+		refresh(env.Project) // When that fails, the next action says why.
+		return statusMsg{workflow.ComputeStatus(a.ctx, env), seq}
+	}
+}
+
+// refresh re-reads a project's settings and pack.toml, so edits made while
+// the dashboard is open count, as they do for a subcommand.
+func refresh(p *project.Project) error {
+	if err := p.ReloadSettings(); err != nil {
+		return err
+	}
+	return p.Reload()
 }
 
 func (a *App) statusEnv() *workflow.Env {
@@ -238,14 +259,18 @@ func (a *App) start(action workflow.Action) tea.Cmd {
 		a.screen = pager
 		env := a.statusEnv()
 		return tea.Batch(pager.spinner.Tick, func() tea.Msg {
+			if err := refresh(env.Project); err != nil {
+				return pagedMsg{nil, err}
+			}
 			lines, err := workflow.ChangesReport(a.ctx, env, "")
 			return pagedMsg{lines, err}
 		})
 	}
+	p := a.env.Project // The workflow owns it until the run ends.
+	refreshErr := refresh(p)
 	log := a.openLog(action)
 	session := newSession(a.ctx.Done(), log)
 	ctx, cancel := context.WithCancel(a.ctx)
-	p := a.env.Project // The workflow owns it until the run ends.
 	env := workflow.NewEnv(session, p, a.cfg.PackwizExe(), a.env.API, config.CacheDir())
 	title := action.Label + ": " + p.Name + " " + p.Version
 	r := newRunScreen(a.theme, title, session.events, cancel)
@@ -266,7 +291,10 @@ func (a *App) start(action workflow.Action) tea.Cmd {
 				log.Close()
 			}
 		}()
-		err := app.Run(ctx, env, action, workflow.Args{})
+		err := refreshErr
+		if err == nil {
+			err = app.Run(ctx, env, action, workflow.Args{})
+		}
 		cancel()
 		session.emit(runDone{err})
 	}()

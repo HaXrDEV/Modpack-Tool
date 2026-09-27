@@ -70,6 +70,9 @@ type runScreen struct {
 	now        func() time.Time
 	// onDone is sent to the root when the run ends and the user leaves.
 	onDone func(err error) tea.Msg
+	// width and height are the body size of the last render, so the log view
+	// has its size before it scrolls.
+	width, height int
 }
 
 func newRunScreen(theme *Theme, title string, events <-chan event, cancel context.CancelFunc) *runScreen {
@@ -105,7 +108,7 @@ func (r *runScreen) update(msg tea.Msg) (screen, tea.Cmd) {
 		} else if r.autoClose && r.err == nil && !r.warned {
 			cmds = append(cmds, r.leave())
 		} else if r.cancelling && errors.Is(r.err, context.Canceled) {
-			cmds = append(cmds, func() tea.Msg { return goHome{notice: "Cancelled."} })
+			cmds = append(cmds, r.leave()) // Through onDone, like any other end of a run.
 		}
 		return r, tea.Batch(cmds...)
 	case spinner.TickMsg:
@@ -161,6 +164,7 @@ func (r *runScreen) key(msg tea.KeyPressMsg) tea.Cmd {
 	switch k {
 	case "l":
 		r.showLog = true
+		r.sizeLog()
 		r.log.SetContentLines(r.logs)
 		r.log.GotoBottom()
 	case "esc", "enter", "q":
@@ -172,6 +176,12 @@ func (r *runScreen) key(msg tea.KeyPressMsg) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// sizeLog fits the log view to the body; where its bottom is depends on its height.
+func (r *runScreen) sizeLog() {
+	r.log.SetWidth(r.width)
+	r.log.SetHeight(max(1, r.height-1))
 }
 
 func (r *runScreen) cancelRun() {
@@ -267,6 +277,7 @@ func (r *runScreen) apply(e event) tea.Cmd {
 		if r.cancelling {
 			break // The workflow gets the cancel through its context.
 		}
+		r.showLog = false // A question mustn't wait unseen behind the log.
 		r.prompt = &activePrompt{prompt: e.prompt, reply: e.reply, shown: r.now()}
 		return e.prompt.init()
 	case runDone:
@@ -288,9 +299,9 @@ func errorText(err error) string {
 
 func (r *runScreen) view(width, height int) string {
 	t := r.theme
+	r.width, r.height = width, height
 	if r.showLog {
-		r.log.SetWidth(width)
-		r.log.SetHeight(max(1, height-1))
+		r.sizeLog()
 		return t.Title.Render(r.title+" · log") + "\n" + r.log.View()
 	}
 	var lines []string

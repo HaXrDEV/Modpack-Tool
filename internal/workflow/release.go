@@ -2,6 +2,8 @@ package workflow
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +21,7 @@ import (
 	"github.com/HaXrDEV/Modpack-Tool/internal/fail"
 	"github.com/HaXrDEV/Modpack-Tool/internal/files"
 	"github.com/HaXrDEV/Modpack-Tool/internal/pack"
+	"github.com/HaXrDEV/Modpack-Tool/internal/project"
 	"github.com/HaXrDEV/Modpack-Tool/internal/pycompat"
 	"github.com/HaXrDEV/Modpack-Tool/internal/ui"
 	"github.com/HaXrDEV/Modpack-Tool/internal/version"
@@ -223,6 +226,31 @@ func NewVersion(ctx context.Context, env *Env, suggestion, newVersion string) (b
 	}
 	env.UI.Result(fmt.Sprintf("Renamed %s to %s (%s).", oldVersion, newVersion, filepath.Base(target)), next)
 	return true, nil
+}
+
+// followMinecraft renames an unreleased version's changelog and record after
+// Migrate moved the pack to another Minecraft version, when their names
+// include it ("1.1.0+1.21.11.yml"), so the version keeps its notes there.
+func followMinecraft(ctx context.Context, env *Env, oldMinecraft string) error {
+	p := env.Project
+	if tag, err := ReleaseTag(ctx, env, ""); err != nil || tag != "" {
+		return err
+	}
+	for _, rename := range [][2]string{
+		{changelog.Path(p, "", oldMinecraft), changelog.Path(p, "", "")},
+		{changelog.RecordPath(p, "", oldMinecraft), changelog.RecordPath(p, "", "")},
+	} {
+		from, to := rename[0], rename[1]
+		if from == to || !files.Exists(from) || files.Exists(to) {
+			continue
+		}
+		if err := files.Rename(from, to); err != nil {
+			return err
+		}
+		env.UI.Info(fmt.Sprintf("%s is now for Minecraft %s: renamed %s to %s.",
+			p.Version, p.Minecraft, filepath.Base(from), filepath.Base(to)))
+	}
+	return nil
 }
 
 // includePrereleases adds what you wrote for a full release's pre-releases to
@@ -484,6 +512,30 @@ type LastBuild struct {
 	IndexHash     string   `json:"index_hash"`
 	ChangelogHash string   `json:"changelog_hash"`
 	Files         []string `json:"files"`
+	Inputs        string   `json:"inputs"` // See buildInputs; "" from before it existed.
+}
+
+// buildInputs is a digest of what a build uses besides the index and the
+// changelog: pack.toml (the loader version and name, which the index doesn't
+// cover), the settings (exports, excludes, notes) and the server template.
+func buildInputs(p *project.Project) string {
+	h := sha256.New()
+	for _, path := range []string{filepath.Join(p.PackDir(), "pack.toml"), filepath.Join(p.Root, project.SettingsFile)} {
+		data, _ := os.ReadFile(path)
+		fmt.Fprintf(h, "%d\x00", len(data))
+		h.Write(data)
+	}
+	template := p.ServerTemplateDir()
+	filepath.WalkDir(template, func(path string, entry fs.DirEntry, err error) error {
+		if err == nil && entry.Type().IsRegular() {
+			if info, err := entry.Info(); err == nil {
+				rel, _ := filepath.Rel(template, path)
+				fmt.Fprintf(h, "%s\x00%d\x00%d\x00", filepath.ToSlash(rel), info.Size(), info.ModTime().UnixNano())
+			}
+		}
+		return nil
+	})
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 func lastBuildPath(ctx context.Context, env *Env) (string, error) {
@@ -526,6 +578,10 @@ func BuildIsCurrent(env *Env, last *LastBuild) (bool, string) {
 	}
 	if export.FileDigest(changelog.Path(p, "", ""), "sha256") != last.ChangelogHash {
 		return false, "The changelog changed since the last build. Build release again so the release notes match it."
+	}
+	if last.Inputs != "" && buildInputs(p) != last.Inputs {
+		return false, "The pack's details (loader, name), settings or server template changed since the last build. " +
+			"Build release again so the uploaded files match them."
 	}
 	return true, ""
 }
@@ -607,6 +663,7 @@ func Build(ctx context.Context, env *Env, since string, skipServer, review bool)
 	if data, err = changelog.Load(path); err != nil {
 		return nil, err
 	}
+	changelogHash := export.FileDigest(path, "sha256") // What the notes are written from, whatever is edited later.
 	for _, key := range data.UnknownSections() {
 		env.UI.Warn(fmt.Sprintf("'%s' in %s isn't a known section, so it won't appear anywhere.", key, filepath.Base(path)))
 	}
@@ -660,15 +717,18 @@ func Build(ctx context.Context, env *Env, since string, skipServer, review bool)
 			kinds = append(kinds, kind)
 		}
 	}
-	built, err := export.Export(ctx, p, kinds, env.Store)
-	if err != nil {
-		return nil, err
-	}
+	// Taken before the packs are built from them, so a change made meanwhile
+	// counts as not built.
 	indexHash, err := pack.IndexHash(p.PackDir())
 	if err != nil {
 		return nil, err
 	}
-	last := LastBuild{Version: p.Version, IndexHash: indexHash, ChangelogHash: export.FileDigest(path, "sha256"), Files: []string{}}
+	inputs := buildInputs(p)
+	built, err := export.Export(ctx, p, kinds, env.Store)
+	if err != nil {
+		return nil, err
+	}
+	last := LastBuild{Version: p.Version, IndexHash: indexHash, ChangelogHash: changelogHash, Files: []string{}, Inputs: inputs}
 	for _, file := range built {
 		last.Files = append(last.Files, filepath.Base(file))
 	}
@@ -737,7 +797,7 @@ func offerExportFolder(ctx context.Context, env *Env, built []string) {
 
 // Publish commits, with the release record, pushes and creates the GitHub
 // release; the pack's publish.yml then uploads it to CurseForge and Modrinth.
-func Publish(ctx context.Context, env *Env, dryRun bool) error {
+func Publish(ctx context.Context, env *Env, dryRun bool) (err error) {
 	p := env.Project
 	if !env.Git.IsRepo() {
 		return fail.Errorf("%s is not a git repository.", p.Root)
@@ -819,6 +879,17 @@ func Publish(ctx context.Context, env *Env, dryRun bool) error {
 	if err := env.Git.AddIgnored(ctx, p.Rel(recordPath)); err != nil {
 		return err
 	}
+	// Without the commit (declined, canceled or failed) it isn't released after
+	// all, so git ignores the record again.
+	committed := false
+	defer func() {
+		if committed {
+			return
+		}
+		if unstageErr := env.Git.Unstage(context.WithoutCancel(ctx), p.Rel(recordPath)); unstageErr != nil && err == nil {
+			err = unstageErr
+		}
+	}()
 	changes, err := env.Git.Status(ctx)
 	if err != nil {
 		return err
@@ -833,10 +904,6 @@ func Publish(ctx context.Context, env *Env, dryRun bool) error {
 		env.UI.Info(fmt.Sprintf("%d changed path%s:", len(changes), ui.Plural(len(changes))), ui.Limit(paths, 15)...)
 		ok, err := env.UI.Confirm(ctx, fmt.Sprintf("Commit all of them as '%s'?", message), true)
 		if err != nil || !ok {
-			// Not released after all, so git ignores the record again.
-			if unstageErr := env.Git.Unstage(context.WithoutCancel(ctx), p.Rel(recordPath)); unstageErr != nil && err == nil {
-				err = unstageErr
-			}
 			return err
 		}
 		step := env.UI.Step("Committing")
@@ -846,6 +913,7 @@ func Publish(ctx context.Context, env *Env, dryRun bool) error {
 		}
 		step.Done("Committed.")
 	}
+	committed = true
 	ok, err := env.UI.Confirm(ctx, fmt.Sprintf("Push %s to GitHub?", branch), true)
 	if err != nil || !ok {
 		return err

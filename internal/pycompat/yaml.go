@@ -1,10 +1,43 @@
 package pycompat
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"regexp"
 	"strings"
+
+	"go.yaml.in/yaml/v3"
 )
+
+// ParseYAML parses text as a single YAML document, as ruamel's load does:
+// a second document or a repeated top-level key is an error. yaml.v3 alone
+// keeps the first document and the last value of a key when parsing into a
+// Node, so the rest would be dropped silently.
+func ParseYAML(text string) (yaml.Node, error) {
+	decoder := yaml.NewDecoder(strings.NewReader(text))
+	var doc, next yaml.Node
+	if err := decoder.Decode(&doc); err != nil && !errors.Is(err, io.EOF) {
+		return yaml.Node{}, err
+	}
+	if err := decoder.Decode(&next); err == nil {
+		return yaml.Node{}, fmt.Errorf("yaml: line %d: expected a single document, but found another", next.Line)
+	} else if !errors.Is(err, io.EOF) {
+		return yaml.Node{}, err
+	}
+	if len(doc.Content) > 0 && doc.Content[0].Kind == yaml.MappingNode {
+		lines := map[string]int{}
+		content := doc.Content[0].Content
+		for i := 0; i+1 < len(content); i += 2 {
+			key := content[i]
+			if line, ok := lines[key.Value]; ok {
+				return yaml.Node{}, fmt.Errorf("yaml: line %d: mapping key %q already defined at line %d", key.Line, key.Value, line)
+			}
+			lines[key.Value] = key.Line
+		}
+	}
+	return doc, nil
+}
 
 // These reproduce the scalar styles ruamel.yaml (round-trip mode, YAML 1.2,
 // allow_unicode) writes, for the YAML files the tool generates.

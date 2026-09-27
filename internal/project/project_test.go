@@ -257,6 +257,18 @@ func TestOpenProjectReadsPackInfo(t *testing.T) {
 	}
 }
 
+// server_template is a folder of the project, or a full path to one anywhere.
+func TestServerTemplateDir(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "Pack")
+	elsewhere := filepath.Join(t.TempDir(), "Servers", "Pack")
+	for template, want := range map[string]string{"Server Pack": filepath.Join(root, "Server Pack"), elsewhere: elsewhere} {
+		p := &Project{Root: root, Settings: Settings{ServerTemplate: template}}
+		if got := p.ServerTemplateDir(); got != want {
+			t.Errorf("%s: got %s", template, got)
+		}
+	}
+}
+
 // py: test_robustness.py::test_settings_values_are_coerced
 func TestSettingsValuesAreCoerced(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "Pack")
@@ -326,6 +338,20 @@ func TestImportedStaleExcludeIsNotedOnce(t *testing.T) {
 	stale := slices.DeleteFunc(slices.Clone(notes), func(note string) bool { return !strings.Contains(note, "'Gone-1.0.jar' matches no current mod") })
 	if len(stale) != 1 {
 		t.Errorf("notes %q", notes)
+	}
+}
+
+// A setting written twice is an error, and the file stays as it is, instead
+// of one of the values quietly disappearing when the file is rewritten.
+func TestRepeatedSettingIsAClearError(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "Pack")
+	text := "server_exclude: [sodium, iris]\nexports: [curseforge]\nserver_exclude: []\n"
+	path := testutil.Write(t, filepath.Join(root, SettingsFile), text)
+	if _, _, err := LoadSettings(root, "Pack", nil); err == nil || !strings.Contains(err.Error(), `"server_exclude" already defined at line 1`) {
+		t.Errorf("got %v", err)
+	}
+	if testutil.Read(t, path) != text {
+		t.Error("the file was rewritten")
 	}
 }
 

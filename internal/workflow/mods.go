@@ -3,6 +3,7 @@ package workflow
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -36,6 +37,7 @@ func UpdateMods(ctx context.Context, env *Env) error {
 	if err != nil {
 		return err
 	}
+	var shadersErr error
 	err = runUnpinned(ctx, env, selected, func() error {
 		step := env.UI.Step("packwiz update --all")
 		if err := env.Packwiz.UpdateAll(ctx); err != nil {
@@ -43,12 +45,15 @@ func UpdateMods(ctx context.Context, env *Env) error {
 			return err
 		}
 		step.Done("")
-		return updateShaders(ctx, env)
+		// Reported after the alpha guard, which packwiz's updates need either way:
+		// a later run can't tell what they changed.
+		shadersErr = updateShaders(ctx, env)
+		return nil
 	})
 	if err != nil {
 		return err
 	}
-	if err := afterUpdate(ctx, env, mods, before, false); err != nil {
+	if err := errors.Join(afterUpdate(ctx, env, mods, before, false), shadersErr); err != nil {
 		return err
 	}
 	if err := env.Packwiz.Refresh(ctx); err != nil {
@@ -281,7 +286,7 @@ func afterUpdate(ctx context.Context, env *Env, order []pack.Mod, before pack.Tr
 	env.UI.Info(fmt.Sprintf("%d disabled mod%s received an update, so packwiz found a build for Minecraft %s:",
 		len(updatedDisabled), ui.Plural(len(updatedDisabled)), env.Project.Minecraft))
 	picked, err := ui.Pick(ctx, env.UI, "Enable any of them?", updatedDisabled, pack.Mod.Name)
-	if err != nil {
+	if err != nil || len(picked) == 0 {
 		return err
 	}
 	if err := editing(ctx, env, func() error {
@@ -294,10 +299,16 @@ func afterUpdate(ctx context.Context, env *Env, order []pack.Mod, before pack.Tr
 	}); err != nil {
 		return err
 	}
-	if len(picked) > 0 {
-		env.UI.Info("Enabled " + strings.Join(pack.Names(picked), ", ") + ".")
+	env.UI.Info("Enabled " + strings.Join(pack.Names(picked), ", ") + ".")
+	// Enabled, they ship whatever build packwiz picked, so the alpha guard
+	// looks at them too (reverting one also disables it again).
+	if pairs, err = changed(env, order, before); err != nil {
+		return err
 	}
-	return nil
+	enabled := slices.DeleteFunc(pairs, func(pair modPair) bool {
+		return !slices.ContainsFunc(picked, func(mod pack.Mod) bool { return mod.Rel == pair.current.Rel })
+	})
+	return alphaGuard(ctx, env, before, enabled, migration)
 }
 
 // editing groups metafile edits; the index is refreshed once they are done.
@@ -313,15 +324,15 @@ func editing(ctx context.Context, env *Env, edit func() error) error {
 // Alpha guard
 
 // channels returns {metafile path: (old channel, new channel)} from Modrinth
-// version types and CurseForge release types.
-func channels(ctx context.Context, env *Env, pairs []modPair) (map[string][2]string, error) {
+// version types and CurseForge release types, and the files it looked up.
+func channels(ctx context.Context, env *Env, pairs []modPair) (map[string][2]string, installed, error) {
 	var mods []pack.Mod
 	for _, pair := range pairs {
 		mods = append(mods, pair.old, pair.current)
 	}
 	found, err := lookUpInstalled(ctx, env, mods)
 	if err != nil {
-		return nil, err
+		return nil, found, err
 	}
 	channel := func(mod pack.Mod) string {
 		if mod.Modrinth() != nil {
@@ -336,7 +347,7 @@ func channels(ctx context.Context, env *Env, pairs []modPair) (map[string][2]str
 	for _, pair := range pairs {
 		result[pair.current.Rel] = [2]string{channel(pair.old), channel(pair.current)}
 	}
-	return result, nil
+	return result, found, nil
 }
 
 func alphaGuard(ctx context.Context, env *Env, before pack.Tree, pairs []modPair, migration bool) error {
@@ -349,7 +360,7 @@ func alphaGuard(ctx context.Context, env *Env, before pack.Tree, pairs []modPair
 	if len(candidates) == 0 {
 		return nil
 	}
-	found, err := channels(ctx, env, candidates)
+	found, lookup, err := channels(ctx, env, candidates)
 	if err != nil {
 		return err
 	}
@@ -374,10 +385,10 @@ func alphaGuard(ctx context.Context, env *Env, before pack.Tree, pairs []modPair
 		return nil
 	case "never":
 	default:
-		other := "moved to the newest beta/release, or reverted"
+		other := "moved to their newest beta/release where Modrinth has one, or else reverted"
 		if migration {
-			other = fmt.Sprintf("moved to the newest beta/release for Minecraft %s, or disabled as incompatible without one",
-				env.Project.Minecraft)
+			other = fmt.Sprintf("moved to their newest beta/release for Minecraft %s where Modrinth has one, "+
+				"or else reverted (and a mod then offered for disabling as incompatible)", env.Project.Minecraft)
 		}
 		keep, err := ui.Pick(ctx, env.UI, "Keep which alpha versions? The others are "+other+".", alphas,
 			func(pair modPair) string { return pair.current.Name() })
@@ -392,10 +403,11 @@ func alphaGuard(ctx context.Context, env *Env, before pack.Tree, pairs []modPair
 		for _, pair := range undo {
 			applied := false
 			// In a migration too: the pack is on its new Minecraft version by now, so
-			// this finds builds for it, and only a mod without one is reverted (and
-			// then disabled as incompatible).
+			// this finds builds for it. A CurseForge file, or one without such a
+			// build, is reverted (a mod is then offered for disabling as incompatible).
 			if pair.current.Modrinth() != nil && pair.old.Modrinth() != nil {
-				target, err := newestAllowed(ctx, env, pair.old, found[pair.current.Rel][0])
+				loaders := lookup.versions[pair.old.ModrinthVersion()].Loaders
+				target, err := newestAllowed(ctx, env, pair.old, found[pair.current.Rel][0], loaders)
 				if err != nil {
 					return err
 				}
@@ -424,12 +436,17 @@ func alphaGuard(ctx context.Context, env *Env, before pack.Tree, pairs []modPair
 }
 
 // newestAllowed is the newest Modrinth version on an allowed channel for the
-// pack's Minecraft version and loader.
-func newestAllowed(ctx context.Context, env *Env, mod pack.Mod, currentChannel string) (*platform.Version, error) {
+// pack's Minecraft version: for a mod with the pack's loader, and for a
+// resource or shader pack with the installed version's loaders ("minecraft",
+// "iris", ...), since those never name the pack's.
+func newestAllowed(ctx context.Context, env *Env, mod pack.Mod, currentChannel string, installedLoaders []string) (*platform.Version, error) {
 	p := env.Project
-	loaders := []string{p.Loader}
-	if p.Loader == "quilt" {
-		loaders = append(loaders, "fabric")
+	loaders := installedLoaders
+	if mod.Category() == "mods" {
+		loaders = []string{p.Loader}
+		if p.Loader == "quilt" {
+			loaders = append(loaders, "fabric")
+		}
 	}
 	versions, err := env.API.ModrinthProjectVersions(ctx, mod.ModrinthProject(),
 		append([]string{p.Minecraft}, p.AcceptableVersions...), loaders)
@@ -553,6 +570,9 @@ func Migrate(ctx context.Context, env *Env, target string) error {
 		return err
 	}
 	if err := p.Reload(); err != nil {
+		return err
+	}
+	if err := followMinecraft(ctx, env, oldMinecraft); err != nil {
 		return err
 	}
 	if err := afterUpdate(ctx, env, mods, before, true); err != nil {

@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"path/filepath"
 	"strings"
@@ -207,6 +208,123 @@ func TestCancelDuringAPromptReturnsHome(t *testing.T) {
 	}
 	r.waitText("Cancelled.")
 	r.waitFor("the dashboard", func(s string) bool { return strings.Contains(s, "1  Update mods") })
+	// The run is over, so the next action starts.
+	ran := make(chan bool, 1)
+	r.send(startAction{action(func(context.Context, *workflow.Env) error {
+		ran <- true
+		return nil
+	})})
+	select {
+	case <-ran:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no action starts after a cancelled one")
+	}
+}
+
+// A status that loads after the user moved the cursor, as when the tag fetch
+// finishes, leaves the cursor where the user put it.
+func TestAStatusReloadKeepsTheCursor(t *testing.T) {
+	r := newRunner(t, 100, 30)
+	r.send(goHome{})
+	r.waitText("Next")
+	r.key("7")
+	r.send(tagsMsg{ok: true})
+	r.waitFor("the reload", func(string) bool { return !r.app.home.loading })
+	if s := r.screen(); !strings.Contains(s, "> 7  Check pack") {
+		t.Errorf("the cursor moved:\n%s", s)
+	}
+}
+
+// Enter right after the Enter that left a finished run doesn't start the
+// action under the cursor; a later one does.
+func TestARepeatedEnterAfterARunStartsNothing(t *testing.T) {
+	r := newRunner(t, 100, 30)
+	r.send(startAction{action(func(ctx context.Context, env *workflow.Env) error {
+		env.UI.Result("It worked.", "")
+		return nil
+	})})
+	r.waitText("It worked.")
+	r.key("enter")
+	r.waitFor("the dashboard", func(s string) bool { return strings.Contains(s, "1  Update mods") })
+	home := r.app.home
+	back := home.back
+	home.now = func() time.Time { return back.Add(50 * time.Millisecond) }
+	if cmd := home.key("enter"); cmd != nil {
+		t.Fatal("the repeated Enter starts an action")
+	}
+	home.now = func() time.Time { return back.Add(time.Second) }
+	if cmd := home.key("enter"); cmd == nil {
+		t.Fatal("a later Enter starts nothing")
+	} else if _, ok := cmd().(startAction); !ok {
+		t.Error("a later Enter doesn't start the action")
+	}
+}
+
+// The log opens at its last lines.
+func TestTheLogOpensAtItsLastLines(t *testing.T) {
+	r := newRunner(t, 100, 30)
+	r.send(startAction{action(func(ctx context.Context, env *workflow.Env) error {
+		for i := range 50 {
+			env.UI.Log(fmt.Sprintf("output line %d", i))
+		}
+		return errors.New("boom")
+	})})
+	r.waitText("boom")
+	r.key("l")
+	if s := r.screen(); !strings.Contains(s, "output line 49") {
+		t.Errorf("the log doesn't show its last line:\n%s", s)
+	}
+}
+
+// A question that comes while the log is open shows at once, and l never
+// answers one.
+func TestQuestionsAndTheLog(t *testing.T) {
+	r := newRunner(t, 100, 30)
+	proceed := make(chan struct{})
+	answered := make(chan bool, 1)
+	r.send(startAction{action(func(ctx context.Context, env *workflow.Env) error {
+		env.UI.Log("some output")
+		<-proceed
+		ok, err := env.UI.Confirm(ctx, "Replace your text?", false)
+		answered <- ok
+		return err
+	})})
+	r.waitFor("the output", func(string) bool {
+		run, ok := r.app.screen.(*runScreen)
+		return ok && len(run.logs) == 1
+	})
+	r.key("l")
+	close(proceed)
+	r.waitText("Replace your text?")
+	r.skipStrayKeyGuard()
+	r.key("l")
+	r.key("enter")
+	if <-answered {
+		t.Error("l flipped the answer to yes")
+	}
+}
+
+// Actions see edits made to the settings and pack.toml while the dashboard is
+// open, as a subcommand does, and so does the status.
+func TestEditsWhileOpenCount(t *testing.T) {
+	r := newRunner(t, 100, 30)
+	root := r.app.env.Project.Root
+	settings := filepath.Join(root, project.SettingsFile)
+	testutil.Write(t, settings, strings.Replace(testutil.Read(t, settings), "side_tags: False", "side_tags: True", 1))
+	toml := filepath.Join(root, "Packwiz", "pack.toml")
+	testutil.Write(t, toml, strings.Replace(testutil.Read(t, toml), `version = "1.2.0"`, `version = "1.3.0"`, 1))
+	seen := make(chan string, 1)
+	r.send(startAction{action(func(_ context.Context, env *workflow.Env) error {
+		seen <- fmt.Sprint(env.Project.Settings.SideTags, " ", env.Project.Version)
+		return nil
+	})})
+	if got := <-seen; got != "true 1.3.0" {
+		t.Errorf("the action saw side tags and version %s", got)
+	}
+	r.waitText("Done.") // The run is over, its project reloaded.
+	testutil.Write(t, toml, strings.Replace(testutil.Read(t, toml), `version = "1.3.0"`, `version = "1.4.0"`, 1))
+	r.key("enter") // Back to the dashboard, which loads the status.
+	r.waitText("MyPack 1.4.0")
 }
 
 func TestQuittingDuringAPromptStopsTheRun(t *testing.T) {

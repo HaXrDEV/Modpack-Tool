@@ -37,12 +37,12 @@ The first run asks for a modpack folder: the folder that contains `Packwiz/pack.
 
 | Key | Action | What it does |
 |---|---|---|
-| 1 | Update mods | `packwiz update --all`, then an alpha guard (keep, move to the newest beta/release, or revert) and an offer to re-enable disabled mods that received an update. Shader packs from Modrinth go to their newest version even when it doesn't name the pack's Minecraft version, since that rarely matters for shaders. Pinned mods can be unpinned for one run. |
+| 1 | Update mods | `packwiz update --all`, then an alpha guard (keep, move to the newest beta/release where Modrinth has one, or revert) and an offer to re-enable disabled mods that received an update, which go through the same guard. Shader packs from Modrinth go to their newest version even when it doesn't name the pack's Minecraft version, since that rarely matters for shaders. Pinned mods can be unpinned for one run. |
 | 2 | New version | Bumps the version in `pack.toml` and the BetterCompatibilityChecker configs and creates the changelog file. The released version's changelog goes, since its record has the same notes. If the current version was never released, it can be renamed instead. With `prereleases: previews`, a full release starts with what you wrote for its pre-releases. |
 | 3 | Draft changelog | Fills `Update overview` and `Config Changes` from the changes since the last release. Text you wrote is only replaced after you confirm; the rest of the file stays exactly as it is. |
 | 4 | Build release | Updates `bcc.json`, the Crash Assistant modlist and `modlist.md`, writes the release record (which git ignores until Publish) and release notes, and builds the packs listed in `exports`, then offers to open the `Export` folder. Refuses an empty changelog. |
 | 5 | Publish | Commits, with the release record dated that day, pushes and runs `gh release create` with the built files, asking before each step. Refuses if the pack changed since the last build. |
-| 6 | Migrate Minecraft | `packwiz migrate minecraft`, the same alpha guard and re-enable offer, then disables mods with no build for the new version and starts a new version (it suggests a beta when mods had to be disabled). A mod that landed on an alpha moves to its newest beta or release for the new version; only one without such a build is disabled. |
+| 6 | Migrate Minecraft | `packwiz migrate minecraft`, the same alpha guard and re-enable offer, then disables mods with no build for the new version and starts a new version (it suggests a beta when mods had to be disabled). A Modrinth mod that landed on an alpha moves to its newest beta or release for the new version; one without such a build, or a CurseForge mod, is reverted and then disabled with the others. |
 | 7 | Check pack | Invalid sides, leftover disabled folders, disabled and pinned mods, and library mods nothing depends on (removal via `packwiz remove`). |
 | 8 | View changes | Everything that changed since the last release: mods, packs and config lines. |
 
@@ -81,7 +81,7 @@ Each pack has a `modpack-tool.yml` next to its `Packwiz` folder, created on firs
 |---|---|
 | `exports` | Which packs Build creates: `curseforge`, `modrinth`, `server`. |
 | `curseforge_exclude`, `modrinth_exclude` | Mods left out of only the CurseForge or only the Modrinth pack, by slug, name or filename. |
-| `server_template` | The folder copied into the server pack (default `Server Pack`). |
+| `server_template` | The folder copied into the server pack (default `Server Pack`), in the pack folder or given as a full path. |
 | `server_exclude` | Mods left out of the server pack, by slug, name or jar filename. |
 | `mc_prefixed_versions` | Suggest `<minecraft>-<release>` versions such as `26.2-1.0`. |
 | `prereleases` | `standalone`: pre-releases are releases like any other, marked as less stable. `previews`: they lead up to a full release that covers them. |

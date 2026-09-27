@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/spinner"
@@ -28,12 +29,19 @@ type homeScreen struct {
 	loading bool
 	seq     int // Which status load is current.
 	cursor  int
+	// moved is set once the user moves the cursor, so a status that loads
+	// afterwards (the tag fetch reloads it) doesn't move it back.
+	moved bool
+	// back is when a run ended, so a repeat of the Enter that left it doesn't
+	// start an action.
+	back    time.Time
+	now     func() time.Time
 	notice  string
 	spinner spinner.Model
 }
 
 func newHome(app *App) *homeScreen {
-	h := &homeScreen{app: app, spinner: spinner.New(spinner.WithSpinner(app.theme.G.Spinner))}
+	h := &homeScreen{app: app, now: time.Now, spinner: spinner.New(spinner.WithSpinner(app.theme.G.Spinner))}
 	h.spinner.Style = app.theme.AccentText
 	return h
 }
@@ -53,7 +61,7 @@ func (h *homeScreen) update(msg tea.Msg) (screen, tea.Cmd) {
 	case statusMsg:
 		if msg.seq == h.seq {
 			h.status, h.loading = &msg.status, false
-			if action, ok := workflow.ActionByName(msg.status.NextKey); ok {
+			if action, ok := workflow.ActionByName(msg.status.NextKey); ok && !h.moved {
 				h.cursor = actionIndex(action.Key)
 			}
 		}
@@ -85,9 +93,14 @@ func (h *homeScreen) key(k string) tea.Cmd {
 	switch k {
 	case "up", "k":
 		h.cursor = (h.cursor + len(workflow.Actions) - 1) % len(workflow.Actions)
+		h.moved = true
 	case "down", "j":
 		h.cursor = (h.cursor + 1) % len(workflow.Actions)
+		h.moved = true
 	case "enter":
+		if h.now().Sub(h.back) < strayKeyWindow {
+			return nil
+		}
 		if h.app.env == nil {
 			return func() tea.Msg { return showProjects{} }
 		}
@@ -105,7 +118,7 @@ func (h *homeScreen) key(k string) tea.Cmd {
 	default:
 		// An action's digit only moves the cursor, so a stray key never starts a workflow.
 		if i := actionIndex(k); i >= 0 {
-			h.cursor = i
+			h.cursor, h.moved = i, true
 		}
 	}
 	return nil

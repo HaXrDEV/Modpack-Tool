@@ -352,6 +352,21 @@ func TestBrokenChangelogYAMLIsAClearError(t *testing.T) {
 	}
 }
 
+// A section written twice or a second document is an error, as it was for
+// the Python tool, instead of text that silently goes missing (or is drafted
+// over without asking).
+func TestRepeatedSectionsAreAClearError(t *testing.T) {
+	for text, want := range map[string]string{
+		"Update overview:\n  - My own summary.\nBug Fixes:\nUpdate overview:\n": `"Update overview" already defined at line 1`,
+		"Update overview:\n  - One.\n---\nBug Fixes:\n  - Two.\n":               "expected a single document",
+	} {
+		path := testutil.Write(t, filepath.Join(t.TempDir(), "c.yml"), text)
+		if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "isn't valid YAML") || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: got %v", text, err)
+		}
+	}
+}
+
 // py: test_robustness.py::test_mapping_bullets_keep_their_text
 func TestMappingBulletsKeepTheirText(t *testing.T) {
 	if got := loadText(t, "B:\n  - 'Sodium: fixed flicker'\n  - Lithium: faster\n").Lines("B"); !slices.Equal(got, []string{"Sodium: fixed flicker", "Lithium: faster"}) {
