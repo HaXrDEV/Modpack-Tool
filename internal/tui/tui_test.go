@@ -235,6 +235,31 @@ func TestAStatusReloadKeepsTheCursor(t *testing.T) {
 	}
 }
 
+// Enter right after the Enter that left a finished run doesn't start the
+// action under the cursor; a later one does.
+func TestARepeatedEnterAfterARunStartsNothing(t *testing.T) {
+	r := newRunner(t, 100, 30)
+	r.send(startAction{action(func(ctx context.Context, env *workflow.Env) error {
+		env.UI.Result("It worked.", "")
+		return nil
+	})})
+	r.waitText("It worked.")
+	r.key("enter")
+	r.waitFor("the dashboard", func(s string) bool { return strings.Contains(s, "1  Update mods") })
+	home := r.app.home
+	back := home.back
+	home.now = func() time.Time { return back.Add(50 * time.Millisecond) }
+	if cmd := home.key("enter"); cmd != nil {
+		t.Fatal("the repeated Enter starts an action")
+	}
+	home.now = func() time.Time { return back.Add(time.Second) }
+	if cmd := home.key("enter"); cmd == nil {
+		t.Fatal("a later Enter starts nothing")
+	} else if _, ok := cmd().(startAction); !ok {
+		t.Error("a later Enter doesn't start the action")
+	}
+}
+
 // Actions see edits made to the settings and pack.toml while the dashboard is
 // open, as a subcommand does, and so does the status.
 func TestEditsWhileOpenCount(t *testing.T) {

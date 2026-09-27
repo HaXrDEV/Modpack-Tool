@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/spinner"
@@ -30,13 +31,17 @@ type homeScreen struct {
 	cursor  int
 	// moved is set once the user moves the cursor, so a status that loads
 	// afterwards (the tag fetch reloads it) doesn't move it back.
-	moved   bool
+	moved bool
+	// back is when a run ended, so a repeat of the Enter that left it doesn't
+	// start an action.
+	back    time.Time
+	now     func() time.Time
 	notice  string
 	spinner spinner.Model
 }
 
 func newHome(app *App) *homeScreen {
-	h := &homeScreen{app: app, spinner: spinner.New(spinner.WithSpinner(app.theme.G.Spinner))}
+	h := &homeScreen{app: app, now: time.Now, spinner: spinner.New(spinner.WithSpinner(app.theme.G.Spinner))}
 	h.spinner.Style = app.theme.AccentText
 	return h
 }
@@ -93,6 +98,9 @@ func (h *homeScreen) key(k string) tea.Cmd {
 		h.cursor = (h.cursor + 1) % len(workflow.Actions)
 		h.moved = true
 	case "enter":
+		if h.now().Sub(h.back) < strayKeyWindow {
+			return nil
+		}
 		if h.app.env == nil {
 			return func() tea.Msg { return showProjects{} }
 		}

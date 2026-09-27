@@ -124,7 +124,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case runFinished:
 		a.running = false
 		a.screen = a.home
-		a.home.moved = false
+		a.home.moved, a.home.back = false, a.home.now()
 		switch {
 		case errors.Is(msg.err, context.Canceled):
 			a.home.notice = "Cancelled."
