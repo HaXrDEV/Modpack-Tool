@@ -21,7 +21,8 @@ func Run(cfg *config.Config, root string) error {
 	model := newApp(ctx, cfg, root, &runs)
 	program := tea.NewProgram(model)
 	_, err := program.Run()
-	// Stop whatever still runs; commands that change files finish on their own.
+	// Stop whatever still runs. Commands that change files finish on their
+	// own, and the run then cleans up (pins come back), so it's waited for.
 	cancel()
 	waited := make(chan struct{})
 	go func() {
@@ -30,7 +31,9 @@ func Run(cfg *config.Config, root string) error {
 	}()
 	select {
 	case <-waited:
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Second):
+		fmt.Println("Waiting for packwiz or git to finish, so nothing is left half-done (Ctrl+C stops now)...")
+		<-waited
 	}
 	if model.lastResult != "" {
 		fmt.Println(model.lastResult)
