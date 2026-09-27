@@ -10,8 +10,8 @@ func Help(configPath, cacheDir string) string {
   2. Change the pack      with packwiz (below) and Update mods (1)
   3. Draft changelog (3)  then edit Changelogs/<version>.yml by hand
   4. Build release (4)    release record + notes, packs in Export/
-  5. Publish (5)          commit, push, GitHub release. publish.yml uploads to CurseForge/Modrinth
-                          and the wiki sync picks up Changelogs/data/.
+  5. Publish (5)          commit with the release record, push, GitHub release. publish.yml uploads
+                          to CurseForge/Modrinth and the wiki sync picks up Changelogs/data/.
 
 PACKWIZ DOES THE REST (run these inside the pack's Packwiz folder)
   packwiz modrinth add <slug|url>      add a Modrinth project (curseforge / github / url add work alike)

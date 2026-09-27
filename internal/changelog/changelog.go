@@ -7,7 +7,9 @@
 // the record's keys in sync with that renderer. The records are the source
 // of truth: they stay, every wiki sync copies all of them, and the tool reads
 // a released version's notes from its record. So a released version's YAML
-// goes when the next version starts, once its record has the same notes.
+// goes when the next version starts, once its record has the same notes. Git
+// ignores a new record until Publish commits it with its release, so the wiki
+// sync never carries an unreleased version.
 package changelog
 
 import (
