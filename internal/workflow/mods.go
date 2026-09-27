@@ -3,6 +3,7 @@ package workflow
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -36,6 +37,7 @@ func UpdateMods(ctx context.Context, env *Env) error {
 	if err != nil {
 		return err
 	}
+	var shadersErr error
 	err = runUnpinned(ctx, env, selected, func() error {
 		step := env.UI.Step("packwiz update --all")
 		if err := env.Packwiz.UpdateAll(ctx); err != nil {
@@ -43,12 +45,15 @@ func UpdateMods(ctx context.Context, env *Env) error {
 			return err
 		}
 		step.Done("")
-		return updateShaders(ctx, env)
+		// Reported after the alpha guard, which packwiz's updates need either way:
+		// a later run can't tell what they changed.
+		shadersErr = updateShaders(ctx, env)
+		return nil
 	})
 	if err != nil {
 		return err
 	}
-	if err := afterUpdate(ctx, env, mods, before, false); err != nil {
+	if err := errors.Join(afterUpdate(ctx, env, mods, before, false), shadersErr); err != nil {
 		return err
 	}
 	if err := env.Packwiz.Refresh(ctx); err != nil {

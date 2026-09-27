@@ -882,11 +882,45 @@ func TestUpdateModsTakesTheNewestShaderVersions(t *testing.T) {
 	}
 }
 
-// hookedPackwiz runs a function when packwiz refresh runs, as if packwiz or
-// the user changed files then.
+// A failed shader step doesn't skip the alpha guard for what packwiz update
+// changed, which a later run couldn't tell.
+func TestUpdateModsGuardsAlphasWhenTheShaderStepFails(t *testing.T) {
+	pw := testutil.PackDir(t)
+	testutil.Write(t, filepath.Join(pw, "shaderpacks", "bsl.pw.toml"),
+		testutil.Metafile("BSL Shaders", "BSL_v10.1.zip", testutil.MetaOptions{Side: "client"}))
+	f := newFixture(t, filepath.Dir(pw))
+	f.Project.Settings.AlphaUpdates = "never"
+	lithium := filepath.Join(pw, "mods", "lithium.pw.toml")
+	f.Packwiz = &hookedPackwiz{fakePackwiz: f.packwiz, update: func() {
+		testutil.Write(t, lithium, strings.Replace(testutil.Read(t, lithium), `version = "Lithv1"`, `version = "LithNEW"`, 1))
+	}}
+	f.api.Versions = map[string]platform.Version{"Lithv1": {ID: "Lithv1", VersionType: "release"},
+		"LithNEW": {ID: "LithNEW", VersionType: "alpha"}, "BSL v1": {ID: "BSL v1", VersionType: "release", Loaders: []string{"iris"}}}
+	f.API = &offlineShaders{f.api}
+	f.answers("") // Keep the pins.
+	if err := UpdateMods(ctx, f.Env); err == nil || !strings.Contains(err.Error(), "Modrinth is down") {
+		t.Errorf("got %v", err)
+	}
+	if !strings.Contains(testutil.Read(t, lithium), `version = "Lithv1"`) {
+		t.Error("Lithium stayed on its alpha:\n" + f.session.Text())
+	}
+}
+
+// offlineShaders can't list the BSL shader pack's versions.
+type offlineShaders struct{ *platform.Fake }
+
+func (o *offlineShaders) ModrinthProjectVersions(ctx context.Context, id string, gameVersions, loaders []string) ([]platform.Version, error) {
+	if id == "BSL Shad" {
+		return nil, errors.New("Modrinth is down")
+	}
+	return o.Fake.ModrinthProjectVersions(ctx, id, gameVersions, loaders)
+}
+
+// hookedPackwiz runs a function when packwiz refresh or update runs, as if
+// packwiz or the user changed files then.
 type hookedPackwiz struct {
 	*fakePackwiz
-	refresh func()
+	refresh, update func()
 }
 
 func (h *hookedPackwiz) Refresh(ctx context.Context) error {
@@ -894,6 +928,13 @@ func (h *hookedPackwiz) Refresh(ctx context.Context) error {
 		h.refresh()
 	}
 	return h.fakePackwiz.Refresh(ctx)
+}
+
+func (h *hookedPackwiz) UpdateAll(ctx context.Context) error {
+	if h.update != nil {
+		h.update()
+	}
+	return h.fakePackwiz.UpdateAll(ctx)
 }
 
 // cancelingPackwiz cancels the run while packwiz update is running.
