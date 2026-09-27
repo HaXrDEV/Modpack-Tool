@@ -16,6 +16,8 @@ type Fake struct {
 	ProjectVersions map[string][]Version // By project id.
 	Files           map[int64]CFFile
 	Mods            map[int64]CFMod
+	Search          map[string][]CFMod // CurseForge projects by slug.
+	ModFiles        map[int64][]CFFile // CurseForge files by project id.
 	Fingerprints    map[uint32]Match
 	URLs            map[string][]byte // Download contents.
 	Downloads       []string          // Every URL downloaded, in order.
@@ -54,6 +56,14 @@ func (f *Fake) CurseForgeFiles(_ context.Context, ids []int64) (map[int64]CFFile
 
 func (f *Fake) CurseForgeMods(_ context.Context, ids []int64) (map[int64]CFMod, error) {
 	return pick(f.Mods, ids), nil
+}
+
+func (f *Fake) CurseForgeSearch(_ context.Context, slug string) ([]CFMod, error) {
+	return f.Search[slug], nil
+}
+
+func (f *Fake) CurseForgeModFiles(_ context.Context, modID int64, _ string) ([]CFFile, error) {
+	return f.ModFiles[modID], nil
 }
 
 func (f *Fake) CurseForgeFingerprints(_ context.Context, fingerprints []uint32) (map[uint32]Match, error) {

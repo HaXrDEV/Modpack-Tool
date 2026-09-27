@@ -129,6 +129,8 @@ type API interface {
 	ModrinthProjectVersions(ctx context.Context, projectID string, gameVersions, loaders []string) ([]Version, error)
 	CurseForgeFiles(ctx context.Context, ids []int64) (map[int64]CFFile, error)
 	CurseForgeMods(ctx context.Context, ids []int64) (map[int64]CFMod, error)
+	CurseForgeSearch(ctx context.Context, slug string) ([]CFMod, error)
+	CurseForgeModFiles(ctx context.Context, modID int64, gameVersion string) ([]CFFile, error)
 	CurseForgeFingerprints(ctx context.Context, fingerprints []uint32) (map[uint32]Match, error)
 	// Download writes a file to the writer that newWriter returns; it is called
 	// again (and must start over) when a download is retried.
@@ -379,6 +381,23 @@ func (c *Client) CurseForgeMods(ctx context.Context, ids []int64) (map[int64]CFM
 		err := c.request(ctx, "POST", c.CurseForge+"/mods", map[string]any{"modIds": chunk}, c.cfHeaders(), &answer)
 		return byID(answer.Data, func(m CFMod) int64 { return m.ID }), err
 	})
+}
+
+// CurseForgeSearch returns the Minecraft projects on CurseForge with a slug.
+func (c *Client) CurseForgeSearch(ctx context.Context, slug string) ([]CFMod, error) {
+	var answer struct{ Data []CFMod }
+	query := url.Values{"gameId": {"432"}, "slug": {slug}}
+	err := c.request(ctx, "GET", c.CurseForge+"/mods/search?"+query.Encode(), nil, c.cfHeaders(), &answer)
+	return answer.Data, err
+}
+
+// CurseForgeModFiles returns the newest files of a CurseForge project for a
+// Minecraft version.
+func (c *Client) CurseForgeModFiles(ctx context.Context, modID int64, gameVersion string) ([]CFFile, error) {
+	var answer struct{ Data []CFFile }
+	query := url.Values{"gameVersion": {gameVersion}, "pageSize": {"50"}}
+	err := c.request(ctx, "GET", fmt.Sprintf("%s/mods/%d/files?%s", c.CurseForge, modID, query.Encode()), nil, c.cfHeaders(), &answer)
+	return answer.Data, err
 }
 
 // CurseForgeFingerprints returns {fingerprint: match} for the fingerprints

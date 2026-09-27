@@ -175,9 +175,10 @@ type fingerprintEntry struct {
 
 // ResolveOnCurseForge returns {metafile path: match} for the non-CurseForge
 // files that exist on CurseForge. Matching uses CurseForge's murmur2
-// fingerprint of the exact file. Results are cached by file hash, so only new
-// files have to be downloaded and fingerprinted.
-func ResolveOnCurseForge(ctx context.Context, mods []pack.Mod, store *Store) (map[string]platform.Match, error) {
+// fingerprint of the exact file, then the file name (see matchByName).
+// Results are cached by file hash, so only new files have to be downloaded,
+// fingerprinted and looked up.
+func ResolveOnCurseForge(ctx context.Context, mods []pack.Mod, gameVersions []string, store *Store) (map[string]platform.Match, error) {
 	cachePath := filepath.Join(store.Dir, "curseforge-fingerprints.json")
 	cache := map[string]*fingerprintEntry{}
 	if data, err := os.ReadFile(cachePath); err == nil {
@@ -236,8 +237,21 @@ func ResolveOnCurseForge(ctx context.Context, mods []pack.Mod, store *Store) (ma
 	if err != nil {
 		return nil, err
 	}
+	var unmatched []pack.Mod
 	for _, mod := range unknown {
 		if match, ok := found[*cache[key(mod)].Fingerprint]; ok {
+			cache[key(mod)].Match = []int64{match.ProjectID, match.FileID}
+			matches[mod.Rel] = match
+		} else {
+			unmatched = append(unmatched, mod)
+		}
+	}
+	byName, err := matchByName(ctx, unmatched, gameVersions, store)
+	if err != nil {
+		return nil, err
+	}
+	for _, mod := range unmatched {
+		if match, ok := byName[mod.Rel]; ok {
 			cache[key(mod)].Match = []int64{match.ProjectID, match.FileID}
 			matches[mod.Rel] = match
 		}
@@ -247,6 +261,82 @@ func ResolveOnCurseForge(ctx context.Context, mods []pack.Mod, store *Store) (ma
 		return nil, err
 	}
 	return matches, files.WriteAtomic(cachePath, encoded)
+}
+
+// matchByName finds files that CurseForge doesn't know byte for byte because
+// their author uploaded a separate build there: a file with the same name, for
+// one of the pack's Minecraft versions, in the project with the mod's slug
+// (its metafile's or its Modrinth project's). So a mod whose license forbids
+// rehosting isn't bundled just because its uploads differ.
+func matchByName(ctx context.Context, mods []pack.Mod, gameVersions []string, store *Store) (map[string]platform.Match, error) {
+	found := map[string]platform.Match{}
+	if len(mods) == 0 {
+		return found, nil
+	}
+	step := store.Session.Step(fmt.Sprintf("Looking for %d file%s on CurseForge by name", len(mods), ui.Plural(len(mods))))
+	var ids []string
+	for _, mod := range mods {
+		if mod.Modrinth() != nil {
+			ids = append(ids, mod.ModrinthProject())
+		}
+	}
+	projects := map[string]platform.Project{}
+	if len(ids) > 0 {
+		var err error
+		if projects, err = store.API.ModrinthProjects(ctx, ids); err != nil {
+			step.Fail(err)
+			return nil, err
+		}
+	}
+	var names []string
+	for _, mod := range mods {
+		slugs := []string{mod.Slug()}
+		if slug := projects[mod.ModrinthProject()].Slug; slug != "" && slug != mod.Slug() {
+			slugs = append(slugs, slug)
+		}
+		match, err := findByName(ctx, store.API, slugs, gameVersions, mod.Filename())
+		if err != nil {
+			step.Fail(err)
+			return nil, err
+		}
+		if match != nil {
+			found[mod.Rel] = *match
+			names = append(names, mod.Name())
+		}
+	}
+	step.Done("")
+	if len(names) > 0 {
+		store.Session.Info("On CurseForge under the same file name, though not byte for byte the same file:", names...)
+	}
+	return found, nil
+}
+
+// findByName looks for a file named filename among the files for the game
+// versions of the CurseForge projects with the slugs.
+func findByName(ctx context.Context, api platform.API, slugs, gameVersions []string, filename string) (*platform.Match, error) {
+	if filename == "" {
+		return nil, nil
+	}
+	for _, slug := range slugs {
+		projects, err := api.CurseForgeSearch(ctx, slug)
+		if err != nil {
+			return nil, err
+		}
+		for _, project := range projects {
+			for _, v := range gameVersions {
+				files, err := api.CurseForgeModFiles(ctx, project.ID, v)
+				if err != nil {
+					return nil, err
+				}
+				for _, file := range files {
+					if file.FileName == filename {
+						return &platform.Match{ProjectID: project.ID, FileID: file.ID}, nil
+					}
+				}
+			}
+		}
+	}
+	return nil, nil
 }
 
 type cfLoader struct {
@@ -293,7 +383,7 @@ func BuildCurseForge(ctx context.Context, p *project.Project, contents *Contents
 	matches := map[string]platform.Match{}
 	if len(others) > 0 {
 		var err error
-		if matches, err = ResolveOnCurseForge(ctx, others, store); err != nil {
+		if matches, err = ResolveOnCurseForge(ctx, others, append([]string{p.Minecraft}, p.AcceptableVersions...), store); err != nil {
 			return nil, "", err
 		}
 	}
