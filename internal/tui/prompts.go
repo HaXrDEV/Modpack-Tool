@@ -65,7 +65,8 @@ func (p *confirmPrompt) update(msg tea.Msg) (bool, any, tea.Cmd) {
 		return true, false, nil
 	case "enter":
 		return true, p.value, nil
-	case "left", "right", "tab", "shift+tab", "h", "l":
+	// Not h/l: l opens the log elsewhere, so here it mustn't flip the answer.
+	case "left", "right", "tab", "shift+tab":
 		p.value = !p.value
 	}
 	return false, nil, nil

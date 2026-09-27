@@ -276,6 +276,34 @@ func TestTheLogOpensAtItsLastLines(t *testing.T) {
 	}
 }
 
+// A question that comes while the log is open shows at once, and l never
+// answers one.
+func TestQuestionsAndTheLog(t *testing.T) {
+	r := newRunner(t, 100, 30)
+	proceed := make(chan struct{})
+	answered := make(chan bool, 1)
+	r.send(startAction{action(func(ctx context.Context, env *workflow.Env) error {
+		env.UI.Log("some output")
+		<-proceed
+		ok, err := env.UI.Confirm(ctx, "Replace your text?", false)
+		answered <- ok
+		return err
+	})})
+	r.waitFor("the output", func(string) bool {
+		run, ok := r.app.screen.(*runScreen)
+		return ok && len(run.logs) == 1
+	})
+	r.key("l")
+	close(proceed)
+	r.waitText("Replace your text?")
+	r.skipStrayKeyGuard()
+	r.key("l")
+	r.key("enter")
+	if <-answered {
+		t.Error("l flipped the answer to yes")
+	}
+}
+
 // Actions see edits made to the settings and pack.toml while the dashboard is
 // open, as a subcommand does, and so does the status.
 func TestEditsWhileOpenCount(t *testing.T) {

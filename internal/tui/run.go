@@ -277,6 +277,7 @@ func (r *runScreen) apply(e event) tea.Cmd {
 		if r.cancelling {
 			break // The workflow gets the cancel through its context.
 		}
+		r.showLog = false // A question mustn't wait unseen behind the log.
 		r.prompt = &activePrompt{prompt: e.prompt, reply: e.reply, shown: r.now()}
 		return e.prompt.init()
 	case runDone:
