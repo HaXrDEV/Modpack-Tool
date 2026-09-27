@@ -260,6 +260,22 @@ func TestARepeatedEnterAfterARunStartsNothing(t *testing.T) {
 	}
 }
 
+// The log opens at its last lines.
+func TestTheLogOpensAtItsLastLines(t *testing.T) {
+	r := newRunner(t, 100, 30)
+	r.send(startAction{action(func(ctx context.Context, env *workflow.Env) error {
+		for i := range 50 {
+			env.UI.Log(fmt.Sprintf("output line %d", i))
+		}
+		return errors.New("boom")
+	})})
+	r.waitText("boom")
+	r.key("l")
+	if s := r.screen(); !strings.Contains(s, "output line 49") {
+		t.Errorf("the log doesn't show its last line:\n%s", s)
+	}
+}
+
 // Actions see edits made to the settings and pack.toml while the dashboard is
 // open, as a subcommand does, and so does the status.
 func TestEditsWhileOpenCount(t *testing.T) {
