@@ -202,6 +202,31 @@ func TestCurseForgePack(t *testing.T) {
 	}
 }
 
+// A file whose CurseForge upload isn't byte for byte the same is found in the
+// project with its slug, by its file name. The match is cached like one by
+// fingerprint.
+func TestCurseForgeMatchesAFileByName(t *testing.T) {
+	f := exportProject(t)
+	f.api.Search = map[string][]platform.CFMod{"ghmod": {{ID: 300}}}
+	f.api.ModFiles = map[int64][]platform.CFFile{300: {{ID: 3001, FileName: "ghmod-sources.jar"}, {ID: 3000, FileName: "ghmod.jar"}}}
+	dir := t.TempDir()
+	bundled, summary, err := BuildCurseForge(context.Background(), f.project, f.contents(t), f.store, filepath.Join(dir, "a.zip"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest cfManifest
+	readJSON(t, filepath.Join(dir, "a.zip"), "manifest.json", &manifest)
+	listed := slices.ContainsFunc(manifest.Files, func(file cfFile) bool { return file.ProjectID == 300 && file.FileID == 3000 })
+	if !listed || !slices.Equal(slugs(bundled), []string{"odd"}) || summary != "4 from CurseForge, 1 bundled" {
+		t.Error(manifest.Files, slugs(bundled), summary)
+	}
+	f.api.Search = nil // So a second build has to use the cached match.
+	store := NewStore(f.cache, f.api, f.session)
+	if bundled, _, err := BuildCurseForge(context.Background(), f.project, f.contents(t), store, filepath.Join(dir, "b.zip")); err != nil || !slices.Equal(slugs(bundled), []string{"odd"}) {
+		t.Error("the match by name wasn't cached", slugs(bundled), err)
+	}
+}
+
 // py: test_exporter.py::test_fingerprints_are_cached
 func TestFingerprintsAreCached(t *testing.T) {
 	f := exportProject(t)
