@@ -116,7 +116,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case projectReady:
 		a.env = msg.env
 		a.projectName = msg.env.Project.Name
-		a.home.status, a.home.notice = nil, strings.Join(msg.notes, " ")
+		a.home.status, a.home.notice, a.home.moved = nil, strings.Join(msg.notes, " "), false
 		a.screen = a.home
 		return a, tea.Batch(a.home.reload(), a.fetchTags())
 	case startAction:
@@ -124,6 +124,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case runFinished:
 		a.running = false
 		a.screen = a.home
+		a.home.moved = false
 		switch {
 		case errors.Is(msg.err, context.Canceled):
 			a.home.notice = "Cancelled."

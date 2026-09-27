@@ -221,6 +221,20 @@ func TestCancelDuringAPromptReturnsHome(t *testing.T) {
 	}
 }
 
+// A status that loads after the user moved the cursor, as when the tag fetch
+// finishes, leaves the cursor where the user put it.
+func TestAStatusReloadKeepsTheCursor(t *testing.T) {
+	r := newRunner(t, 100, 30)
+	r.send(goHome{})
+	r.waitText("Next")
+	r.key("7")
+	r.send(tagsMsg{ok: true})
+	r.waitFor("the reload", func(string) bool { return !r.app.home.loading })
+	if s := r.screen(); !strings.Contains(s, "> 7  Check pack") {
+		t.Errorf("the cursor moved:\n%s", s)
+	}
+}
+
 // Actions see edits made to the settings and pack.toml while the dashboard is
 // open, as a subcommand does, and so does the status.
 func TestEditsWhileOpenCount(t *testing.T) {
