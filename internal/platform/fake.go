@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 	"sync"
 )
 
@@ -46,8 +47,22 @@ func (f *Fake) ModrinthTeams(_ context.Context, ids []string) (map[string][]Team
 	return pick(f.Teams, ids), nil
 }
 
-func (f *Fake) ModrinthProjectVersions(_ context.Context, projectID string, _, _ []string) ([]Version, error) {
-	return f.ProjectVersions[projectID], nil
+// ModrinthProjectVersions filters by game version and loader as Modrinth does,
+// for the versions that list them.
+func (f *Fake) ModrinthProjectVersions(_ context.Context, projectID string, gameVersions, loaders []string) ([]Version, error) {
+	var found []Version
+	for _, v := range f.ProjectVersions[projectID] {
+		if listsAny(v.GameVersions, gameVersions) && listsAny(v.Loaders, loaders) {
+			found = append(found, v)
+		}
+	}
+	return found, nil
+}
+
+// listsAny reports whether a version's list has one of the wanted values; an
+// empty list or filter matches anything.
+func listsAny(listed, wanted []string) bool {
+	return len(listed) == 0 || len(wanted) == 0 || slices.ContainsFunc(listed, func(v string) bool { return slices.Contains(wanted, v) })
 }
 
 func (f *Fake) CurseForgeFiles(_ context.Context, ids []int64) (map[int64]CFFile, error) {

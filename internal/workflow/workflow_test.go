@@ -942,6 +942,33 @@ func TestReenabledModsGetTheAlphaGuard(t *testing.T) {
 	}
 }
 
+// The alpha guard looks up a resource pack's beta/release by the installed
+// version's loader ("minecraft"), since it never has the pack's mod loader.
+func TestAlphaGuardRedirectsResourcePacks(t *testing.T) {
+	pw := testutil.PackDir(t)
+	f := newFixture(t, filepath.Dir(pw))
+	f.Project.Settings.AlphaUpdates = "never"
+	mods, before, err := loadMods(f.Env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh := filepath.Join(pw, "resourcepacks", "fresh.pw.toml")
+	testutil.Write(t, fresh, strings.Replace(testutil.Read(t, fresh), `version = "Fresv1"`, `version = "FresNEW"`, 1))
+	f.api.Versions = map[string]platform.Version{
+		"Fresv1":  {ID: "Fresv1", VersionType: "release", Loaders: []string{"minecraft"}},
+		"FresNEW": {ID: "FresNEW", VersionType: "alpha", Loaders: []string{"minecraft"}},
+	}
+	f.api.ProjectVersions = map[string][]platform.Version{"Fresh An": {{ID: "FresBETA", VersionType: "beta",
+		Loaders: []string{"minecraft"}, GameVersions: []string{"1.21.11"}, Files: []platform.File{
+			{Primary: true, URL: "https://x/fa-2.zip", Filename: "fa-2.zip", Hashes: map[string]string{"sha512": "f"}}}}}}
+	if err := afterUpdate(ctx, f.Env, mods, before, false); err != nil {
+		t.Fatal(err)
+	}
+	if text := testutil.Read(t, fresh); !strings.Contains(text, `version = "FresBETA"`) {
+		t.Error("the resource pack isn't on its beta:\n" + text)
+	}
+}
+
 // hookedPackwiz runs a function when packwiz refresh or update runs, as if
 // packwiz or the user changed files then.
 type hookedPackwiz struct {
