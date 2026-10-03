@@ -33,6 +33,10 @@ type runner struct {
 	runs  *sync.WaitGroup
 	stop  context.CancelFunc
 	width int
+	// loaded counts the status loads that finished (the dashboard counts the
+	// ones it started in home.seq), or is -1 when a real program delivers the
+	// app's messages instead.
+	loaded int
 }
 
 func newRunner(t *testing.T, width, height int) *runner {
@@ -52,6 +56,11 @@ func newRunner(t *testing.T, width, height int) *runner {
 	a.env = workflow.NewEnv(ui.Discard, p, "packwiz-not-installed", &platform.Fake{}, config.CacheDir())
 	r := &runner{t: t, app: a, msgs: make(chan tea.Msg, 100), runs: runs, stop: cancel, width: width}
 	t.Cleanup(func() {
+		// A status load still reading the pack would keep Windows from
+		// removing its folder.
+		if r.loaded >= 0 {
+			r.waitFor("the status loads", func(string) bool { return r.loaded == r.app.home.seq })
+		}
 		cancel()
 		runs.Wait()
 	})
@@ -80,9 +89,12 @@ func (r *runner) exec(cmd tea.Cmd) {
 
 // send delivers one message and runs the command it returns.
 func (r *runner) send(msg tea.Msg) {
-	if _, ok := msg.(tea.QuitMsg); ok {
+	switch msg.(type) {
+	case tea.QuitMsg:
 		r.quit = true
 		return
+	case statusMsg:
+		r.loaded++
 	}
 	_, cmd := r.app.Update(msg)
 	r.exec(cmd)
@@ -433,6 +445,7 @@ func TestAddingAProjectOpensIt(t *testing.T) {
 // The real Bubble Tea program: input parsing, rendering and quitting.
 func TestRealProgramRendersAndQuits(t *testing.T) {
 	r := newRunner(t, 80, 24)
+	r.loaded = -1
 	input, typing := io.Pipe()
 	output := &lockedBuffer{}
 	program := tea.NewProgram(r.app, tea.WithInput(input), tea.WithOutput(output),
