@@ -615,14 +615,19 @@ func URL(p *project.Project, warn func(string)) string {
 }
 
 // PrereleaseNotice says what a pre-release means for players, at the top of
-// its release notes; "" for a full release. The wiki shows the same notice.
+// its release notes; "" for a full release. Alphas and development builds are
+// early and incomplete, so theirs says so plainly. The wiki shows the same notice.
 func PrereleaseNotice(v string) string {
-	kind := map[string]string{"dev": "a development build", "alpha": "an alpha", "beta": "a beta",
-		"rc": "a release candidate", "pre": "a pre-release"}[version.PrereleaseKind(v)]
-	if kind == "" {
+	kind := version.PrereleaseKind(v)
+	name := map[string]string{"dev": "a development build", "alpha": "an alpha", "beta": "a beta",
+		"rc": "a release candidate", "pre": "a pre-release"}[kind]
+	switch {
+	case name == "":
 		return ""
+	case kind == "dev" || kind == "alpha":
+		return "This is " + name + ", so it's far from complete. Expect missing mods, unfinished features and bugs. Here be dragons!"
 	}
-	return "This is " + kind + ", so it may be less stable or feature complete than a full release. Here be dragons!"
+	return "This is " + name + ", so it may be less stable or feature complete than a full release. Here be dragons!"
 }
 
 // ReleaseNotes is the Markdown release notes for "curseforge" or "modrinth".
