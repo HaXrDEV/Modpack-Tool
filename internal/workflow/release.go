@@ -502,31 +502,16 @@ func UpdateGeneratedFiles(ctx context.Context, env *Env) ([]string, error) {
 	return written, nil
 }
 
-// refreshPackFiles runs UpdateGeneratedFiles, then refreshes index.toml and
-// the index hash in pack.toml, so they cover what it wrote. Update mods,
-// Migrate and Check pack end with it; New version and Build run
-// UpdateGeneratedFiles themselves.
-func refreshPackFiles(ctx context.Context, env *Env) error {
-	step := env.UI.Step("Updating bcc.json and the modlists, then refreshing index.toml and pack.toml")
-	var written []string
-	err := editing(ctx, env, func() (err error) {
-		written, err = UpdateGeneratedFiles(ctx, env)
-		return err
-	})
-	if err != nil {
-		step.Fail(err)
-		return err
+// wroteDetail is a step's detail for the files it wrote: "Wrote a, b", or "".
+func wroteDetail(p *project.Project, paths []string) string {
+	if len(paths) == 0 {
+		return ""
 	}
-	var names []string
-	for _, path := range written {
-		names = append(names, env.Project.Rel(path))
+	names := make([]string, len(paths))
+	for i, path := range paths {
+		names[i] = p.Rel(path)
 	}
-	detail := ""
-	if len(names) > 0 {
-		detail = "Wrote " + strings.Join(names, ", ")
-	}
-	step.Done(detail)
-	return nil
+	return "Wrote " + strings.Join(names, ", ")
 }
 
 // LastBuild is what Build release last built.
@@ -723,11 +708,7 @@ func Build(ctx context.Context, env *Env, since string, skipServer, review bool)
 		return nil, err
 	}
 	written = append(append(written, recordPath), notes...)
-	var names []string
-	for _, path := range written {
-		names = append(names, p.Rel(path))
-	}
-	step.Done("Wrote " + strings.Join(names, ", "))
+	step.Done(wroteDetail(p, written))
 	if rule, added, err := ensureRecordsIgnored(env); err != nil {
 		env.UI.Warn("Couldn't add the release records to .gitignore: " + err.Error())
 	} else if added {
