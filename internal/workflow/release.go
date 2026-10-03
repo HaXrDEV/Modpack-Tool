@@ -116,8 +116,12 @@ func SetVersion(ctx context.Context, env *Env, v string) error {
 		if err := p.Reload(); err != nil {
 			return err
 		}
-		_, err := UpdateGeneratedFiles(ctx, env)
-		return err
+		// Build writes them again and stops when it can't, so a file that can't
+		// be written now doesn't leave New version halfway done.
+		if _, err := UpdateGeneratedFiles(ctx, env); err != nil {
+			env.UI.Warn("Couldn't update the generated files (bcc.json, the modlists): " + err.Error() + " Build release updates them.")
+		}
+		return nil
 	})
 }
 

@@ -1040,6 +1040,19 @@ func TestNewVersionKeepsAnOldStylePublishWorkflowInStep(t *testing.T) {
 	}
 }
 
+// New version finishes when a generated file can't be written, since Build
+// writes it again.
+func TestNewVersionFinishesWhenAGeneratedFileCantBeWritten(t *testing.T) {
+	f := repoProject(t)
+	if err := os.Mkdir(filepath.Join(f.Project.PackDir(), "config", "crash_assistant", "modlist.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustNewVersion(t, f, "1.1.0")
+	if !files.Exists(changelog.Path(f.Project, "", "")) || !strings.Contains(f.session.Text(), "Couldn't update the generated files") {
+		t.Error(f.session.Text())
+	}
+}
+
 // A failed shader step doesn't skip the alpha guard for what packwiz update
 // changed, which a later run couldn't tell.
 func TestUpdateModsGuardsAlphasWhenTheShaderStepFails(t *testing.T) {
