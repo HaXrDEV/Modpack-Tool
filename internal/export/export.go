@@ -207,7 +207,9 @@ type fingerprintEntry struct {
 // files that exist on CurseForge. Matching uses CurseForge's murmur2
 // fingerprint of the exact file, then the file name (see matchByName).
 // Results are cached by file hash, so only new files have to be downloaded,
-// fingerprinted and looked up.
+// fingerprinted and looked up. A cached match to a file CurseForge no longer
+// offers is looked up again, so the cache never keeps a pack on a file that a
+// fresh lookup wouldn't pick (the same jar may have been uploaded anew).
 func ResolveOnCurseForge(ctx context.Context, mods []pack.Mod, gameVersions []string, store *Store) (map[string]platform.Match, error) {
 	cachePath := filepath.Join(store.Dir, "curseforge-fingerprints.json")
 	cache := map[string]*fingerprintEntry{}
@@ -221,11 +223,26 @@ func ResolveOnCurseForge(ctx context.Context, mods []pack.Mod, gameVersions []st
 		return format + ":" + value
 	}
 	matches := map[string]platform.Match{}
-	var unknown []pack.Mod
+	var cached, unknown []pack.Mod
+	var cachedIDs []int64
 	for _, mod := range mods {
 		if entry := cache[key(mod)]; entry != nil && len(entry.Match) == 2 {
+			cached = append(cached, mod)
+			cachedIDs = append(cachedIDs, entry.Match[1])
+		} else {
+			unknown = append(unknown, mod)
+		}
+	}
+	offered, err := store.curseForgeFiles(ctx, cachedIDs)
+	if err != nil {
+		return nil, err
+	}
+	for _, mod := range cached {
+		entry := cache[key(mod)]
+		if offered[entry.Match[1]].IsAvailable {
 			matches[mod.Rel] = platform.Match{ProjectID: entry.Match[0], FileID: entry.Match[1]}
 		} else {
+			entry.Match = nil
 			unknown = append(unknown, mod)
 		}
 	}
@@ -412,7 +429,7 @@ func keepAvailable(ctx context.Context, listed []listedMod, left []pack.Mod, sto
 	for _, l := range listed {
 		ids = append(ids, l.match.FileID)
 	}
-	found, err := store.API.CurseForgeFiles(ctx, ids)
+	found, err := store.curseForgeFiles(ctx, ids)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -436,14 +453,16 @@ func keepAvailable(ctx context.Context, listed []listedMod, left []pack.Mod, sto
 		return listed, left, nil
 	}
 	store.Session.Warn("CurseForge rejects a pack that refers to files it doesn't offer for download:", reasons...)
+	// Not l for "leave out": l shows the log on the dashboard, and a key that
+	// names an option answers at once.
 	choice, err := store.Session.Choose(ctx, "What do you want to do?", []ui.Option{
 		{Key: "s", Label: "stop the export"},
-		{Key: "l", Label: "leave them out of the CurseForge pack"},
+		{Key: "o", Label: "leave them out of the CurseForge pack"},
 	}, "s")
 	if err != nil {
 		return nil, nil, err
 	}
-	if choice != "l" {
+	if choice != "o" {
 		return nil, nil, fail.Errorf("Export stopped. Build again once CurseForge offers those files, or after updating the mods to files it does.")
 	}
 	return kept, append(left, blocked...), nil

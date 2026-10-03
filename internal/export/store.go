@@ -19,6 +19,7 @@ import (
 	"hash"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -152,6 +153,37 @@ func (s *Store) downloadURL(mod pack.Mod) string {
 	return ""
 }
 
+// curseForgeFiles returns {file id: file} for the CurseForge files with the
+// ids, asking CurseForge only about those this store hasn't looked up yet. A
+// store lasts one run, so a file's status is as fresh as the run.
+func (s *Store) curseForgeFiles(ctx context.Context, ids []int64) (map[int64]platform.CFFile, error) {
+	s.mu.Lock()
+	var missing []int64
+	for _, id := range ids {
+		if _, ok := s.cfFiles[id]; !ok {
+			missing = append(missing, id)
+		}
+	}
+	s.mu.Unlock()
+	var fetched map[int64]platform.CFFile
+	if len(missing) > 0 {
+		var err error
+		if fetched, err = s.API.CurseForgeFiles(ctx, missing); err != nil {
+			return nil, err
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	maps.Copy(s.cfFiles, fetched)
+	found := map[int64]platform.CFFile{}
+	for _, id := range ids {
+		if file, ok := s.cfFiles[id]; ok {
+			found[id] = file
+		}
+	}
+	return found, nil
+}
+
 // Fetch returns {metafile path: cached file} for all mods, downloading what
 // isn't cached yet and asking for a folder for anything not downloadable.
 func (s *Store) Fetch(ctx context.Context, mods []pack.Mod) (map[string]string, error) {
@@ -173,16 +205,8 @@ func (s *Store) Fetch(ctx context.Context, mods []pack.Mod) (map[string]string, 
 			cfIDs = append(cfIDs, mod.CurseForgeFile())
 		}
 	}
-	if len(cfIDs) > 0 {
-		found, err := s.API.CurseForgeFiles(ctx, cfIDs)
-		if err != nil {
-			return nil, err
-		}
-		s.mu.Lock()
-		for id, f := range found {
-			s.cfFiles[id] = f
-		}
-		s.mu.Unlock()
+	if _, err := s.curseForgeFiles(ctx, cfIDs); err != nil {
+		return nil, err
 	}
 	var downloadable, missing []pack.Mod
 	for _, mod := range needed {

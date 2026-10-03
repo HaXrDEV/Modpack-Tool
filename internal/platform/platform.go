@@ -410,7 +410,8 @@ func (c *Client) CurseForgeModFiles(ctx context.Context, modID int64, gameVersio
 }
 
 // CurseForgeFingerprints returns {fingerprint: match} for the fingerprints
-// CurseForge knows exactly.
+// CurseForge knows exactly. When the same file was uploaded more than once,
+// the match is an upload CurseForge offers for download, if there is one.
 func (c *Client) CurseForgeFingerprints(ctx context.Context, fingerprints []uint32) (map[uint32]Match, error) {
 	return batch(ctx, fingerprints, 50, func(ctx context.Context, chunk []uint32) (map[uint32]Match, error) {
 		var answer struct {
@@ -425,6 +426,7 @@ func (c *Client) CurseForgeFingerprints(ctx context.Context, fingerprints []uint
 			return nil, err
 		}
 		found := map[uint32]Match{}
+		available := map[uint32]bool{}
 		for i, match := range answer.Data.ExactMatches {
 			file := match.File
 			if file.ID == 0 || file.ModID == 0 {
@@ -435,7 +437,11 @@ func (c *Client) CurseForgeFingerprints(ctx context.Context, fingerprints []uint
 			if fingerprint == 0 && i < len(answer.Data.ExactFingerprints) {
 				fingerprint = answer.Data.ExactFingerprints[i]
 			}
+			if _, seen := found[fingerprint]; seen && (available[fingerprint] || !file.IsAvailable) {
+				continue
+			}
 			found[fingerprint] = Match{ProjectID: file.ModID, FileID: file.ID}
+			available[fingerprint] = file.IsAvailable
 		}
 		return found, nil
 	})

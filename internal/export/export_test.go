@@ -278,10 +278,39 @@ func TestCurseForgePackStopsForFilesItDoesntOffer(t *testing.T) {
 	}
 }
 
+// A cached match is checked on every build: one to a file CurseForge no
+// longer offers is looked up again, so a new upload of the same jar is found,
+// and without one the export stops as for any file it doesn't offer.
+func TestCachedMatchesAreCheckedAgain(t *testing.T) {
+	f := exportProject(t, "")
+	contents := f.contents(t)
+	dir := t.TempDir()
+	if _, _, err := BuildCurseForge(context.Background(), f.project, contents, f.store, filepath.Join(dir, "a.zip")); err != nil {
+		t.Fatal(err)
+	}
+	f.api.Files[1000] = platform.CFFile{ID: 1000, FileStatus: 8}
+	_, _, err := BuildCurseForge(context.Background(), f.project, contents, NewStore(f.cache, f.api, f.session), filepath.Join(dir, "b.zip"))
+	if err == nil || !strings.Contains(f.session.Text(), "Sodium (sodium.jar): archived") {
+		t.Fatalf("the cached match to an archived file was used: %v", err)
+	}
+	// The author uploads the same jar again.
+	f.api.Files[1001] = platform.CFFile{ID: 1001, IsAvailable: true}
+	f.api.Fingerprints[platform.Murmur2(jar["sodium"])] = platform.Match{ProjectID: 100, FileID: 1001}
+	output := filepath.Join(dir, "c.zip")
+	if _, _, err := BuildCurseForge(context.Background(), f.project, contents, NewStore(f.cache, f.api, f.session), output); err != nil {
+		t.Fatal(err)
+	}
+	var manifest cfManifest
+	readJSON(t, output, "manifest.json", &manifest)
+	if !slices.Contains(manifest.Files, cfFile{100, 1001, true}) {
+		t.Error(manifest.Files)
+	}
+}
+
 // Leaving the files out drops them from the manifest and the pack's Crash
 // Assistant modlist, without bundling them instead.
 func TestCurseForgePackCanLeaveOutFilesItDoesntOffer(t *testing.T) {
-	f := exportProject(t, "l")
+	f := exportProject(t, "o")
 	f.withCrashAssistantModlist(t)
 	f.withUnavailableFiles()
 	output := filepath.Join(t.TempDir(), "cf.zip")
