@@ -107,11 +107,7 @@ func updateShaders(ctx context.Context, env *Env) error {
 				continue
 			}
 			target := versions[i]
-			var files []pack.ModrinthFile
-			for _, f := range target.Files {
-				files = append(files, pack.ModrinthFile{URL: f.URL, Filename: f.Filename, Primary: f.Primary, Hashes: f.Hashes})
-			}
-			applied, err := pack.ApplyModrinthVersion(env.Project.PackDir(), mod, target.ID, files)
+			applied, err := pack.ApplyModrinthVersion(env.Project.PackDir(), mod, target.ID, modrinthFiles(target))
 			if err != nil {
 				return err
 			}
@@ -130,6 +126,15 @@ func updateShaders(ctx context.Context, env *Env) error {
 		env.UI.Info("Shader packs on their newest versions:", updated...)
 	}
 	return nil
+}
+
+// modrinthFiles are a Modrinth version's files, for pack.ApplyModrinthVersion.
+func modrinthFiles(v platform.Version) []pack.ModrinthFile {
+	var files []pack.ModrinthFile
+	for _, f := range v.Files {
+		files = append(files, pack.ModrinthFile{URL: f.URL, Filename: f.Filename, Primary: f.Primary, Hashes: f.Hashes})
+	}
+	return files
 }
 
 // loadMods reads the pack's metafiles; the tree holds their bytes, so a later
@@ -401,23 +406,36 @@ func alphaGuard(ctx context.Context, env *Env, before pack.Tree, pairs []modPair
 	}
 	var listing []string
 	for _, pair := range alphas {
-		listing = append(listing, fmt.Sprintf("%s: %s -> %s", pair.current.Name(), pair.old.Filename(), pair.current.Filename()))
+		listing = append(listing, pair.current.Name()+": "+pair.current.Filename())
 	}
 	env.UI.Warn(fmt.Sprintf("%d update%s landed on an alpha version:", len(alphas), ui.Plural(len(alphas))), listing...)
+	policy := env.Project.Settings.AlphaUpdates
+	// Looked up before asking, so the question can name them.
+	fallbacks := map[string]fallback{}
+	if policy != "always" {
+		for _, pair := range alphas {
+			if fallbacks[pair.current.Rel], err = fallbackFor(ctx, env, pair, found[pair.current.Rel][0], lookup); err != nil {
+				return err
+			}
+		}
+	}
 	undo := alphas
-	switch env.Project.Settings.AlphaUpdates {
+	switch policy {
 	case "always":
 		env.UI.Info("Keeping them (alpha_updates: always).")
 		return nil
 	case "never":
 	default:
-		other := "moved to their newest beta/release where Modrinth has one, or else reverted"
+		question := "Keep which alpha versions? The others move to the beta/release named next to them, or else back to their old file."
 		if migration {
-			other = fmt.Sprintf("moved to their newest beta/release for Minecraft %s where Modrinth has one, "+
-				"or else reverted (and a mod then offered for disabling as incompatible)", env.Project.Minecraft)
+			question += fmt.Sprintf(" A mod with no build for Minecraft %s is then offered for disabling.", env.Project.Minecraft)
 		}
-		keep, err := ui.Pick(ctx, env.UI, "Keep which alpha versions? The others are "+other+".", alphas,
-			func(pair modPair) string { return pair.current.Name() })
+		keep, err := ui.Pick(ctx, env.UI, question, alphas, func(pair modPair) string {
+			if fb := fallbacks[pair.current.Rel]; fb.version != nil {
+				return fmt.Sprintf("%s (else %s, a %s)", pair.current.Name(), fb.filename, fb.version.VersionType)
+			}
+			return pair.current.Name()
+		})
 		if err != nil {
 			return err
 		}
@@ -427,38 +445,48 @@ func alphaGuard(ctx context.Context, env *Env, before pack.Tree, pairs []modPair
 	}
 	return editing(ctx, env, func() error {
 		for _, pair := range undo {
-			applied := false
-			// In a migration too: the pack is on its new Minecraft version by now, so
-			// this finds builds for it. A CurseForge file, or one without such a
-			// build, is reverted (a mod is then offered for disabling as incompatible).
-			if pair.current.Modrinth() != nil && pair.old.Modrinth() != nil {
-				loaders := lookup.versions[pair.old.ModrinthVersion()].Loaders
-				target, err := newestAllowed(ctx, env, pair.old, found[pair.current.Rel][0], loaders)
-				if err != nil {
+			if fb := fallbacks[pair.current.Rel]; fb.version != nil {
+				// fallbackFor made sure the version has a file to point at.
+				if _, err := pack.ApplyModrinthVersion(env.Project.PackDir(), pair.current, fb.version.ID, modrinthFiles(*fb.version)); err != nil {
 					return err
 				}
-				if target != nil && target.ID != pair.old.ModrinthVersion() {
-					var files []pack.ModrinthFile
-					for _, f := range target.Files {
-						files = append(files, pack.ModrinthFile{URL: f.URL, Filename: f.Filename, Primary: f.Primary, Hashes: f.Hashes})
-					}
-					if applied, err = pack.ApplyModrinthVersion(env.Project.PackDir(), pair.current, target.ID, files); err != nil {
-						return err
-					}
-					if applied {
-						env.UI.Info(fmt.Sprintf("%s: using %s (%s) instead.", pair.current.Name(), target.VersionNumber, target.VersionType))
-					}
-				}
+				env.UI.Info(fmt.Sprintf("%s: using %s (%s) instead.", pair.current.Name(), fb.filename, fb.version.VersionType))
+				continue
 			}
-			if !applied {
-				if err := pack.Restore(env.Project.PackDir(), pair.current.Rel, before[pair.current.Rel]); err != nil {
-					return err
-				}
-				env.UI.Info(fmt.Sprintf("%s: reverted to %s.", pair.current.Name(), pair.old.Filename()))
+			if err := pack.Restore(env.Project.PackDir(), pair.current.Rel, before[pair.current.Rel]); err != nil {
+				return err
 			}
+			env.UI.Info(fmt.Sprintf("%s: reverted to %s.", pair.current.Name(), pair.old.Filename()))
 		}
 		return nil
 	})
+}
+
+// fallback is what an alpha update gets when it isn't kept: a beta/release,
+// or (with no version) the file it had before.
+type fallback struct {
+	version  *platform.Version
+	filename string // The version's primary file.
+}
+
+// fallbackFor is the newest Modrinth version on an allowed channel for the
+// pack's Minecraft version, unless that is the old one or has no file to point
+// at. In a migration too: the pack is on its new Minecraft version by now, so
+// this finds builds for it. A CurseForge file has none and goes back.
+func fallbackFor(ctx context.Context, env *Env, pair modPair, oldChannel string, lookup installed) (fallback, error) {
+	if pair.current.Modrinth() == nil || pair.old.Modrinth() == nil {
+		return fallback{}, nil
+	}
+	loaders := lookup.versions[pair.old.ModrinthVersion()].Loaders
+	target, err := newestAllowed(ctx, env, pair.old, oldChannel, loaders)
+	if err != nil || target == nil || target.ID == pair.old.ModrinthVersion() {
+		return fallback{}, err
+	}
+	primary, _, ok := pack.PrimaryFile(modrinthFiles(*target))
+	if !ok {
+		return fallback{}, nil
+	}
+	return fallback{target, primary.Filename}, nil
 }
 
 // newestAllowed is the newest Modrinth version on an allowed channel for the

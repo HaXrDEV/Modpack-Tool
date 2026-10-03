@@ -689,6 +689,52 @@ func TestAlphaGuardRedirectsAndReverts(t *testing.T) {
 	}
 }
 
+// Asking which alphas to keep, the alpha guard names the beta/release one
+// gets instead: a migration's newest Sodium can be an alpha while a release
+// for the new Minecraft version exists, and the question mustn't read as a
+// revert.
+func TestAlphaGuardNamesWhatEachAlphaGetsInstead(t *testing.T) {
+	for _, migration := range []bool{false, true} {
+		pw := testutil.PackDir(t)
+		f := newFixture(t, filepath.Dir(pw))
+		mods, before, err := loadMods(f.Env)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for slug, newVersion := range map[string]string{"lithium": "LithNEW", "pinned": "PinnNEW"} {
+			path := filepath.Join(pw, "mods", slug+".pw.toml")
+			old := `version = "` + strings.ToUpper(slug[:1]) + slug[1:4] + `v1"`
+			testutil.Write(t, path, strings.Replace(testutil.Read(t, path), old, `version = "`+newVersion+`"`, 1))
+		}
+		f.api.Versions = map[string]platform.Version{"Lithv1": {ID: "Lithv1", VersionType: "release"},
+			"LithNEW": {ID: "LithNEW", VersionType: "alpha"}, "Pinnv1": {ID: "Pinnv1", VersionType: "release"},
+			"PinnNEW": {ID: "PinnNEW", VersionType: "alpha"}}
+		f.api.ProjectVersions = map[string][]platform.Version{"Lithium": { // Nothing but alphas for Pinned Mod.
+			{ID: "LithALPHA2", VersionType: "alpha"},
+			{ID: "LithREL", VersionType: "release", VersionNumber: "mc1.21.11-0.22", Files: []platform.File{
+				{Primary: true, URL: "https://x/l.jar", Filename: "lithium-0.22.jar", Hashes: map[string]string{"sha512": "b"}}}},
+		}}
+		f.answers("") // Keep none.
+		if err := afterUpdate(ctx, f.Env, mods, before, migration); err != nil {
+			t.Fatal(err)
+		}
+		text := f.session.Text()
+		for _, want := range []string{"1) Lithium (else lithium-0.22.jar, a release)\n", "2) Pinned Mod [Fabric]\n",
+			"Lithium: using lithium-0.22.jar (release) instead.", "Pinned Mod [Fabric]: reverted to pinned-1.0.jar."} {
+			if !strings.Contains(text, want) {
+				t.Errorf("%v: missing %q in:\n%s", migration, want, text)
+			}
+		}
+		if strings.Contains(text, "offered for disabling") != migration {
+			t.Error(migration, text)
+		}
+		lithium := testutil.Read(t, filepath.Join(pw, "mods", "lithium.pw.toml"))
+		if !strings.Contains(lithium, `version = "LithREL"`) || !strings.Contains(lithium, "lithium-0.22.jar") {
+			t.Error(migration, lithium)
+		}
+	}
+}
+
 // py: test_workflows.py::test_incompatible_mods
 func TestIncompatibleMods(t *testing.T) {
 	f := newFixture(t, filepath.Dir(testutil.PackDir(t)))
