@@ -33,9 +33,8 @@ type runner struct {
 	runs  *sync.WaitGroup
 	stop  context.CancelFunc
 	width int
-	// loaded counts the status loads that finished (the dashboard counts the
-	// ones it started in home.seq), or is -1 when a real program delivers the
-	// app's messages instead.
+	// loaded counts the status loads that finished; the dashboard counts the
+	// ones it started in home.seq.
 	loaded int
 }
 
@@ -56,13 +55,11 @@ func newRunner(t *testing.T, width, height int) *runner {
 	a.env = workflow.NewEnv(ui.Discard, p, "packwiz-not-installed", &platform.Fake{}, config.CacheDir())
 	r := &runner{t: t, app: a, msgs: make(chan tea.Msg, 100), runs: runs, stop: cancel, width: width}
 	t.Cleanup(func() {
+		defer runs.Wait()
+		defer cancel() // Also when waiting for the loads fails the test.
 		// A status load still reading the pack would keep Windows from
 		// removing its folder.
-		if r.loaded >= 0 {
-			r.waitFor("the status loads", func(string) bool { return r.loaded == r.app.home.seq })
-		}
-		cancel()
-		runs.Wait()
+		r.waitFor("the status loads", func(string) bool { return r.loaded == r.app.home.seq })
 	})
 	r.send(tea.WindowSizeMsg{Width: width, Height: height})
 	return r
@@ -445,21 +442,38 @@ func TestAddingAProjectOpensIt(t *testing.T) {
 // The real Bubble Tea program: input parsing, rendering and quitting.
 func TestRealProgramRendersAndQuits(t *testing.T) {
 	r := newRunner(t, 80, 24)
-	r.loaded = -1
 	input, typing := io.Pipe()
 	output := &lockedBuffer{}
+	// The program delivers the status loads instead of the runner, so it
+	// counts them, which the runner's cleanup reads once the program is done.
+	loads := make(chan struct{}, 10)
+	count := func(_ tea.Model, msg tea.Msg) tea.Msg {
+		if _, ok := msg.(statusMsg); ok {
+			r.loaded++
+			loads <- struct{}{}
+		}
+		return msg
+	}
 	program := tea.NewProgram(r.app, tea.WithInput(input), tea.WithOutput(output),
-		tea.WithWindowSize(80, 24), tea.WithoutSignalHandler())
+		tea.WithWindowSize(80, 24), tea.WithoutSignalHandler(), tea.WithFilter(count))
 	done := make(chan error, 1)
 	go func() {
 		_, err := program.Run()
 		done <- err
 	}()
 	go func() {
-		// Without a start folder the app opens on Projects; esc goes to the dashboard.
+		// Without a start folder the app opens on Projects; esc goes to the
+		// dashboard, from there and from Help, which loads the status. Each load
+		// is waited for, so the program never quits during one.
 		for _, keys := range []string{"\x1b", "?", "\x1b", "q"} {
 			time.Sleep(300 * time.Millisecond)
 			io.WriteString(typing, keys)
+			if keys == "\x1b" {
+				select {
+				case <-loads:
+				case <-time.After(5 * time.Second):
+				}
+			}
 		}
 	}()
 	select {
