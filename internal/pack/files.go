@@ -88,27 +88,33 @@ type ModrinthFile struct {
 	Hashes        map[string]string
 }
 
-// ApplyModrinthVersion points a Modrinth metafile at another version of the
-// same project. It returns false when the version has no usable primary file.
-func ApplyModrinthVersion(packDir string, mod Mod, versionID string, versionFiles []ModrinthFile) (bool, error) {
+// PrimaryFile is the file of a Modrinth version that a metafile points at, and
+// its hash format. ok is false when the version has no usable primary file.
+func PrimaryFile(versionFiles []ModrinthFile) (primary ModrinthFile, format string, ok bool) {
 	if len(versionFiles) == 0 {
-		return false, nil
+		return ModrinthFile{}, "", false
 	}
-	primary := versionFiles[0]
+	primary = versionFiles[0]
 	for _, file := range versionFiles {
 		if file.Primary {
 			primary = file
 			break
 		}
 	}
-	format := ""
 	for _, candidate := range []string{"sha512", "sha1"} {
 		if _, ok := primary.Hashes[candidate]; ok {
 			format = candidate
 			break
 		}
 	}
-	if format == "" || primary.URL == "" || primary.Filename == "" {
+	return primary, format, format != "" && primary.URL != "" && primary.Filename != ""
+}
+
+// ApplyModrinthVersion points a Modrinth metafile at another version of the
+// same project. It returns false when the version has no usable primary file.
+func ApplyModrinthVersion(packDir string, mod Mod, versionID string, versionFiles []ModrinthFile) (bool, error) {
+	primary, format, ok := PrimaryFile(versionFiles)
+	if !ok {
 		return false, nil
 	}
 	edits := []Edit{
