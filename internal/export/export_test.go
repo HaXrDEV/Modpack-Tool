@@ -98,7 +98,8 @@ func exportProject(t *testing.T, answers ...string) *fixture {
 			"https://example.com/odd.jar":                                       jar["odd"],
 			"https://edge.forgecdn.net/cfmod.jar":                               jar["cfmod"],
 		},
-		Files:    map[int64]platform.CFFile{11: {ID: 11, DownloadURL: "https://edge.forgecdn.net/cfmod.jar"}},
+		Files: map[int64]platform.CFFile{11: {ID: 11, DownloadURL: "https://edge.forgecdn.net/cfmod.jar", IsAvailable: true},
+			1000: {ID: 1000, IsAvailable: true}, 2000: {ID: 2000, IsAvailable: true}},
 		Versions: map[string]platform.Version{},
 		// Sodium and the resource pack also exist on CurseForge; nothing else does.
 		Fingerprints: map[uint32]platform.Match{platform.Murmur2(jar["sodium"]): {ProjectID: 100, FileID: 1000}, platform.Murmur2(jar["fa"]): {ProjectID: 200, FileID: 2000}},
@@ -209,6 +210,7 @@ func TestCurseForgeMatchesAFileByName(t *testing.T) {
 	f := exportProject(t)
 	f.api.Search = map[string][]platform.CFMod{"ghmod": {{ID: 300}}}
 	f.api.ModFiles = map[int64][]platform.CFFile{300: {{ID: 3001, FileName: "ghmod-sources.jar"}, {ID: 3000, FileName: "ghmod.jar"}}}
+	f.api.Files[3000] = platform.CFFile{ID: 3000, IsAvailable: true}
 	dir := t.TempDir()
 	bundled, summary, err := BuildCurseForge(context.Background(), f.project, f.contents(t), f.store, filepath.Join(dir, "a.zip"))
 	if err != nil {
@@ -242,6 +244,97 @@ func TestFingerprintsAreCached(t *testing.T) {
 	}
 	if len(f.api.Downloads) != first {
 		t.Error("the second build downloaded again")
+	}
+}
+
+// withUnavailableFiles makes CurseForge hold back the file Sodium matches (an
+// upload still under review) and CF Mod's own file (archived), and lose the
+// resource pack's file.
+func (f *fixture) withUnavailableFiles() {
+	f.api.Files[1000] = platform.CFFile{ID: 1000, FileStatus: 18}
+	f.api.Files[11] = platform.CFFile{ID: 11, FileStatus: 8, DownloadURL: "https://edge.forgecdn.net/cfmod.jar"}
+	delete(f.api.Files, 2000)
+}
+
+// CurseForge rejects a pack that refers to files it doesn't offer for
+// download, so the export lists them and stops by default.
+func TestCurseForgePackStopsForFilesItDoesntOffer(t *testing.T) {
+	f := exportProject(t, "")
+	f.withUnavailableFiles()
+	output := filepath.Join(t.TempDir(), "cf.zip")
+	_, _, err := BuildCurseForge(context.Background(), f.project, f.contents(t), f.store, output)
+	if err == nil || !strings.Contains(err.Error(), "Export stopped") {
+		t.Fatal(err)
+	}
+	text := f.session.Text()
+	for _, want := range []string{"Sodium (sodium.jar): under manual review", "CF Mod (cfmod.jar): archived",
+		"Fa (fa.zip): not found on CurseForge"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("%q missing from\n%s", want, text)
+		}
+	}
+	if _, err := os.Stat(output); err == nil {
+		t.Error("the pack was written anyway")
+	}
+}
+
+// A cached match is checked on every build: one to a file CurseForge no
+// longer offers is looked up again, so a new upload of the same jar is found,
+// and without one the export stops as for any file it doesn't offer.
+func TestCachedMatchesAreCheckedAgain(t *testing.T) {
+	f := exportProject(t, "")
+	contents := f.contents(t)
+	dir := t.TempDir()
+	if _, _, err := BuildCurseForge(context.Background(), f.project, contents, f.store, filepath.Join(dir, "a.zip")); err != nil {
+		t.Fatal(err)
+	}
+	f.api.Files[1000] = platform.CFFile{ID: 1000, FileStatus: 8}
+	_, _, err := BuildCurseForge(context.Background(), f.project, contents, NewStore(f.cache, f.api, f.session), filepath.Join(dir, "b.zip"))
+	if err == nil || !strings.Contains(f.session.Text(), "Sodium (sodium.jar): archived") {
+		t.Fatalf("the cached match to an archived file was used: %v", err)
+	}
+	// The author uploads the same jar again.
+	f.api.Files[1001] = platform.CFFile{ID: 1001, IsAvailable: true}
+	f.api.Fingerprints[platform.Murmur2(jar["sodium"])] = platform.Match{ProjectID: 100, FileID: 1001}
+	output := filepath.Join(dir, "c.zip")
+	if _, _, err := BuildCurseForge(context.Background(), f.project, contents, NewStore(f.cache, f.api, f.session), output); err != nil {
+		t.Fatal(err)
+	}
+	var manifest cfManifest
+	readJSON(t, output, "manifest.json", &manifest)
+	if !slices.Contains(manifest.Files, cfFile{100, 1001, true}) {
+		t.Error(manifest.Files)
+	}
+}
+
+// Leaving the files out drops them from the manifest and the pack's Crash
+// Assistant modlist, without bundling them instead.
+func TestCurseForgePackCanLeaveOutFilesItDoesntOffer(t *testing.T) {
+	f := exportProject(t, "o")
+	f.withCrashAssistantModlist(t)
+	f.withUnavailableFiles()
+	output := filepath.Join(t.TempDir(), "cf.zip")
+	bundled, summary, err := BuildCurseForge(context.Background(), f.project, f.contents(t), f.store, output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest cfManifest
+	readJSON(t, output, "manifest.json", &manifest)
+	if len(manifest.Files) != 0 {
+		t.Error(manifest.Files)
+	}
+	want := sorted("manifest.json", "overrides/resourcepacks/Bundled.zip", "overrides/config/a.json",
+		"overrides/config/crash_assistant/modlist.json", "overrides/mods/ghmod.jar", "overrides/mods/odd.jar")
+	if got := entries(t, output); !slices.Equal(got, want) {
+		t.Error(got)
+	}
+	var modlist []string
+	readJSON(t, output, "overrides/config/crash_assistant/modlist.json", &modlist)
+	if !slices.Equal(modlist, []string{"ghmod.jar", "odd.jar"}) {
+		t.Error(modlist)
+	}
+	if !slices.Equal(slugs(bundled), []string{"ghmod", "odd"}) || summary != "0 from CurseForge, 2 bundled, left out: CF Mod, Sodium, Fa" {
+		t.Error(slugs(bundled), summary)
 	}
 }
 

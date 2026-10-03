@@ -106,6 +106,24 @@ func TestFingerprintMatches(t *testing.T) {
 	}
 }
 
+// An upload CurseForge offers for download wins over other copies of the same
+// file that it doesn't (archived, deleted or still under review), whichever
+// comes first; a file with no such upload still matches.
+func TestFingerprintMatchesPreferAnAvailableUpload(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"data": {"exactMatches": [
+			{"file": {"id": 1, "modId": 9, "fileFingerprint": 77, "isAvailable": false}},
+			{"file": {"id": 2, "modId": 9, "fileFingerprint": 77, "isAvailable": true}},
+			{"file": {"id": 3, "modId": 9, "fileFingerprint": 77, "isAvailable": false}},
+			{"file": {"id": 4, "modId": 8, "fileFingerprint": 88, "isAvailable": false}}]}}`)
+	}))
+	defer server.Close()
+	matches, err := testClient(server).CurseForgeFingerprints(context.Background(), []uint32{77, 88})
+	if err != nil || matches[77] != (Match{9, 2}) || matches[88] != (Match{8, 4}) {
+		t.Error(matches, err)
+	}
+}
+
 // Teams come back as one member list per team, keyed by the team id.
 func TestModrinthTeams(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

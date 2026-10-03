@@ -39,6 +39,13 @@ var packwizCurseForgeKey = func() string {
 // CurseForgeReleaseTypes maps CurseForge releaseType values to channels.
 var CurseForgeReleaseTypes = map[int]string{1: "release", 2: "beta", 3: "alpha"}
 
+// CurseForgeFileStatuses names CurseForge's fileStatus values.
+var CurseForgeFileStatuses = map[int]string{1: "processing", 2: "changes required", 3: "under review", 4: "approved",
+	5: "rejected", 6: "malware detected", 7: "deleted", 8: "archived", 9: "testing", 10: "released",
+	11: "ready for review", 12: "deprecated", 13: "baking", 14: "awaiting publishing", 15: "failed publishing",
+	16: "cooking", 17: "cooked", 18: "under manual review", 19: "scanning for malware", 20: "processing file",
+	21: "pending release", 22: "ready for cooking", 23: "post-processing"}
+
 // Version is a Modrinth version.
 type Version struct {
 	ID            string       `json:"id"`
@@ -91,6 +98,8 @@ type CFFile struct {
 	ModID           int64          `json:"modId"`
 	FileName        string         `json:"fileName"`
 	ReleaseType     int            `json:"releaseType"`
+	FileStatus      int            `json:"fileStatus"`
+	IsAvailable     bool           `json:"isAvailable"` // False until CurseForge approves the file, and once it's archived or deleted.
 	DownloadURL     string         `json:"downloadUrl"`
 	GameVersions    []string       `json:"gameVersions"`
 	Dependencies    []CFDependency `json:"dependencies"`
@@ -401,7 +410,8 @@ func (c *Client) CurseForgeModFiles(ctx context.Context, modID int64, gameVersio
 }
 
 // CurseForgeFingerprints returns {fingerprint: match} for the fingerprints
-// CurseForge knows exactly.
+// CurseForge knows exactly. When the same file was uploaded more than once,
+// the match is an upload CurseForge offers for download, if there is one.
 func (c *Client) CurseForgeFingerprints(ctx context.Context, fingerprints []uint32) (map[uint32]Match, error) {
 	return batch(ctx, fingerprints, 50, func(ctx context.Context, chunk []uint32) (map[uint32]Match, error) {
 		var answer struct {
@@ -416,6 +426,7 @@ func (c *Client) CurseForgeFingerprints(ctx context.Context, fingerprints []uint
 			return nil, err
 		}
 		found := map[uint32]Match{}
+		available := map[uint32]bool{}
 		for i, match := range answer.Data.ExactMatches {
 			file := match.File
 			if file.ID == 0 || file.ModID == 0 {
@@ -426,7 +437,11 @@ func (c *Client) CurseForgeFingerprints(ctx context.Context, fingerprints []uint
 			if fingerprint == 0 && i < len(answer.Data.ExactFingerprints) {
 				fingerprint = answer.Data.ExactFingerprints[i]
 			}
+			if _, seen := found[fingerprint]; seen && (available[fingerprint] || !file.IsAvailable) {
+				continue
+			}
 			found[fingerprint] = Match{ProjectID: file.ModID, FileID: file.ID}
+			available[fingerprint] = file.IsAvailable
 		}
 		return found, nil
 	})
