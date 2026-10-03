@@ -344,6 +344,25 @@ func TestReleaseNotesForPrereleaseWithoutOverview(t *testing.T) {
 	}
 }
 
+// Alphas and development builds warn that they're far from complete, other
+// pre-releases only that they may be less stable.
+func TestPrereleaseNoticeIsBlunterForEarlyBuilds(t *testing.T) {
+	early := "so it's far from complete. Expect missing mods, unfinished features and bugs. Here be dragons!"
+	less := "so it may be less stable or feature complete than a full release. Here be dragons!"
+	for v, want := range map[string]string{
+		"6.0-alpha.1": "This is an alpha, " + early,
+		"2.2.0.dev1":  "This is a development build, " + early,
+		"6.0-beta.1":  "This is a beta, " + less,
+		"6.0-rc.1":    "This is a release candidate, " + less,
+		"2.0.0.pre1":  "This is a pre-release, " + less,
+		"6.0":         "",
+	} {
+		if got := PrereleaseNotice(v); got != want {
+			t.Errorf("%s:\n got %q\nwant %q", v, got, want)
+		}
+	}
+}
+
 // py: test_robustness.py::test_broken_changelog_yaml_is_a_clear_error
 func TestBrokenChangelogYAMLIsAClearError(t *testing.T) {
 	path := testutil.Write(t, filepath.Join(t.TempDir(), "bad.yml"), "Update overview:\n  - `backtick start\n\tTab: x\n")
