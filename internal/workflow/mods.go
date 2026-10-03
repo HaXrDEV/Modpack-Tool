@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -50,13 +51,10 @@ func UpdateMods(ctx context.Context, env *Env) error {
 		shadersErr = updateShaders(ctx, env)
 		return nil
 	})
-	if err != nil {
-		return err
+	if err == nil {
+		err = errors.Join(afterUpdate(ctx, env, mods, before, false), shadersErr)
 	}
-	if err := errors.Join(afterUpdate(ctx, env, mods, before, false), shadersErr); err != nil {
-		return err
-	}
-	if err := env.Packwiz.Refresh(ctx); err != nil {
+	if err := refreshPackFiles(ctx, env, before, err); err != nil {
 		return err
 	}
 	env.UI.Result("Mods are up to date.", "Build release (4) when you're ready, or keep editing the pack.")
@@ -320,6 +318,34 @@ func editing(ctx context.Context, env *Env, edit func() error) error {
 	return err
 }
 
+// refreshPackFiles ends an action that edits the pack: it runs
+// UpdateGeneratedFiles, then refreshes index.toml and the index hash in
+// pack.toml, so they cover what it wrote. When the action stopped early (err,
+// a cancel among them) after it had already changed files since before, those
+// changes stay, so it does the same; err is returned either way. Update mods,
+// Migrate and Check pack end with it; New version and Build run
+// UpdateGeneratedFiles themselves.
+func refreshPackFiles(ctx context.Context, env *Env, before pack.Tree, err error) error {
+	if err != nil {
+		now, readErr := pack.ReadTree(env.Project.PackDir(), pack.Categories)
+		if readErr != nil || maps.EqualFunc(now, before, bytes.Equal) {
+			return err
+		}
+	}
+	step := env.UI.Step("Updating the generated files, then refreshing index.toml and pack.toml")
+	var written []string
+	refreshErr := editing(ctx, env, func() (err error) {
+		written, err = UpdateGeneratedFiles(context.WithoutCancel(ctx), env)
+		return err
+	})
+	if refreshErr != nil {
+		step.Fail(refreshErr)
+		return errors.Join(err, refreshErr)
+	}
+	step.Done(wroteDetail(env.Project, written))
+	return err
+}
+
 ////////////////////////////////////////////////////////////
 // Alpha guard
 
@@ -551,71 +577,8 @@ func Migrate(ctx context.Context, env *Env, target string) error {
 	if err != nil {
 		return err
 	}
-	err = runUnpinned(ctx, env, selected, func() error {
-		step := env.UI.Step(fmt.Sprintf("packwiz migrate minecraft %s (also updates the loader and all mods)", target))
-		if err := env.Packwiz.MigrateMinecraft(ctx, target); err != nil {
-			step.Fail(err)
-			return err
-		}
-		if strings.ToLower(loaderVersion) != "latest" {
-			if err := env.Packwiz.MigrateLoader(ctx, loaderVersion); err != nil {
-				step.Fail(err)
-				return err
-			}
-		}
-		step.Done("")
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	if err := p.Reload(); err != nil {
-		return err
-	}
-	if err := followMinecraft(ctx, env, oldMinecraft); err != nil {
-		return err
-	}
-	if err := afterUpdate(ctx, env, mods, before, true); err != nil {
-		return err
-	}
-
-	step := env.UI.Step(fmt.Sprintf("Checking which mods have a build for Minecraft %s", p.Minecraft))
-	incompatible, unknown, err := IncompatibleMods(ctx, env)
-	if err != nil {
-		step.Fail(err)
-		return err
-	}
-	step.Done("")
-	if len(unknown) > 0 {
-		env.UI.Warn("Couldn't check these (no Modrinth/CurseForge data); test them yourself:", pack.Names(unknown)...)
-	}
-	disabled := 0
-	if len(incompatible) > 0 {
-		var names []string
-		for _, mod := range incompatible {
-			names = append(names, fmt.Sprintf("%s (%s)", mod.Name(), mod.Filename()))
-		}
-		env.UI.Warn(fmt.Sprintf("%d mod%s have no build for %s:", len(incompatible), ui.Plural(len(incompatible)), p.Minecraft), names...)
-		disable, err := env.UI.Confirm(ctx, "Disable them? They stay in the pack and packwiz keeps checking for updates", true)
-		if err != nil {
-			return err
-		}
-		if disable {
-			disabled = len(incompatible)
-			if err := editing(ctx, env, func() error {
-				for _, mod := range incompatible {
-					if err := pack.SetDisabled(p.PackDir(), mod, true); err != nil {
-						return err
-					}
-				}
-				return nil
-			}); err != nil {
-				return err
-			}
-			env.UI.Info(fmt.Sprintf("Disabled %d mod%s.", len(incompatible), ui.Plural(len(incompatible))))
-		}
-	}
-	if err := env.Packwiz.Refresh(ctx); err != nil {
+	disabled, err := migrateMods(ctx, env, target, loaderVersion, oldMinecraft, mods, before, selected)
+	if err := refreshPackFiles(ctx, env, before, err); err != nil {
 		return err
 	}
 	if err := p.Reload(); err != nil {
@@ -636,4 +599,77 @@ func Migrate(ctx context.Context, env *Env, target string) error {
 	}
 	_, err = NewVersion(ctx, env, suggestion, "")
 	return err
+}
+
+// migrateMods runs packwiz migrate with the selected mods unpinned, then the
+// alpha guard and re-enable offer, and offers to disable mods with no build for
+// the new Minecraft version. It returns how many it disabled.
+func migrateMods(ctx context.Context, env *Env, target, loaderVersion, oldMinecraft string,
+	mods []pack.Mod, before pack.Tree, selected []pack.Mod) (int, error) {
+	p := env.Project
+	err := runUnpinned(ctx, env, selected, func() error {
+		step := env.UI.Step(fmt.Sprintf("packwiz migrate minecraft %s (also updates the loader and all mods)", target))
+		if err := env.Packwiz.MigrateMinecraft(ctx, target); err != nil {
+			step.Fail(err)
+			return err
+		}
+		if strings.ToLower(loaderVersion) != "latest" {
+			if err := env.Packwiz.MigrateLoader(ctx, loaderVersion); err != nil {
+				step.Fail(err)
+				return err
+			}
+		}
+		step.Done("")
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	if err := p.Reload(); err != nil {
+		return 0, err
+	}
+	if err := followMinecraft(ctx, env, oldMinecraft); err != nil {
+		return 0, err
+	}
+	if err := afterUpdate(ctx, env, mods, before, true); err != nil {
+		return 0, err
+	}
+
+	step := env.UI.Step(fmt.Sprintf("Checking which mods have a build for Minecraft %s", p.Minecraft))
+	incompatible, unknown, err := IncompatibleMods(ctx, env)
+	if err != nil {
+		step.Fail(err)
+		return 0, err
+	}
+	step.Done("")
+	if len(unknown) > 0 {
+		env.UI.Warn("Couldn't check these (no Modrinth/CurseForge data); test them yourself:", pack.Names(unknown)...)
+	}
+	disabled := 0
+	if len(incompatible) > 0 {
+		var names []string
+		for _, mod := range incompatible {
+			names = append(names, fmt.Sprintf("%s (%s)", mod.Name(), mod.Filename()))
+		}
+		env.UI.Warn(fmt.Sprintf("%d mod%s have no build for %s:", len(incompatible), ui.Plural(len(incompatible)), p.Minecraft), names...)
+		disable, err := env.UI.Confirm(ctx, "Disable them? They stay in the pack and packwiz keeps checking for updates", true)
+		if err != nil {
+			return 0, err
+		}
+		if disable {
+			disabled = len(incompatible)
+			if err := editing(ctx, env, func() error {
+				for _, mod := range incompatible {
+					if err := pack.SetDisabled(p.PackDir(), mod, true); err != nil {
+						return err
+					}
+				}
+				return nil
+			}); err != nil {
+				return 0, err
+			}
+			env.UI.Info(fmt.Sprintf("Disabled %d mod%s.", len(incompatible), ui.Plural(len(incompatible))))
+		}
+	}
+	return disabled, nil
 }

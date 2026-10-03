@@ -713,6 +713,7 @@ func TestIncompatibleMods(t *testing.T) {
 type migratingPackwiz struct {
 	fakePackwiz
 	packDir string
+	mods    func() // Changes mods as packwiz would, when set.
 }
 
 func (m *migratingPackwiz) MigrateMinecraft(_ context.Context, v string) error {
@@ -720,6 +721,9 @@ func (m *migratingPackwiz) MigrateMinecraft(_ context.Context, v string) error {
 	text, err := os.ReadFile(path)
 	if err == nil {
 		err = os.WriteFile(path, regexp.MustCompile(`minecraft = "[^"]*"`).ReplaceAll(text, []byte(`minecraft = "`+v+`"`)), 0o644)
+	}
+	if err == nil && m.mods != nil {
+		m.mods()
 	}
 	return err
 }
@@ -761,6 +765,39 @@ func TestMigrateKeepsAnUnreleasedChangelog(t *testing.T) {
 	}
 	if files.Exists(filepath.Join(f.Project.ChangelogDir(), "1.1.0+1.21.11.yml")) {
 		t.Error("the old changelog is still there")
+	}
+}
+
+// Migrate brings the Crash Assistant modlist in step with the new builds and
+// the mods it disabled, also when it's canceled at the offer to disable them,
+// since packwiz has changed the mods by then.
+func TestMigrateRefreshesTheModlist(t *testing.T) {
+	for _, c := range []struct {
+		answers []string
+		want    []string
+	}{
+		{[]string{"", "", "", ""}, []string{"lithium-0.22.jar", "pinned-1.0.jar"}},           // Sodium is disabled.
+		{[]string{"", ""}, []string{"lithium-0.22.jar", "pinned-1.0.jar", "sodium-0.8.jar"}}, // Canceled at the offer.
+	} {
+		pw := testutil.PackDir(t)
+		modlist := testutil.Write(t, filepath.Join(pw, "config", "crash_assistant", "modlist.json"), "[]")
+		f := newFixture(t, filepath.Dir(pw))
+		lithium := filepath.Join(pw, "mods", "lithium.pw.toml")
+		f.Packwiz = &migratingPackwiz{packDir: pw, mods: func() {
+			testutil.Write(t, lithium, strings.Replace(testutil.Read(t, lithium), "lithium-0.21.jar", "lithium-0.22.jar", 1))
+		}}
+		f.api.Versions = map[string]platform.Version{"Lithv1": {GameVersions: []string{"26.1"}},
+			"Sodiv1": {GameVersions: []string{"1.21.11"}}, "Pinnv1": {GameVersions: []string{"26.1"}}}
+		f.answers(c.answers...) // The latest loader, no unpinning, then disable Sodium and the suggested version.
+		err := Migrate(ctx, f.Env, "26.1")
+		if canceled := len(c.answers) == 2; errors.Is(err, context.Canceled) != canceled || !canceled && err != nil {
+			t.Fatal(err, f.session.Text())
+		}
+		var names []string
+		testutil.ReadJSON(t, modlist, &names)
+		if !slices.Equal(names, c.want) {
+			t.Error(names, f.session.Text())
+		}
 	}
 }
 
@@ -878,6 +915,140 @@ func TestUpdateModsTakesTheNewestShaderVersions(t *testing.T) {
 		t.Error("the pinned shader pack was updated")
 	}
 	if !strings.Contains(f.session.Text(), "BSL Shaders: 10.1 -> 10.2") {
+		t.Error(f.session.Text())
+	}
+}
+
+// Update mods brings the generated files in step with what packwiz updated,
+// and refreshes the index after writing them, so the index covers them.
+func TestUpdateModsRefreshesTheGeneratedFiles(t *testing.T) {
+	pw := testutil.PackDir(t)
+	modlist := testutil.Write(t, filepath.Join(pw, "config", "crash_assistant", "modlist.json"), `["lithium-0.21.jar"]`)
+	markdown := testutil.Write(t, filepath.Join(filepath.Dir(pw), "modlist.md"), "old")
+	f := newFixture(t, filepath.Dir(pw))
+	lithium := filepath.Join(pw, "mods", "lithium.pw.toml")
+	refreshed := ""
+	f.Packwiz = &hookedPackwiz{fakePackwiz: f.packwiz, update: func() {
+		testutil.Write(t, lithium, strings.Replace(testutil.Read(t, lithium), "lithium-0.21.jar", "lithium-0.22.jar", 1))
+	}, refresh: func() { refreshed = testutil.Read(t, modlist) }}
+	f.answers("") // Keep the pins.
+	if err := UpdateMods(ctx, f.Env); err != nil {
+		t.Fatal(err, f.session.Text())
+	}
+	var names []string
+	testutil.ReadJSON(t, modlist, &names)
+	if !slices.Equal(names, []string{"lithium-0.22.jar", "pinned-1.0.jar", "sodium-0.8.jar"}) {
+		t.Error(names)
+	}
+	if !strings.Contains(testutil.Read(t, markdown), "- Lithium") {
+		t.Error("modlist.md:", testutil.Read(t, markdown))
+	}
+	var bcc map[string]any
+	testutil.ReadJSON(t, filepath.Join(pw, "config", "bcc.json"), &bcc)
+	if bcc["modpackVersion"] != "1.2.0" {
+		t.Error(bcc)
+	}
+	if refreshed != testutil.Read(t, modlist) || f.packwiz.calls[len(f.packwiz.calls)-1] != "refresh" {
+		t.Error("the index wasn't refreshed after the modlist was written:", f.packwiz.calls)
+	}
+	if !strings.Contains(f.session.Text(), "Packwiz/config/crash_assistant/modlist.json, modlist.md") {
+		t.Error(f.session.Text())
+	}
+}
+
+// Canceled after packwiz updated mods, Update mods still brings the
+// generated files in step, since those updates stay. Canceled before, it
+// leaves them alone.
+func TestUpdateModsRefreshesTheGeneratedFilesWhenCanceled(t *testing.T) {
+	pw := testutil.PackDir(t)
+	modlist := testutil.Write(t, filepath.Join(pw, "config", "crash_assistant", "modlist.json"), "[]")
+	f := newFixture(t, filepath.Dir(pw))
+	lithium := filepath.Join(pw, "mods", "lithium.pw.toml")
+	f.Packwiz = &hookedPackwiz{fakePackwiz: f.packwiz, update: func() {
+		text := strings.Replace(testutil.Read(t, lithium), `version = "Lithv1"`, `version = "LithNEW"`, 1)
+		testutil.Write(t, lithium, strings.Replace(text, "lithium-0.21.jar", "lithium-0.22.jar", 1))
+	}}
+	f.api.Versions = map[string]platform.Version{"Lithv1": {ID: "Lithv1", VersionType: "release"},
+		"LithNEW": {ID: "LithNEW", VersionType: "alpha"}}
+	f.answers() // Canceled at the pins.
+	if err := UpdateMods(ctx, f.Env); !errors.Is(err, context.Canceled) || strings.Contains(f.session.Text(), "generated files") {
+		t.Fatalf("got %v\n%s", err, f.session.Text())
+	}
+	f.answers("") // Keep the pins, then canceled at the alpha guard.
+	if err := UpdateMods(ctx, f.Env); !errors.Is(err, context.Canceled) {
+		t.Fatalf("got %v\n%s", err, f.session.Text())
+	}
+	var names []string
+	testutil.ReadJSON(t, modlist, &names)
+	if !slices.Contains(names, "lithium-0.22.jar") {
+		t.Error(names, f.session.Text())
+	}
+}
+
+// removingPackwiz removes a mod's metafile, as packwiz remove does, and fails
+// for the slug in fail.
+type removingPackwiz struct {
+	*fakePackwiz
+	packDir, fail string
+}
+
+func (r *removingPackwiz) Remove(ctx context.Context, slug string) error {
+	if slug == r.fail {
+		return errors.New("couldn't remove " + slug)
+	}
+	if err := os.Remove(filepath.Join(r.packDir, "mods", slug+".pw.toml")); err != nil {
+		return err
+	}
+	return r.fakePackwiz.Remove(ctx, slug)
+}
+
+// Removing unused libraries in Check pack takes them out of the Crash
+// Assistant modlist, also the ones removed before a removal that failed.
+func TestCheckRefreshesTheModlistAfterRemovingLibraries(t *testing.T) {
+	for fail, want := range map[string][]string{"": {"pinned-1.0.jar"}, "sodium": {"pinned-1.0.jar", "sodium-0.8.jar"}} {
+		pw := testutil.PackDir(t)
+		modlist := testutil.Write(t, filepath.Join(pw, "config", "crash_assistant", "modlist.json"), "[]")
+		f := newFixture(t, filepath.Dir(pw))
+		f.Packwiz = &removingPackwiz{fakePackwiz: f.packwiz, packDir: pw, fail: fail}
+		library := []string{"library"}
+		f.api.Projects = map[string]platform.Project{"Lithium": {ID: "Lithium", Categories: library},
+			"Sodium": {ID: "Sodium", Categories: library}}
+		f.answers("all") // Remove Lithium, then Sodium.
+		if err := Check(ctx, f.Env); (err != nil) != (fail != "") {
+			t.Fatal(fail, err, f.session.Text())
+		}
+		var names []string
+		testutil.ReadJSON(t, modlist, &names)
+		if !slices.Equal(names, want) {
+			t.Error(fail, names, f.session.Text())
+		}
+		if f.packwiz.calls[len(f.packwiz.calls)-1] != "refresh" {
+			t.Error(fail, f.packwiz.calls)
+		}
+	}
+}
+
+// New version keeps an old-style publish.yml in step, so a beta that Migrate
+// starts says so before the next build.
+func TestNewVersionKeepsAnOldStylePublishWorkflowInStep(t *testing.T) {
+	f := repoProject(t)
+	path := testutil.Write(t, filepath.Join(f.Project.Root, ".github", "workflows", "publish.yml"),
+		"env:\n  MC_VERSION: 1.21.11\n  RELEASE_TYPE: release\n  PRE_RELEASE: false\n")
+	mustNewVersion(t, f, "1.1.0-beta.1")
+	if text := testutil.Read(t, path); !strings.Contains(text, "  RELEASE_TYPE: beta\n  PRE_RELEASE: true\n") {
+		t.Error(text)
+	}
+}
+
+// New version finishes when a generated file can't be written, since Build
+// writes it again.
+func TestNewVersionFinishesWhenAGeneratedFileCantBeWritten(t *testing.T) {
+	f := repoProject(t)
+	if err := os.Mkdir(filepath.Join(f.Project.PackDir(), "config", "crash_assistant", "modlist.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustNewVersion(t, f, "1.1.0")
+	if !files.Exists(changelog.Path(f.Project, "", "")) || !strings.Contains(f.session.Text(), "Couldn't update the generated files") {
 		t.Error(f.session.Text())
 	}
 }

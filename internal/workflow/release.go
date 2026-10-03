@@ -105,24 +105,24 @@ func suggestVersion(env *Env) string {
 	return version.NextVersion(p.Version)
 }
 
-// SetVersion writes the version to pack.toml and the BetterCompatibilityChecker configs.
+// SetVersion writes the version to pack.toml, then the generated files
+// (the BetterCompatibilityChecker configs among them).
 func SetVersion(ctx context.Context, env *Env, v string) error {
 	p := env.Project
-	err := editing(ctx, env, func() error {
+	return editing(ctx, env, func() error {
 		if err := pack.SetPackVersion(p.PackDir(), v); err != nil {
 			return err
 		}
-		for _, path := range bccFiles(env) {
-			if _, err := pack.WriteBCCVersion(path, v); err != nil {
-				return err
-			}
+		if err := p.Reload(); err != nil {
+			return err
+		}
+		// Build writes them again and stops when it can't, so a file that can't
+		// be written now doesn't leave New version halfway done.
+		if _, err := UpdateGeneratedFiles(ctx, env); err != nil {
+			env.UI.Warn("Couldn't update the generated files (bcc.json, the modlists): " + err.Error() + " Build release updates them.")
 		}
 		return nil
 	})
-	if err != nil {
-		return err
-	}
-	return p.Reload()
 }
 
 func bccFiles(env *Env) []string {
@@ -506,6 +506,18 @@ func UpdateGeneratedFiles(ctx context.Context, env *Env) ([]string, error) {
 	return written, nil
 }
 
+// wroteDetail is a step's detail for the files it wrote: "Wrote a, b", or "".
+func wroteDetail(p *project.Project, paths []string) string {
+	if len(paths) == 0 {
+		return ""
+	}
+	names := make([]string, len(paths))
+	for i, path := range paths {
+		names[i] = p.Rel(path)
+	}
+	return "Wrote " + strings.Join(names, ", ")
+}
+
 // LastBuild is what Build release last built.
 type LastBuild struct {
 	Version       string   `json:"version"`
@@ -700,11 +712,7 @@ func Build(ctx context.Context, env *Env, since string, skipServer, review bool)
 		return nil, err
 	}
 	written = append(append(written, recordPath), notes...)
-	var names []string
-	for _, path := range written {
-		names = append(names, p.Rel(path))
-	}
-	step.Done("Wrote " + strings.Join(names, ", "))
+	step.Done(wroteDetail(p, written))
 	if rule, added, err := ensureRecordsIgnored(env); err != nil {
 		env.UI.Warn("Couldn't add the release records to .gitignore: " + err.Error())
 	} else if added {

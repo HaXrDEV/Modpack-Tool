@@ -95,7 +95,7 @@ func OrphanedLibraries(ctx context.Context, env *Env, mods []pack.Mod) ([]pack.M
 // folders, disabled and pinned mods, and library mods nothing depends on.
 func Check(ctx context.Context, env *Env) error {
 	p := env.Project
-	mods, _, err := loadMods(env)
+	mods, before, err := loadMods(env)
 	if err != nil {
 		return err
 	}
@@ -168,13 +168,20 @@ func Check(ctx context.Context, env *Env) error {
 		if err != nil {
 			return err
 		}
-		for _, mod := range picked {
-			if err := env.Packwiz.Remove(ctx, mod.Slug()); err != nil {
+		if len(picked) > 0 {
+			var removeErr error
+			for _, mod := range picked {
+				if removeErr = env.Packwiz.Remove(ctx, mod.Slug()); removeErr != nil {
+					break
+				}
+			}
+			if removeErr == nil {
+				env.UI.Info("Removed " + strings.Join(pack.Names(picked), ", ") + ".")
+			}
+			// Libraries removed before one failed are gone, so the modlists follow.
+			if err := refreshPackFiles(ctx, env, before, removeErr); err != nil {
 				return err
 			}
-		}
-		if len(picked) > 0 {
-			env.UI.Info("Removed " + strings.Join(pack.Names(picked), ", ") + ".")
 		}
 	} else {
 		env.UI.Info("No unused libraries.")
