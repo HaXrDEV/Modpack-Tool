@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/HaXrDEV/Modpack-Tool/internal/fail"
 	"github.com/HaXrDEV/Modpack-Tool/internal/files"
 	"github.com/HaXrDEV/Modpack-Tool/internal/pack"
 	"github.com/HaXrDEV/Modpack-Tool/internal/platform"
@@ -393,13 +394,64 @@ type cfFile struct {
 	Required  bool  `json:"required"`
 }
 
+// listedMod is a file the CurseForge manifest refers to.
+type listedMod struct {
+	mod   pack.Mod
+	match platform.Match
+}
+
+// keepAvailable checks that CurseForge offers every listed file for download,
+// since it rejects a pack whose manifest refers to one it doesn't: a file
+// still waiting for approval (a fingerprint finds it as soon as it's
+// uploaded), archived or deleted. Bundling such a file is no way out, as
+// CurseForge also rejects jars of its own projects in the overrides, so it
+// asks whether to leave them out of the pack or stop. It returns the files to
+// list and the mods left out.
+func keepAvailable(ctx context.Context, listed []listedMod, left []pack.Mod, store *Store) ([]listedMod, []pack.Mod, error) {
+	var ids []int64
+	for _, l := range listed {
+		ids = append(ids, l.match.FileID)
+	}
+	found, err := store.API.CurseForgeFiles(ctx, ids)
+	if err != nil {
+		return nil, nil, err
+	}
+	var kept []listedMod
+	var blocked []pack.Mod
+	var reasons []string
+	for _, l := range listed {
+		file, ok := found[l.match.FileID]
+		if ok && file.IsAvailable {
+			kept = append(kept, l)
+			continue
+		}
+		reason := "not found on CurseForge"
+		if ok {
+			reason = cmp.Or(platform.CurseForgeFileStatuses[file.FileStatus], fmt.Sprintf("status %d", file.FileStatus))
+		}
+		blocked = append(blocked, l.mod)
+		reasons = append(reasons, fmt.Sprintf("%s (%s): %s", l.mod.Name(), l.mod.Filename(), reason))
+	}
+	if len(blocked) == 0 {
+		return listed, left, nil
+	}
+	store.Session.Warn("CurseForge rejects a pack that refers to files it doesn't offer for download:", reasons...)
+	choice, err := store.Session.Choose(ctx, "What do you want to do?", []ui.Option{
+		{Key: "s", Label: "stop the export"},
+		{Key: "l", Label: "leave them out of the CurseForge pack"},
+	}, "s")
+	if err != nil {
+		return nil, nil, err
+	}
+	if choice != "l" {
+		return nil, nil, fail.Errorf("Export stopped. Build again once CurseForge offers those files, or after updating the mods to files it does.")
+	}
+	return kept, append(left, blocked...), nil
+}
+
 // BuildCurseForge writes the CurseForge modpack zip; it returns the bundled
 // files and a summary.
 func BuildCurseForge(ctx context.Context, p *project.Project, contents *Contents, store *Store, output string) ([]pack.Mod, string, error) {
-	type listedMod struct {
-		mod   pack.Mod
-		match platform.Match
-	}
 	var listed []listedMod
 	var others, left []pack.Mod
 	for _, mod := range contents.ForSide("client") {
@@ -425,6 +477,12 @@ func BuildCurseForge(ctx context.Context, p *project.Project, contents *Contents
 			listed = append(listed, listedMod{mod, match})
 		} else {
 			bundled = append(bundled, mod)
+		}
+	}
+	if len(listed) > 0 {
+		var err error
+		if listed, left, err = keepAvailable(ctx, listed, left, store); err != nil {
+			return nil, "", err
 		}
 	}
 	bundledFiles := map[string]string{}
