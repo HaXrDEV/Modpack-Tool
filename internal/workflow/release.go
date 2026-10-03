@@ -105,24 +105,20 @@ func suggestVersion(env *Env) string {
 	return version.NextVersion(p.Version)
 }
 
-// SetVersion writes the version to pack.toml and the BetterCompatibilityChecker configs.
+// SetVersion writes the version to pack.toml, then the generated files
+// (the BetterCompatibilityChecker configs among them).
 func SetVersion(ctx context.Context, env *Env, v string) error {
 	p := env.Project
-	err := editing(ctx, env, func() error {
+	return editing(ctx, env, func() error {
 		if err := pack.SetPackVersion(p.PackDir(), v); err != nil {
 			return err
 		}
-		for _, path := range bccFiles(env) {
-			if _, err := pack.WriteBCCVersion(path, v); err != nil {
-				return err
-			}
+		if err := p.Reload(); err != nil {
+			return err
 		}
-		return nil
-	})
-	if err != nil {
+		_, err := UpdateGeneratedFiles(ctx, env)
 		return err
-	}
-	return p.Reload()
+	})
 }
 
 func bccFiles(env *Env) []string {
@@ -504,6 +500,33 @@ func UpdateGeneratedFiles(ctx context.Context, env *Env) ([]string, error) {
 		written = append(written, o.path)
 	}
 	return written, nil
+}
+
+// refreshPackFiles runs UpdateGeneratedFiles, then refreshes index.toml and
+// the index hash in pack.toml, so they cover what it wrote. Update mods,
+// Migrate and Check pack end with it; New version and Build run
+// UpdateGeneratedFiles themselves.
+func refreshPackFiles(ctx context.Context, env *Env) error {
+	step := env.UI.Step("Updating bcc.json and the modlists, then refreshing index.toml and pack.toml")
+	var written []string
+	err := editing(ctx, env, func() (err error) {
+		written, err = UpdateGeneratedFiles(ctx, env)
+		return err
+	})
+	if err != nil {
+		step.Fail(err)
+		return err
+	}
+	var names []string
+	for _, path := range written {
+		names = append(names, env.Project.Rel(path))
+	}
+	detail := ""
+	if len(names) > 0 {
+		detail = "Wrote " + strings.Join(names, ", ")
+	}
+	step.Done(detail)
+	return nil
 }
 
 // LastBuild is what Build release last built.

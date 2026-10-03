@@ -882,6 +882,90 @@ func TestUpdateModsTakesTheNewestShaderVersions(t *testing.T) {
 	}
 }
 
+// Update mods brings the generated files in step with what packwiz updated,
+// and refreshes the index after writing them, so the index covers them.
+func TestUpdateModsRefreshesTheGeneratedFiles(t *testing.T) {
+	pw := testutil.PackDir(t)
+	modlist := testutil.Write(t, filepath.Join(pw, "config", "crash_assistant", "modlist.json"), `["lithium-0.21.jar"]`)
+	markdown := testutil.Write(t, filepath.Join(filepath.Dir(pw), "modlist.md"), "old")
+	f := newFixture(t, filepath.Dir(pw))
+	lithium := filepath.Join(pw, "mods", "lithium.pw.toml")
+	refreshed := ""
+	f.Packwiz = &hookedPackwiz{fakePackwiz: f.packwiz, update: func() {
+		testutil.Write(t, lithium, strings.Replace(testutil.Read(t, lithium), "lithium-0.21.jar", "lithium-0.22.jar", 1))
+	}, refresh: func() { refreshed = testutil.Read(t, modlist) }}
+	f.answers("") // Keep the pins.
+	if err := UpdateMods(ctx, f.Env); err != nil {
+		t.Fatal(err, f.session.Text())
+	}
+	var names []string
+	testutil.ReadJSON(t, modlist, &names)
+	if !slices.Equal(names, []string{"lithium-0.22.jar", "pinned-1.0.jar", "sodium-0.8.jar"}) {
+		t.Error(names)
+	}
+	if !strings.Contains(testutil.Read(t, markdown), "- Lithium") {
+		t.Error("modlist.md:", testutil.Read(t, markdown))
+	}
+	var bcc map[string]any
+	testutil.ReadJSON(t, filepath.Join(pw, "config", "bcc.json"), &bcc)
+	if bcc["modpackVersion"] != "1.2.0" {
+		t.Error(bcc)
+	}
+	if refreshed != testutil.Read(t, modlist) || f.packwiz.calls[len(f.packwiz.calls)-1] != "refresh" {
+		t.Error("the index wasn't refreshed after the modlist was written:", f.packwiz.calls)
+	}
+	if !strings.Contains(f.session.Text(), "Packwiz/config/crash_assistant/modlist.json, modlist.md") {
+		t.Error(f.session.Text())
+	}
+}
+
+// removingPackwiz removes a mod's metafile, as packwiz remove does.
+type removingPackwiz struct {
+	*fakePackwiz
+	packDir string
+}
+
+func (r *removingPackwiz) Remove(ctx context.Context, slug string) error {
+	if err := os.Remove(filepath.Join(r.packDir, "mods", slug+".pw.toml")); err != nil {
+		return err
+	}
+	return r.fakePackwiz.Remove(ctx, slug)
+}
+
+// Removing an unused library in Check pack takes it out of the Crash
+// Assistant modlist too.
+func TestCheckRefreshesTheModlistAfterRemovingALibrary(t *testing.T) {
+	pw := testutil.PackDir(t)
+	modlist := testutil.Write(t, filepath.Join(pw, "config", "crash_assistant", "modlist.json"), "[]")
+	f := newFixture(t, filepath.Dir(pw))
+	f.Packwiz = &removingPackwiz{fakePackwiz: f.packwiz, packDir: pw}
+	f.api.Projects = map[string]platform.Project{"Lithium": {ID: "Lithium", Categories: []string{"library"}}}
+	f.answers("all") // Remove Lithium.
+	if err := Check(ctx, f.Env); err != nil {
+		t.Fatal(err, f.session.Text())
+	}
+	var names []string
+	testutil.ReadJSON(t, modlist, &names)
+	if !slices.Equal(names, []string{"pinned-1.0.jar", "sodium-0.8.jar"}) {
+		t.Error(names, f.session.Text())
+	}
+	if f.packwiz.calls[len(f.packwiz.calls)-1] != "refresh" {
+		t.Error(f.packwiz.calls)
+	}
+}
+
+// New version keeps an old-style publish.yml in step, so a beta that Migrate
+// starts says so before the next build.
+func TestNewVersionKeepsAnOldStylePublishWorkflowInStep(t *testing.T) {
+	f := repoProject(t)
+	path := testutil.Write(t, filepath.Join(f.Project.Root, ".github", "workflows", "publish.yml"),
+		"env:\n  MC_VERSION: 1.21.11\n  RELEASE_TYPE: release\n  PRE_RELEASE: false\n")
+	mustNewVersion(t, f, "1.1.0-beta.1")
+	if text := testutil.Read(t, path); !strings.Contains(text, "  RELEASE_TYPE: beta\n  PRE_RELEASE: true\n") {
+		t.Error(text)
+	}
+}
+
 // A failed shader step doesn't skip the alpha guard for what packwiz update
 // changed, which a later run couldn't tell.
 func TestUpdateModsGuardsAlphasWhenTheShaderStepFails(t *testing.T) {

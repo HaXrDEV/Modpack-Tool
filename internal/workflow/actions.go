@@ -39,8 +39,9 @@ func sinceFlag(fs *flag.FlagSet, a *Args) {
 // Actions are the tool's actions, in dashboard order.
 var Actions = []Action{
 	{Key: "1", Name: "update", Label: "Update mods", Summary: "packwiz update, then the alpha guard",
-		Help: "packwiz update --all, shader packs to their newest versions, an alpha guard and re-enable offers",
-		Run:  func(ctx context.Context, env *Env, _ Args) error { return UpdateMods(ctx, env) }},
+		Help: "packwiz update --all, shader packs to their newest versions, an alpha guard and re-enable offers, " +
+			"then the generated files and a packwiz refresh",
+		Run: func(ctx context.Context, env *Env, _ Args) error { return UpdateMods(ctx, env) }},
 	{Key: "2", Name: "new-version", Label: "New version", Summary: "bump or rename the version",
 		Help: "bump the version (rename it if unreleased) and create its changelog", Arg: "VERSION",
 		arg: func(a *Args, value string) { a.Version = value },

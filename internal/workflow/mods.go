@@ -56,7 +56,7 @@ func UpdateMods(ctx context.Context, env *Env) error {
 	if err := errors.Join(afterUpdate(ctx, env, mods, before, false), shadersErr); err != nil {
 		return err
 	}
-	if err := env.Packwiz.Refresh(ctx); err != nil {
+	if err := refreshPackFiles(ctx, env); err != nil {
 		return err
 	}
 	env.UI.Result("Mods are up to date.", "Build release (4) when you're ready, or keep editing the pack.")
@@ -615,7 +615,7 @@ func Migrate(ctx context.Context, env *Env, target string) error {
 			env.UI.Info(fmt.Sprintf("Disabled %d mod%s.", len(incompatible), ui.Plural(len(incompatible))))
 		}
 	}
-	if err := env.Packwiz.Refresh(ctx); err != nil {
+	if err := refreshPackFiles(ctx, env); err != nil {
 		return err
 	}
 	if err := p.Reload(); err != nil {

@@ -175,6 +175,9 @@ func Check(ctx context.Context, env *Env) error {
 		}
 		if len(picked) > 0 {
 			env.UI.Info("Removed " + strings.Join(pack.Names(picked), ", ") + ".")
+			if err := refreshPackFiles(ctx, env); err != nil {
+				return err
+			}
 		}
 	} else {
 		env.UI.Info("No unused libraries.")
